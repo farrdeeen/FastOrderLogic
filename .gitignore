@@ -1,0 +1,81 @@
+# ============================
+# 🧠 GLOBAL PROJECT IGNORE
+# ============================
+
+# Environment files (DO NOT COMMIT)
+.env
+backend/.env
+frontend/.env
+
+# Logs and debug files
+*.log
+*.out
+*.tmp
+*.bak
+*.swp
+
+# OS junk files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# IDE and editor folders
+.vscode/
+.idea/
+*.code-workspace
+
+# Python cache & virtual environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+backend/.venv/
+backend/venv/
+backend/env/
+
+# Node (React + Vite)
+node_modules/
+dist/
+build/
+.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Coverage / test / reports
+coverage/
+*.lcov
+pytest_cache/
+htmlcov/
+
+# Frontend specific
+frontend/.next/
+frontend/.vercel/
+frontend/.turbo/
+frontend/dist/
+frontend/build/
+
+# Backend specific
+backend/__pycache__/
+backend/.pytest_cache/
+backend/*.pyc
+backend/*.log
+
+# System folders or temporary uploads
+uploads/
+tmp/
+temp/
+
+*.sql
+*.db
+*.sqlite3
+*.bak
+*.dump
+*.sql.gz
+*.zip
+backend/data/
+*.sql
+data/
