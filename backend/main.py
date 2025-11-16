@@ -1,6 +1,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 from routes import orders
+from routes import wix_sync
 
 app = FastAPI(title="FastOrderLogic Backend")
 
@@ -13,6 +14,7 @@ app.add_middleware(
 )
 
 app.include_router(orders.router)
+app.include_router(wix_sync.router)
 
 @app.get("/")
 def home():
