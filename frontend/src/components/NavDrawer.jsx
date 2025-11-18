@@ -14,6 +14,7 @@ import {
   Divider,
   Tooltip,
 } from "@mui/material";
+
 import {
   Menu as MenuIcon,
   ChevronLeft as ChevronLeftIcon,
@@ -23,6 +24,7 @@ import {
   Payments as PaymentsIcon,
   Settings as SettingsIcon,
   Logout as LogoutIcon,
+  Forum as ForumIcon,          // ✅ Chat Icon Added
 } from "@mui/icons-material";
 
 const drawerWidth = 220;
@@ -35,10 +37,12 @@ export default function NavDrawer({ onNavigate }) {
   const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
   const handleCollapseToggle = () => setOpen(!open);
 
+  // ⬇️ NEW CHAT MENU ENTRY ADDED HERE
   const menuItems = [
     { text: "Dashboard", icon: <DashboardIcon />, id: "dashboard" },
     { text: "Orders", icon: <ShoppingCartIcon />, id: "orders" },
     { text: "Payments", icon: <PaymentsIcon />, id: "payments" },
+    { text: "Chat", icon: <ForumIcon />, id: "chat" },
     { text: "Settings", icon: <SettingsIcon />, id: "settings" },
     { text: "Logout", icon: <LogoutIcon />, id: "logout" },
   ];
@@ -112,6 +116,7 @@ export default function NavDrawer({ onNavigate }) {
                 >
                   {item.icon}
                 </ListItemIcon>
+
                 {open && (
                   <ListItemText
                     primary={item.text}
@@ -152,7 +157,7 @@ export default function NavDrawer({ onNavigate }) {
 
   return (
     <Box sx={{ display: "flex" }}>
-      {/* AppBar (top bar) */}
+      {/* AppBar */}
       <AppBar
         position="fixed"
         sx={{
@@ -175,7 +180,7 @@ export default function NavDrawer({ onNavigate }) {
         </Toolbar>
       </AppBar>
 
-      {/* Permanent drawer for desktop */}
+      {/* Permanent drawer */}
       <Drawer
         variant="permanent"
         open={open}
