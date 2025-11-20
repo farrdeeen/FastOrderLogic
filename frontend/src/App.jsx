@@ -37,17 +37,12 @@ export default function App() {
   const [activePage, setActivePage] = useState("orders");
 
   // ==========================
-  // LOAD ORDERS ON PAGE CHANGE
+  // FETCH ORDERS WHEN NEEDED
   // ==========================
   useEffect(() => {
-    if (activePage === "orders") {
-      fetchOrders();
-    }
+    if (activePage === "orders") fetchOrders();
   }, [filters, activePage]);
 
-  // ==========================
-  // FETCH ORDERS
-  // ==========================
   const fetchOrders = async () => {
     setLoading(true);
     try {
@@ -61,7 +56,7 @@ export default function App() {
   };
 
   // ==========================
-  // SYNC WIX ORDERS
+  // SYNC WIX
   // ==========================
   const handleSyncWix = async () => {
     try {
@@ -82,9 +77,25 @@ export default function App() {
   };
 
   // ==========================
-  // ORDER ACTIONS
+  // CREATE ZOHO INVOICE
   // ==========================
-  const handleAction = async (orderId, action) => {
+  const handleCreateInvoice = async (order) => {
+    try {
+      const res = await axios.post(`${API_URL}/zoho/invoice`, order);
+
+      alert("🧾 Invoice created successfully in Zoho Books!");
+
+      console.log("Zoho Invoice:", res.data);
+    } catch (err) {
+      console.error("Zoho Invoice Error:", err);
+      alert("❌ Failed to create invoice");
+    }
+  };
+
+  // ==========================
+  // ORDER ACTIONS (PAID/SHIP ETC.)
+  // ==========================
+  const handleOrderAction = async (orderId, action) => {
     try {
       await axios.put(
         `${API_URL}/orders/${encodeURIComponent(orderId)}/${action}`
@@ -95,6 +106,16 @@ export default function App() {
       console.error("Order action error:", err);
       alert("❌ Action failed");
     }
+  };
+
+  // ==========================
+  // ACTION ROUTER (from table)
+  // ==========================
+  const handleAction = (orderOrId, action) => {
+    if (action === "create-invoice") {
+      return handleCreateInvoice(orderOrId); // full order object
+    }
+    return handleOrderAction(orderOrId, action); // normal actions
   };
 
   // ==========================
@@ -109,7 +130,7 @@ export default function App() {
   };
 
   // ==========================
-  // PAGE TITLE RENDER
+  // PAGE TITLE
   // ==========================
   const pageTitle = {
     dashboard: "📊 Dashboard Overview",
@@ -127,7 +148,7 @@ export default function App() {
       {/* SIDEBAR */}
       <NavDrawer onNavigate={handleNavigate} />
 
-      {/* MAIN CONTENT AREA */}
+      {/* MAIN PANEL */}
       <Box
         component="main"
         sx={{
@@ -145,19 +166,14 @@ export default function App() {
           {pageTitle}
         </Typography>
 
-        {/* ==========================
-            PAGE CONTENT SWITCH
-        =========================== */}
-
-        {/* DASHBOARD */}
+        {/* PAGE SWITCH */}
         {activePage === "dashboard" && (
           <Typography sx={{ color: "#374151" }}>
-            Welcome to FastOrderLogic!  
+            Welcome to FastOrderLogic!
             Analytics and insights coming soon.
           </Typography>
         )}
 
-        {/* ORDERS PAGE */}
         {activePage === "orders" && (
           <>
             {/* SYNC BUTTON */}
@@ -179,7 +195,7 @@ export default function App() {
               {syncing ? "Syncing..." : "🔄 Sync Wix Orders"}
             </Button>
 
-            {/* ORDER FORM + SEARCH */}
+            {/* CREATE + SEARCH */}
             <CreateOrderForm onOrderCreated={fetchOrders} />
             <SearchBar filters={filters} setFilters={setFilters} />
 
@@ -201,21 +217,19 @@ export default function App() {
           </>
         )}
 
-        {/* PAYMENTS PAGE */}
         {activePage === "payments" && (
           <Typography sx={{ color: "#374151" }}>
             Payment summaries and Razorpay logs will appear here.
           </Typography>
         )}
 
-        {/* SETTINGS PAGE */}
         {activePage === "settings" && (
           <Typography sx={{ color: "#374151" }}>
             Update roles, preferences, API keys, and more.
           </Typography>
         )}
 
-        {/* CHAT PAGE */}
+        {/* CHAT */}
         {activePage === "chat" && <ChatPage />}
       </Box>
     </Box>

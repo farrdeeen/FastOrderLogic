@@ -91,7 +91,7 @@ export default function OrdersTable({ orders, onAction }) {
 
             return (
               <>
-                {/* Main Row */}
+                {/* MAIN ROW */}
                 <tr
                   key={o.order_id}
                   style={{
@@ -106,7 +106,7 @@ export default function OrdersTable({ orders, onAction }) {
                       i % 2 === 0 ? "#f3f4f6" : "#ffffff")
                   }
                 >
-                  {/* Expand Button */}
+                  {/* Expand icon */}
                   <td style={{ padding: "10px" }}>
                     <button
                       onClick={() => toggleExpand(o.order_id)}
@@ -120,6 +120,7 @@ export default function OrdersTable({ orders, onAction }) {
                     </button>
                   </td>
 
+                  {/* Order fields */}
                   <td style={{ padding: "10px" }}>{o.order_id}</td>
                   <td style={{ padding: "10px" }}>
                     {o.created_at
@@ -134,12 +135,14 @@ export default function OrdersTable({ orders, onAction }) {
                     {o.channel || "-"}
                   </td>
 
+                  {/* Payment */}
                   <td style={{ padding: "10px" }}>
                     {o.payment_status === "paid"
                       ? badge("Paid", "#16a34a")
                       : badge("Pending", "#dc2626")}
                   </td>
 
+                  {/* Delivery */}
                   <td style={{ padding: "10px" }}>
                     {o.delivery_status === "NOT_SHIPPED"
                       ? badge("Not Shipped", "#facc15")
@@ -152,7 +155,7 @@ export default function OrdersTable({ orders, onAction }) {
 
                   <td style={{ padding: "10px" }}>{o.awb_number || "-"}</td>
 
-                  {/* Actions */}
+                  {/* ACTION BUTTONS */}
                   <td
                     style={{
                       padding: "10px",
@@ -161,6 +164,7 @@ export default function OrdersTable({ orders, onAction }) {
                       flexWrap: "wrap",
                     }}
                   >
+                    {/* Mark Paid */}
                     {o.payment_status === "pending" && (
                       <button
                         onClick={() => onAction(o.order_id, "mark-paid")}
@@ -175,10 +179,25 @@ export default function OrdersTable({ orders, onAction }) {
                         ✓
                       </button>
                     )}
+
+                    {/* NEW: Create Invoice */}
+                    <button
+                      onClick={() => onAction(o, "create-invoice")}
+                      style={{
+                        background: "#eef2ff",
+                        border: "none",
+                        borderRadius: "5px",
+                        padding: "6px 8px",
+                        cursor: "pointer",
+                      }}
+                      title="Create Invoice"
+                    >
+                      🧾
+                    </button>
                   </td>
                 </tr>
 
-                {/* Expandable Row */}
+                {/* EXPAND ROW */}
                 {isExpanded && (
                   <tr>
                     <td colSpan={10} style={{ padding: "0", background: "#eef2ff" }}>
@@ -193,9 +212,7 @@ export default function OrdersTable({ orders, onAction }) {
                       >
                         {/* Customer */}
                         <div>
-                          <h4 style={{ margin: 0, marginBottom: "0.5rem" }}>
-                            👤 Customer Details
-                          </h4>
+                          <h4 style={{ marginBottom: "0.5rem" }}>👤 Customer</h4>
                           <p>Name: {o.customer?.name || "-"}</p>
                           <p>Mobile: {o.customer?.mobile || "-"}</p>
                           <p>Email: {o.customer?.email || "-"}</p>
@@ -203,9 +220,7 @@ export default function OrdersTable({ orders, onAction }) {
 
                         {/* Address */}
                         <div>
-                          <h4 style={{ margin: 0, marginBottom: "0.5rem" }}>
-                            📍 Address
-                          </h4>
+                          <h4 style={{ marginBottom: "0.5rem" }}>📍 Address</h4>
                           {o.address ? (
                             <>
                               <p>{o.address.address_line}</p>
@@ -219,10 +234,9 @@ export default function OrdersTable({ orders, onAction }) {
                           )}
                         </div>
 
-                        {/* Items Full Width */}
+                        {/* Items */}
                         <div style={{ gridColumn: "1 / -1" }}>
                           <h4 style={{ marginBottom: "0.5rem" }}>🛒 Items</h4>
-
                           {o.items?.map((it) => (
                             <div
                               key={it.item_id}
@@ -242,9 +256,7 @@ export default function OrdersTable({ orders, onAction }) {
                                   Qty: {it.quantity} × {it.unit_price}
                                 </p>
                               </div>
-                              <div>
-                                <strong>₹{it.total_price}</strong>
-                              </div>
+                              <strong>₹{it.total_price}</strong>
                             </div>
                           ))}
                         </div>
@@ -258,7 +270,7 @@ export default function OrdersTable({ orders, onAction }) {
         </tbody>
       </table>
 
-      {/* Pagination */}
+      {/* PAGINATION */}
       <div
         style={{
           display: "flex",
