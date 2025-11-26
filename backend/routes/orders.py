@@ -24,9 +24,11 @@ def get_db():
 
 @router.post("/create")
 def create_order(
+    sku: Optional[str] = None,
+    quantity: int = 1,
     customer_id: Optional[int] = None,
     offline_customer_id: Optional[int] = None,
-    address_id: int = 0,
+    address_id: Optional[int] = None,
     total_items: int = 0,
     subtotal: float = 0.0,
     channel: Optional[str] = "offline",
@@ -35,18 +37,42 @@ def create_order(
     db: Session = Depends(get_db)
 ):
     """
-    Create a new order in the MySQL database.
+    Create a new order with address + offline customer + sku item support.
     """
+
+    # 1️⃣ Create offline customer if none provided
+    if customer_id is None and offline_customer_id is None:
+        db.execute(text("""
+            INSERT INTO offline_customer (name, mobile, email)
+            VALUES ('Offline User', CONCAT('9', FLOOR(RAND()*1000000000)), 'na@example.com')
+        """))
+        offline_customer_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+
+    # 2️⃣ Create address if not provided
+    if address_id is None:
+        db.execute(text(f"""
+            INSERT INTO address
+            (customer_id, offline_customer_id, name, mobile, pincode, locality,
+             address_line, city, state_id, landmark, address_type)
+            VALUES
+            (NULL, {offline_customer_id}, 'Offline User', '9999999999', '000000', 
+             'NA', 'NA', 'NA_CITY', 1, NULL, 'offline')
+        """))
+        address_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+
+    # 3️⃣ Create Order Entry
     now = datetime.now()
+    order_id = now.strftime("%H%M%S%d%m")
+
     order = Order(
-        order_id=f"{now.strftime('%H%M%S%d%m')}",
+        order_id=order_id,
         customer_id=customer_id,
         offline_customer_id=offline_customer_id,
         address_id=address_id,
         total_items=total_items,
         subtotal=subtotal,
         total_amount=subtotal,
-        channel=channel.lower() if channel else None,
+        channel=channel.lower(),
         payment_status="pending",
         delivery_status="NOT_SHIPPED",
         created_at=now,
@@ -55,10 +81,40 @@ def create_order(
         payment_type=payment_type,
         gst=gst,
     )
+
     db.add(order)
     db.commit()
     db.refresh(order)
-    return {"message": "Order created successfully", "order_id": order.order_id}
+
+    # 4️⃣ Insert order item if sku provided
+    if sku:
+        product = db.execute(text("""
+            SELECT product_id FROM products WHERE sku_id = :s
+        """), {"s": sku}).fetchone()
+
+        if product:
+            pid = product[0]
+        else:
+            pid = None  # No match — treat as unknown
+
+        db.execute(text("""
+            INSERT INTO order_items
+            (order_id, product_id, quantity, unit_price, total_price)
+            VALUES (:oid, :pid, :qty, :price, :total)
+        """), {
+            "oid": order_id,
+            "pid": pid,
+            "qty": quantity,
+            "price": subtotal,
+            "total": subtotal
+        })
+        db.commit()
+
+    return {"message": "Order created", "order_id": order_id}
+
+
+
+
 
 
 @router.get("/")

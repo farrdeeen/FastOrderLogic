@@ -5,16 +5,18 @@ import requests
 import os
 import time
 import json
+from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
+from sqlalchemy import text
 from dotenv import load_dotenv
+from database import get_db
+from fastapi import Depends
+
 
 load_dotenv()
 
 router = APIRouter(prefix="/zoho", tags=["Zoho Books"])
 
-# ------------------------------
-# ENV CONFIG
-# ------------------------------
 ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET")
 ZOHO_ORG_ID = os.getenv("ZOHO_ORG_ID")
@@ -28,9 +30,9 @@ ZOHO_API_BASE = "https://www.zohoapis.in/books/v3"
 TOKENS_FILE = ".zoho_tokens.json"
 
 
-# ------------------------------
-# TOKEN STORAGE HELPERS
-# ------------------------------
+# -------------------------------------------------------------------
+# TOKEN HELPERS
+# -------------------------------------------------------------------
 def _load_tokens_from_file():
     try:
         with open(TOKENS_FILE, "r") as f:
@@ -40,24 +42,18 @@ def _load_tokens_from_file():
 
 
 def _save_tokens_to_file(t):
-    try:
-        with open(TOKENS_FILE, "w") as f:
-            json.dump(t, f)
-    except Exception as e:
-        print("Failed saving token:", e)
+    with open(TOKENS_FILE, "w") as f:
+        json.dump(t, f)
 
 
 tokens = _load_tokens_from_file()
 
 
-# ------------------------------
-# AUTH: STEP 1 – Redirect to Zoho Login
-# ------------------------------
+# -------------------------------------------------------------------
+# AUTH
+# -------------------------------------------------------------------
 @router.get("/auth")
 def zoho_auth():
-    if not ZOHO_CLIENT_ID:
-        raise HTTPException(status_code=500, detail="Missing ZOHO_CLIENT_ID")
-
     url = (
         f"{AUTH_URL}?response_type=code"
         f"&client_id={ZOHO_CLIENT_ID}"
@@ -66,13 +62,9 @@ def zoho_auth():
         f"&access_type=offline"
         f"&prompt=consent"
     )
-
     return RedirectResponse(url)
 
 
-# ------------------------------
-# AUTH: STEP 2 – OAuth Callback
-# ------------------------------
 @router.get("/oauth/callback")
 def zoho_callback(request: Request):
     code = request.query_params.get("code")
@@ -87,38 +79,25 @@ def zoho_callback(request: Request):
         "code": code,
     }
 
-    res = requests.post(TOKEN_URL, data=data)
-    resp = res.json()
+    res = requests.post(TOKEN_URL, data=data).json()
 
-    if "access_token" not in resp:
-        raise HTTPException(status_code=400, detail={"error": "invalid_token", "data": resp})
+    if "access_token" not in res:
+        raise HTTPException(400, {"error": "invalid_token", "data": res})
 
-    tokens["access_token"] = resp["access_token"]
-    tokens["refresh_token"] = resp.get("refresh_token", tokens.get("refresh_token"))
-    tokens["expires_at"] = time.time() + int(resp.get("expires_in", 3600))
+    tokens["access_token"] = res["access_token"]
+    tokens["refresh_token"] = res.get("refresh_token", tokens.get("refresh_token"))
+    tokens["expires_at"] = time.time() + res.get("expires_in", 3600)
 
     _save_tokens_to_file(tokens)
-
-    return {
-        "success": True,
-        "message": "Zoho connected",
-        "tokens": {
-            "access_token": tokens["access_token"],
-            "refresh_token": tokens["refresh_token"],
-            "expires_at": tokens["expires_at"],
-        }
-    }
+    return {"success": True}
 
 
-# ------------------------------
-# AUTO-REFRESH TOKEN
-# ------------------------------
+# -------------------------------------------------------------------
+# TOKEN REFRESH
+# -------------------------------------------------------------------
 def ensure_access_token() -> str:
-    if tokens.get("access_token") and time.time() < tokens.get("expires_at", 0):
+    if tokens.get("access_token") and time.time() < tokens["expires_at"]:
         return tokens["access_token"]
-
-    if not tokens.get("refresh_token"):
-        raise HTTPException(401, "Zoho not authenticated. Go to /zoho/auth")
 
     data = {
         "grant_type": "refresh_token",
@@ -127,17 +106,13 @@ def ensure_access_token() -> str:
         "client_secret": ZOHO_CLIENT_SECRET,
     }
 
-    res = requests.post(TOKEN_URL, data=data)
-    resp = res.json()
+    res = requests.post(TOKEN_URL, data=data).json()
 
-    if "access_token" not in resp:
-        raise HTTPException(400, {"error": "refresh_failed", "data": resp})
+    if "access_token" not in res:
+        raise HTTPException(401, "Zoho Auth failed")
 
-    tokens["access_token"] = resp["access_token"]
-    tokens["expires_at"] = time.time() + int(resp.get("expires_in", 3600))
-
-    if resp.get("refresh_token"):
-        tokens["refresh_token"] = resp["refresh_token"]
+    tokens["access_token"] = res["access_token"]
+    tokens["expires_at"] = time.time() + res.get("expires_in", 3600)
 
     _save_tokens_to_file(tokens)
     return tokens["access_token"]
@@ -151,109 +126,112 @@ def zoho_headers():
     }
 
 
-# ------------------------------
-# Find Contact
-# ------------------------------
-def find_contact(search: str):
-    if not search:
-        return None
-
-    url = f"{ZOHO_API_BASE}/contacts"
-    res = requests.get(url, headers=zoho_headers(), params={"search_text": search})
-    data = res.json()
-
-    if "contacts" in data and len(data["contacts"]) > 0:
-        return data["contacts"][0]
-
-    return None
+# -------------------------------------------------------------------
+# GET ZOHO ITEM BY SKU
+# -------------------------------------------------------------------
+def get_zoho_item_by_sku(sku):
+    url = f"{ZOHO_API_BASE}/items"
+    res = requests.get(url, headers=zoho_headers(), params={"search_text": sku}).json()
+    items = res.get("items", [])
+    return items[0] if items else None
 
 
-# ------------------------------
-# Create Contact
-# ------------------------------
-def create_contact(order):
+# -------------------------------------------------------------------
+# FIND/CREATE CONTACT
+# -------------------------------------------------------------------
+def find_or_create_contact(order):
+    keys = [
+        order.get("customer", {}).get("mobile"),
+        order.get("customer", {}).get("email"),
+        order.get("customer_name")
+    ]
+
+    # search existing
+    for key in keys:
+        if key:
+            r = requests.get(
+                f"{ZOHO_API_BASE}/contacts",
+                headers=zoho_headers(),
+                params={"search_text": key}
+            ).json()
+            if r.get("contacts"):
+                return r["contacts"][0]["contact_id"]
+
+    # create new
     payload = {
         "contact_name": order.get("customer_name", "Customer"),
         "email": order.get("customer", {}).get("email", ""),
         "phone": order.get("customer", {}).get("mobile", ""),
     }
+    res = requests.post(f"{ZOHO_API_BASE}/contacts", headers=zoho_headers(), json=payload).json()
 
-    url = f"{ZOHO_API_BASE}/contacts"
-    res = requests.post(url, headers=zoho_headers(), json=payload)
-    data = res.json()
+    if "contact" not in res:
+        raise HTTPException(400, {"error": res})
 
-    if "contact" not in data:
-        raise HTTPException(400, {"error": "create_contact_failed", "data": data})
-
-    return data["contact"]
+    return res["contact"]["contact_id"]
 
 
-# ------------------------------
-# Build Invoice Payload
-# ------------------------------
-def build_invoice(order, contact_id):
-    items = []
-    for it in order.get("items", []):
-        items.append({
-            "name": it.get("product_name") or it.get("title") or "Item",
-            "rate": float(it.get("unit_price") or it.get("price") or 0),
-            "quantity": float(it.get("quantity") or 1)
-        })
+# -------------------------------------------------------------------
+# BUILD INVOICE — ALWAYS USE ZOHO NAME
+# -------------------------------------------------------------------
+def build_invoice(order, contact_id, zoho_item):
+    item = order["items"][0]  # frontend always sends list with exactly 1 item
+
+    line_item = {
+        "item_id": zoho_item["item_id"],
+        "name": zoho_item["name"],
+        "rate": float(item.get("unit_price") or 0),  # ✅ FIX: correct price
+        "quantity": float(item.get("quantity") or 1),
+        "sku": zoho_item.get("sku")
+    }
 
     payload = {
         "customer_id": contact_id,
         "reference_number": order.get("order_id", ""),
-        "line_items": items,
+        "line_items": [line_item],
     }
 
     return payload
 
 
-# ------------------------------
-# PUBLIC API – Create Invoice
-# ------------------------------
+
+# -------------------------------------------------------------------
+# MAIN — CREATE INVOICE
+# -------------------------------------------------------------------
 @router.post("/invoice")
-def create_invoice(order: dict):
+def create_invoice(order: dict, db=Depends(get_db)):
 
-    ensure_access_token()
+    print("=== RECEIVED ORDER FROM FRONTEND ===")
+    print(order)
 
-    search_keys = [
-        order.get("customer", {}).get("email"),
-        order.get("customer", {}).get("mobile"),
-        order.get("customer_name"),
-    ]
+    product_id = order["items"][0]["product_id"]
 
-    contact = None
-    for s in search_keys:
-        if s:
-            contact = find_contact(s)
-            if contact:
-                break
+    # 1️⃣ get SKU from database
+    sku = db.execute(
+        text("SELECT sku_id FROM products WHERE product_id = :pid"),
+        {"pid": product_id}
+    ).scalar()
 
-    if not contact:
-        contact = create_contact(order)
+    if not sku:
+        raise HTTPException(400, f"Product {product_id} has no SKU in DB")
 
-    contact_id = contact.get("contact_id")
-    if not contact_id:
-        raise HTTPException(500, {"error": "missing_contact_id", "data": contact})
+    # 2️⃣ get Zoho item
+    zoho_item = get_zoho_item_by_sku(sku)
+    if not zoho_item:
+        raise HTTPException(400, f"SKU {sku} not found in Zoho items")
 
-    payload = build_invoice(order, contact_id)
+    # 3️⃣ find/create Zoho contact
+    contact_id = find_or_create_contact(order)
 
+    # 4️⃣ build final payload
+    payload = build_invoice(order, contact_id, zoho_item)
+
+
+    # 5️⃣ create invoice
     url = f"{ZOHO_API_BASE}/invoices"
-    res = requests.post(url, headers=zoho_headers(), json=payload)
-    resp = res.json()
+    resp = requests.post(url, headers=zoho_headers(), json=payload).json()
 
     if "invoice" not in resp:
-        raise HTTPException(400, {"error": "invoice_failed", "data": resp})
+        raise HTTPException(400, resp)
 
-    return {
-        "success": True,
-        "invoice": resp["invoice"],
-        "zoho_response": resp,
-    }
-
-
-# DEBUG
-@router.get("/tokens")
-def debug_tokens():
-    return tokens
+    return resp
