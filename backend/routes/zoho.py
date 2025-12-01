@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 from database import get_db
 from fastapi import Depends
 
-
 load_dotenv()
 
 router = APIRouter(prefix="/zoho", tags=["Zoho Books"])
@@ -30,9 +29,9 @@ ZOHO_API_BASE = "https://www.zohoapis.in/books/v3"
 TOKENS_FILE = ".zoho_tokens.json"
 
 
-# -------------------------------------------------------------------
-# TOKEN HELPERS
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
+# Token helpers
+# ---------------------------------------------------------
 def _load_tokens_from_file():
     try:
         with open(TOKENS_FILE, "r") as f:
@@ -49,9 +48,9 @@ def _save_tokens_to_file(t):
 tokens = _load_tokens_from_file()
 
 
-# -------------------------------------------------------------------
-# AUTH
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
+# Zoho Auth endpoints
+# ---------------------------------------------------------
 @router.get("/auth")
 def zoho_auth():
     url = (
@@ -62,6 +61,8 @@ def zoho_auth():
         f"&access_type=offline"
         f"&prompt=consent"
     )
+    print("=== REDIRECTING USER TO ZOHO AUTH ===")
+    print(url)
     return RedirectResponse(url)
 
 
@@ -71,6 +72,9 @@ def zoho_callback(request: Request):
     if not code:
         raise HTTPException(400, "Missing ?code")
 
+    print("\n=== RECEIVED ZOHO AUTH CODE ===")
+    print(code)
+
     data = {
         "grant_type": "authorization_code",
         "client_id": ZOHO_CLIENT_ID,
@@ -79,40 +83,48 @@ def zoho_callback(request: Request):
         "code": code,
     }
 
-    res = requests.post(TOKEN_URL, data=data).json()
+    res = requests.post(TOKEN_URL, data=data)
+    print("\n=== ZOHO TOKEN RAW RESPONSE ===")
+    print(res.text)
 
-    if "access_token" not in res:
-        raise HTTPException(400, {"error": "invalid_token", "data": res})
+    j = res.json()
+    if "access_token" not in j:
+        raise HTTPException(400, {"error": "invalid_token", "data": j})
 
-    tokens["access_token"] = res["access_token"]
-    tokens["refresh_token"] = res.get("refresh_token", tokens.get("refresh_token"))
-    tokens["expires_at"] = time.time() + res.get("expires_in", 3600)
+    tokens["access_token"] = j["access_token"]
+    tokens["refresh_token"] = j.get("refresh_token", tokens.get("refresh_token"))
+    tokens["expires_at"] = time.time() + j.get("expires_in", 3600)
 
     _save_tokens_to_file(tokens)
     return {"success": True}
 
 
-# -------------------------------------------------------------------
-# TOKEN REFRESH
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
+# Token refresh logic
+# ---------------------------------------------------------
 def ensure_access_token() -> str:
     if tokens.get("access_token") and time.time() < tokens["expires_at"]:
         return tokens["access_token"]
 
+    print("\n=== REFRESHING ZOHO TOKEN ===")
+
     data = {
         "grant_type": "refresh_token",
-        "refresh_token": tokens["refresh_token"],
+        "refresh_token": tokens.get("refresh_token"),
         "client_id": ZOHO_CLIENT_ID,
         "client_secret": ZOHO_CLIENT_SECRET,
     }
 
-    res = requests.post(TOKEN_URL, data=data).json()
+    res = requests.post(TOKEN_URL, data=data)
+    print("=== ZOHO REFRESH RAW RESPONSE ===")
+    print(res.text)
 
-    if "access_token" not in res:
-        raise HTTPException(401, "Zoho Auth failed")
+    j = res.json()
+    if "access_token" not in j:
+        raise HTTPException(401, {"error": "Zoho refresh failed", "data": j})
 
-    tokens["access_token"] = res["access_token"]
-    tokens["expires_at"] = time.time() + res.get("expires_in", 3600)
+    tokens["access_token"] = j["access_token"]
+    tokens["expires_at"] = time.time() + j.get("expires_in", 3600)
 
     _save_tokens_to_file(tokens)
     return tokens["access_token"]
@@ -126,112 +138,140 @@ def zoho_headers():
     }
 
 
-# -------------------------------------------------------------------
-# GET ZOHO ITEM BY SKU
-# -------------------------------------------------------------------
-def get_zoho_item_by_sku(sku):
+# ---------------------------------------------------------
+# Helper: get Zoho item by SKU
+# ---------------------------------------------------------
+def get_zoho_item_by_sku(sku: str):
+    print(f"\n=== SEARCHING ZOHO ITEM FOR SKU: {sku} ===")
+
     url = f"{ZOHO_API_BASE}/items"
-    res = requests.get(url, headers=zoho_headers(), params={"search_text": sku}).json()
-    items = res.get("items", [])
+    r = requests.get(url, headers=zoho_headers(), params={"search_text": sku})
+
+    print("=== ZOHO ITEMS RAW RESPONSE ===")
+    print(r.text)
+
+    try:
+        data = r.json()
+    except:
+        raise HTTPException(400, {"error": "Invalid JSON from Zoho items", "text": r.text})
+
+    items = data.get("items", [])
     return items[0] if items else None
 
 
-# -------------------------------------------------------------------
-# FIND/CREATE CONTACT
-# -------------------------------------------------------------------
-def find_or_create_contact(order):
-    keys = [
-        order.get("customer", {}).get("mobile"),
-        order.get("customer", {}).get("email"),
-        order.get("customer_name")
-    ]
-
-    # search existing
-    for key in keys:
-        if key:
-            r = requests.get(
-                f"{ZOHO_API_BASE}/contacts",
-                headers=zoho_headers(),
-                params={"search_text": key}
-            ).json()
-            if r.get("contacts"):
-                return r["contacts"][0]["contact_id"]
-
-    # create new
-    payload = {
-        "contact_name": order.get("customer_name", "Customer"),
-        "email": order.get("customer", {}).get("email", ""),
-        "phone": order.get("customer", {}).get("mobile", ""),
-    }
-    res = requests.post(f"{ZOHO_API_BASE}/contacts", headers=zoho_headers(), json=payload).json()
-
-    if "contact" not in res:
-        raise HTTPException(400, {"error": res})
-
-    return res["contact"]["contact_id"]
-
-
-# -------------------------------------------------------------------
-# BUILD INVOICE — ALWAYS USE ZOHO NAME
-# -------------------------------------------------------------------
-def build_invoice(order, contact_id, zoho_item):
-    item = order["items"][0]  # frontend always sends list with exactly 1 item
-
-    line_item = {
-        "item_id": zoho_item["item_id"],
-        "name": zoho_item["name"],
-        "rate": float(item.get("unit_price") or 0),  # ✅ FIX: correct price
-        "quantity": float(item.get("quantity") or 1),
-        "sku": zoho_item.get("sku")
-    }
+# ---------------------------------------------------------
+# Build invoice payload
+# ---------------------------------------------------------
+def build_invoice_payload(contact_id: str, order: dict, zoho_item: dict):
+    item = order["items"][0]
 
     payload = {
         "customer_id": contact_id,
         "reference_number": order.get("order_id", ""),
-        "line_items": [line_item],
+        "line_items": [
+            {
+                "item_id": zoho_item["item_id"],
+                "name": zoho_item["name"],
+                "rate": float(item.get("unit_price")),
+                "quantity": float(item.get("quantity")),
+                "sku": zoho_item.get("sku"),
+            }
+        ],
     }
+
+    print("\n=== FINAL INVOICE PAYLOAD ===")
+    print(json.dumps(payload, indent=2))
 
     return payload
 
 
-
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
 # MAIN — CREATE INVOICE
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
 @router.post("/invoice")
 def create_invoice(order: dict, db=Depends(get_db)):
 
+    print("\n\n==============================")
     print("=== RECEIVED ORDER FROM FRONTEND ===")
-    print(order)
+    print(json.dumps(order, indent=2))
+    print("==============================\n\n")
 
+    # 1) Get product SKU
     product_id = order["items"][0]["product_id"]
+    sku = db.execute(text("SELECT sku_id FROM products WHERE product_id = :p"), {"p": product_id}).scalar()
 
-    # 1️⃣ get SKU from database
-    sku = db.execute(
-        text("SELECT sku_id FROM products WHERE product_id = :pid"),
-        {"pid": product_id}
-    ).scalar()
+    print("=== DB SKU LOOKUP ===")
+    print(f"product_id={product_id} -> sku={sku}")
 
     if not sku:
         raise HTTPException(400, f"Product {product_id} has no SKU in DB")
 
-    # 2️⃣ get Zoho item
+    # 2) find item in Zoho
     zoho_item = get_zoho_item_by_sku(sku)
     if not zoho_item:
-        raise HTTPException(400, f"SKU {sku} not found in Zoho items")
+        raise HTTPException(400, f"SKU {sku} not found in Zoho")
 
-    # 3️⃣ find/create Zoho contact
-    contact_id = find_or_create_contact(order)
+    # 3) create very minimal contact (your working version)
+    contact_payload = {
+        "contact_name": order["customer"]["name"],
+        "email": order["customer"]["email"],
+        "phone": order["customer"]["mobile"],
+    }
 
-    # 4️⃣ build final payload
-    payload = build_invoice(order, contact_id, zoho_item)
+    print("\n=== CONTACT CREATE PAYLOAD ===")
+    print(json.dumps(contact_payload, indent=2))
 
+    # Search or Create Zoho Contact
+    contact_search = requests.get(
+        f"{ZOHO_API_BASE}/contacts",
+        headers=zoho_headers(),
+        params={"search_text": order["customer"]["mobile"]},
+    )
 
-    # 5️⃣ create invoice
+    print("\n=== CONTACT SEARCH RAW RESPONSE ===")
+    print(contact_search.text)
+
+    try:
+        search_json = contact_search.json()
+    except:
+        search_json = {}
+
+    contacts = search_json.get("contacts") or []
+    if contacts:
+        contact_id = contacts[0]["contact_id"]
+        print("=== EXISTING CONTACT FOUND ===", contact_id)
+    else:
+        print("=== CREATING NEW CONTACT ===")
+        c = requests.post(f"{ZOHO_API_BASE}/contacts", headers=zoho_headers(), json=contact_payload)
+
+        print("=== CONTACT CREATE RAW RESPONSE ===")
+        print(c.text)
+
+        cj = c.json()
+        contact_id = cj.get("contact", {}).get("contact_id")
+
+        if not contact_id:
+            raise HTTPException(400, {"error": "Contact create failed", "data": cj})
+
+    # 4) Invoice payload
+    payload = build_invoice_payload(contact_id, order, zoho_item)
+
+    # 5) Create invoice
     url = f"{ZOHO_API_BASE}/invoices"
-    resp = requests.post(url, headers=zoho_headers(), json=payload).json()
+    r = requests.post(url, headers=zoho_headers(), json=payload)
 
-    if "invoice" not in resp:
-        raise HTTPException(400, resp)
+    print("\n=== ZOHO INVOICE RAW STATUS ===", r.status_code)
+    print("=== ZOHO INVOICE RAW RESPONSE TEXT ===")
+    print(r.text)
 
-    return resp
+    try:
+        rj = r.json()
+        print("\n=== ZOHO INVOICE PARSED JSON ===")
+        print(json.dumps(rj, indent=2))
+    except:
+        raise HTTPException(400, {"error": "Invalid JSON from Zoho invoice", "raw": r.text})
+
+    if "invoice" not in rj:
+        raise HTTPException(400, rj)
+
+    return rj
