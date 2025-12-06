@@ -471,6 +471,35 @@ def invoice_description_for_product(product: Dict) -> str:
         return "Item"
     return " ".join(words[:2])
 
+def fetch_wix_order_number(order_id: str):
+    """
+    Fetch a single order from Wix Stores API to retrieve the 'number' field
+    if missing in the bulk query response.
+    """
+    if not order_id:
+        return None
+
+    try:
+        res = requests.post(
+            "https://www.wixapis.com/stores/v2/orders/get",
+            headers={
+                "Authorization": WIX_API_KEY,
+                "wix-site-id": WIX_SITE_ID,
+                "Content-Type": "application/json",
+            },
+            json={"id": order_id}
+        )
+
+        if res.status_code != 200:
+            logger.warning("Failed fallback fetch for order %s: %s", order_id, res.text)
+            return None
+
+        data = res.json()
+        return data.get("order", {}).get("number")
+
+    except Exception as e:
+        logger.exception("fetch_wix_order_number error for %s: %s", order_id, e)
+        return None
 
 # ---------------------
 # main sync endpoint
@@ -518,7 +547,23 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
     for idx, w in enumerate(wix_orders, start=1):
         try:
             logger.debug("Processing wix order #%d: raw id keys=%s", idx, list(w.keys()))
-            wix_order_id = safe_str(w.get("id") or w.get("_id") or w.get("orderNumber"))
+            # Always prefer Wix's official 'number' field
+            wix_order_number = w.get("number")
+
+# Fallback if missing — fetch order details from Wix
+            if not wix_order_number:
+             fallback_number = fetch_wix_order_number(w.get("id"))
+
+            if fallback_number:
+                wix_order_number = fallback_number
+                logger.debug("Fetched missing order number %s for %s", fallback_number, w.get("id"))
+            else:
+                logger.warning("Order %s missing 'number' even after fallback fetch", w.get("id"))
+                wix_order_number = w.get("id")  # last fallback (UUID)
+
+# Final order ID used everywhere
+            wix_order_id = safe_str(wix_order_number)
+
             order_result = {"wix_order_id": wix_order_id, "status": None, "reasons": [], "items": []}
 
             if not wix_order_id:

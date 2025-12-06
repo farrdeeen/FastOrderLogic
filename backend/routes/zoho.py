@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from database import get_db
 from fastapi import Depends
 from fastapi.responses import FileResponse
+from models import Order   # ✅ REQUIRED FIX
 
 load_dotenv()
 
@@ -197,9 +198,34 @@ def create_invoice(order: dict, db=Depends(get_db)):
     print(json.dumps(order, indent=2))
     print("==============================\n\n")
 
+    # ---------------------------------------------------------
+    # FIX: Frontend sends order nested incorrectly:
+    #
+    # {
+    #   "order_id": { FULL ORDER OBJECT }
+    # }
+    #
+    # So unwrap it:
+    # ---------------------------------------------------------
+    if isinstance(order.get("order_id"), dict):
+        print("⚠️  FIXING WRONG FRONTEND PAYLOAD (UNWRAPPING order_id)")
+        order = order["order_id"]
+
+        print("\n=== ORDER AFTER UNWRAP ===")
+        print(json.dumps(order, indent=2))
+
+    # Ensure items exist
+    if "items" not in order or not order["items"]:
+        raise HTTPException(400, "Order has no items")
+
+    # ---------------------------------------------------------
     # 1) Get product SKU
+    # ---------------------------------------------------------
     product_id = order["items"][0]["product_id"]
-    sku = db.execute(text("SELECT sku_id FROM products WHERE product_id = :p"), {"p": product_id}).scalar()
+    sku = db.execute(
+        text("SELECT sku_id FROM products WHERE product_id = :p"),
+        {"p": product_id}
+    ).scalar()
 
     print("=== DB SKU LOOKUP ===")
     print(f"product_id={product_id} -> sku={sku}")
@@ -207,12 +233,16 @@ def create_invoice(order: dict, db=Depends(get_db)):
     if not sku:
         raise HTTPException(400, f"Product {product_id} has no SKU in DB")
 
+    # ---------------------------------------------------------
     # 2) find item in Zoho
+    # ---------------------------------------------------------
     zoho_item = get_zoho_item_by_sku(sku)
     if not zoho_item:
         raise HTTPException(400, f"SKU {sku} not found in Zoho")
 
-    # 3) create very minimal contact (your working version)
+    # ---------------------------------------------------------
+    # 3) create very minimal contact
+    # ---------------------------------------------------------
     contact_payload = {
         "contact_name": order["customer"]["name"],
         "email": order["customer"]["email"],
@@ -243,7 +273,11 @@ def create_invoice(order: dict, db=Depends(get_db)):
         print("=== EXISTING CONTACT FOUND ===", contact_id)
     else:
         print("=== CREATING NEW CONTACT ===")
-        c = requests.post(f"{ZOHO_API_BASE}/contacts", headers=zoho_headers(), json=contact_payload)
+        c = requests.post(
+            f"{ZOHO_API_BASE}/contacts",
+            headers=zoho_headers(),
+            json=contact_payload
+        )
 
         print("=== CONTACT CREATE RAW RESPONSE ===")
         print(c.text)
@@ -254,12 +288,19 @@ def create_invoice(order: dict, db=Depends(get_db)):
         if not contact_id:
             raise HTTPException(400, {"error": "Contact create failed", "data": cj})
 
+    # ---------------------------------------------------------
     # 4) Invoice payload
+    # ---------------------------------------------------------
     payload = build_invoice_payload(contact_id, order, zoho_item)
 
+    # ---------------------------------------------------------
     # 5) Create invoice
-    url = f"{ZOHO_API_BASE}/invoices"
-    r = requests.post(url, headers=zoho_headers(), json=payload)
+    # ---------------------------------------------------------
+    r = requests.post(
+        f"{ZOHO_API_BASE}/invoices",
+        headers=zoho_headers(),
+        json=payload
+    )
 
     print("\n=== ZOHO INVOICE RAW STATUS ===", r.status_code)
     print("=== ZOHO INVOICE RAW RESPONSE TEXT ===")
@@ -274,16 +315,30 @@ def create_invoice(order: dict, db=Depends(get_db)):
 
     if "invoice" not in rj:
         raise HTTPException(400, rj)
+    
+    invoice_no = rj["invoice"]["invoice_number"]
+    order_id = order["order_id"]
+
+    # Update DB
+    db.execute(
+    text("UPDATE orders SET invoice_number = :inv WHERE order_id = :oid"),
+    {"inv": invoice_no, "oid": order_id}
+    )
+    db.commit()
 
     return rj
 
+
+
+# ---------------------------------------------------------
+# DOWNLOAD INVOICE PDF
+# ---------------------------------------------------------
 @router.get("/orders/{order_id}/invoice/download")
 def download_invoice(order_id: str, db: Session = Depends(get_db)):
     """
     Returns the invoice PDF file for an order.
     """
 
-    # Fetch invoice number
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -291,7 +346,6 @@ def download_invoice(order_id: str, db: Session = Depends(get_db)):
     if not order.invoice_number:
         raise HTTPException(status_code=400, detail="Invoice not yet generated")
 
-    # PDF path (ensure your invoice creator saves to this folder)
     pdf_path = f"invoices/{order.invoice_number}.pdf"
 
     try:

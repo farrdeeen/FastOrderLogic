@@ -5,6 +5,8 @@ from routes import wix_sync
 from routes import zoho
 from routes.dropdowns import router as dropdowns_router
 from routes import address_routes
+from routes import customers
+from routes import states
 
 app = FastAPI(title="FastOrderLogic Backend")
 
@@ -21,6 +23,8 @@ app.include_router(wix_sync.router)
 app.include_router(zoho.router)
 app.include_router(dropdowns_router, prefix="/dropdowns")
 app.include_router(address_routes.router)
+app.include_router(customers.router)
+app.include_router(states.router)
 
 @app.get("/")
 def home():

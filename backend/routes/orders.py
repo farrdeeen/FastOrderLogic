@@ -170,7 +170,7 @@ def list_orders(
             for k, v in o.__dict__.items()
             if not k.startswith("_")
         }
-
+        
         # ADD INVOICE NUMBER
         base["invoice_number"] = o.invoice_number
 
@@ -464,3 +464,22 @@ def update_delivery(order_id: str, payload: DeliveryUpdate, db: Session = Depend
     }
 
 # ---- SERIAL STATUS CHECK ----
+@router.put("/{order_id}/remarks")
+def update_order_remarks(order_id: str, data: dict, db: Session = Depends(get_db)):
+    remarks = data.get("remarks")
+
+    if remarks is None:
+        raise HTTPException(400, "Missing remarks value")
+
+    db.execute(
+        text("""
+            UPDATE orders
+            SET remarks = :remarks
+            WHERE order_id = :oid
+        """),
+        {"remarks": remarks, "oid": order_id}
+    )
+
+    db.commit()
+
+    return {"success": True, "order_id": order_id, "remarks": remarks}
