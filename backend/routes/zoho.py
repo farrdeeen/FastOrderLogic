@@ -11,6 +11,7 @@ from sqlalchemy import text
 from dotenv import load_dotenv
 from database import get_db
 from fastapi import Depends
+from fastapi.responses import FileResponse
 
 load_dotenv()
 
@@ -275,3 +276,29 @@ def create_invoice(order: dict, db=Depends(get_db)):
         raise HTTPException(400, rj)
 
     return rj
+
+@router.get("/orders/{order_id}/invoice/download")
+def download_invoice(order_id: str, db: Session = Depends(get_db)):
+    """
+    Returns the invoice PDF file for an order.
+    """
+
+    # Fetch invoice number
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if not order.invoice_number:
+        raise HTTPException(status_code=400, detail="Invoice not yet generated")
+
+    # PDF path (ensure your invoice creator saves to this folder)
+    pdf_path = f"invoices/{order.invoice_number}.pdf"
+
+    try:
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=f"{order.invoice_number}.pdf"
+        )
+    except:
+        raise HTTPException(status_code=500, detail="Invoice file missing on server")

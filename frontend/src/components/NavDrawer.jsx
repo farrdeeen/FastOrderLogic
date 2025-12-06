@@ -78,7 +78,7 @@ export default function NavDrawer({ onNavigate }) {
           </Typography>
         ) : (
           <Tooltip title="Expand Menu" placement="right">
-            <MenuIcon sx={{ color: "#1e3a8a" }} />
+            <MenuIcon sx={{ color: "#f4f2f2ff" }} />
           </Tooltip>
         )}
       </Toolbar>
@@ -111,7 +111,7 @@ export default function NavDrawer({ onNavigate }) {
                     minWidth: 0,
                     mr: open ? 2 : "auto",
                     justifyContent: "center",
-                    color: "#2563eb",
+                    color: "#000000ff",
                   }}
                 >
                   {item.icon}
@@ -162,7 +162,7 @@ export default function NavDrawer({ onNavigate }) {
         position="fixed"
         sx={{
           zIndex: (theme) => theme.zIndex.drawer + 1,
-          backgroundColor: "#1e40af",
+          backgroundColor: "#010101ff",
         }}
       >
         <Toolbar>
@@ -174,7 +174,7 @@ export default function NavDrawer({ onNavigate }) {
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap>
+          <Typography variant="h6" noWrap color="white">
             FastOrderLogic Dashboard
           </Typography>
         </Toolbar>

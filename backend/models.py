@@ -37,6 +37,8 @@ class Order(Base):
     order_status = Column(String(10))
     payment_type = Column(String(20))
     gst = Column(DECIMAL(10, 2))
+    invoice_number = Column(String(50))
+
 
     __table_args__ = (
         CheckConstraint('(customer_id IS NOT NULL) OR (offline_customer_id IS NOT NULL)', name='check_customer_type'),
