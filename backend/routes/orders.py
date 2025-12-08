@@ -14,6 +14,39 @@ from models import Order
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
 
+def get_global_suffix(db):
+    result = db.execute(text("""
+        SELECT 
+            CAST(SUBSTRING_INDEX(order_id, '#', -1) AS UNSIGNED) AS suffix
+        FROM orders
+        WHERE order_id REGEXP '^[0-9]{5}#[0-9]{5}$'
+        ORDER BY suffix DESC
+        LIMIT 1;
+    """)).fetchone()
+
+    if result and result[0] is not None:
+        return int(result[0])
+
+    return 0
+
+
+
+
+def generate_order_id(db, offline_customer_id: int) -> str:
+    if not offline_customer_id:
+        raise ValueError("offline_customer_id is required for order_id generation")
+
+    prefix = str(offline_customer_id).zfill(5)
+
+    last_suffix = get_global_suffix(db)
+    next_suffix = str(last_suffix + 1).zfill(5)
+
+    return f"{prefix}#{next_suffix}"
+
+
+
+
+
 # ================================
 # DB Dependency
 # ================================
@@ -58,18 +91,65 @@ class OrderCreate(BaseModel):
 @router.post("/create")
 def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
-    # Validate customer
-    if not data.customer_id and not data.offline_customer_id:
-        raise HTTPException(status_code=400, detail="Customer not selected")
-
-    # Validate address
+    # --------------------------
+    # VALIDATION
+    # --------------------------
     if not data.address_id:
         raise HTTPException(status_code=400, detail="Address not selected")
 
-    now = datetime.now()
-    order_id = now.strftime("%H%M%S%d%m")
+    # PREFIX = offline_customer_id preferred
+    if data.offline_customer_id:
+        prefix = f"{data.offline_customer_id:05d}"
+    elif data.customer_id:
+        prefix = f"{data.customer_id:05d}"
+    else:
+        raise HTTPException(400, "Customer is required")
 
-    # Insert main order
+    # --------------------------
+    # GLOBAL SUFFIX LOGIC
+    # --------------------------
+    last = db.execute(text("""
+        SELECT order_id
+        FROM orders
+        WHERE order_id LIKE '%#%'
+        ORDER BY created_at DESC
+        LIMIT 1
+    """)).fetchone()
+
+    if last:
+        try:
+            last_suffix = int(last[0].split("#")[1])
+            new_suffix = last_suffix + 1
+        except:
+            new_suffix = 1
+    else:
+        new_suffix = 1
+
+    suffix = f"{new_suffix:05d}"
+
+    # FINAL order_id
+    # FINAL ORDER ID BUILDER (offline preferred, otherwise online)
+    if data.offline_customer_id:
+        order_id = generate_order_id(db, data.offline_customer_id)
+    else:
+    # generate online order ID using same suffix logic
+        prefix = f"{data.customer_id:05d}"
+
+    last_suffix = get_global_suffix(db)
+    next_suffix = str(last_suffix + 1).zfill(5)
+
+    order_id = f"{prefix}#{next_suffix}"
+
+
+
+    now = datetime.now()
+
+    # order_index MUST be unique → use timestamp
+    order_index = int(now.timestamp())
+
+    # --------------------------
+    # INSERT ORDER
+    # --------------------------
     order = Order(
         order_id=order_id,
         customer_id=data.customer_id,
@@ -85,7 +165,7 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         delivery_status="NOT_SHIPPED",
         created_at=now,
         updated_at=now,
-        order_index=int(now.strftime("%H%M%S%d")),
+        order_index=order_index,
         payment_type=data.payment_type,
     )
 
@@ -93,31 +173,28 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(order)
 
-    # Insert each item
+    # --------------------------
+    # INSERT ITEMS
+    # --------------------------
     for it in data.items:
-        db.execute(
-            text("""
-                INSERT INTO order_items
-                (order_id, product_id, quantity, unit_price, total_price)
-                VALUES (:oid, :pid, :qty, :unit, :line_total)
-            """),
-            {
-                "oid": order_id,
-                "pid": it.product_id,
-                "qty": it.qty,
-                "unit": it.final_unit_price,
-                "line_total": it.line_total
-            }
-        )
+        db.execute(text("""
+            INSERT INTO order_items
+            (order_id, product_id, quantity, unit_price, total_price)
+            VALUES (:oid, :pid, :qty, :unit, :line_total)
+        """), {
+            "oid": order_id,
+            "pid": it.product_id,
+            "qty": it.qty,
+            "unit": it.final_unit_price,
+            "line_total": it.line_total
+        })
 
     db.commit()
 
     return {
         "success": True,
-        "message": "Order created successfully",
         "order_id": order_id
     }
-
 
 
 # ================================
@@ -196,8 +273,20 @@ def list_orders(
         # ADDRESS
         address = db.execute(
             text("""
-                SELECT address_id, name, mobile, pincode, address_line, city, state_id, landmark
-                FROM address WHERE address_id = :aid
+                SELECT 
+    a.address_id,
+    a.name,
+    a.mobile,
+    a.pincode,
+    a.address_line,
+    a.city,
+    a.state_id,
+    s.name AS state_name,
+    a.landmark
+FROM address a
+LEFT JOIN state s ON s.state_id = a.state_id
+WHERE a.address_id = :aid
+
             """),
             {"aid": o.address_id}
         ).first()
@@ -305,71 +394,114 @@ def get_serial_numbers(order_id: str, db: Session = Depends(get_db)):
             oi.product_id,
             p.name AS product_name,
             oi.quantity,
-            sn.sr_number
+            dt.device_srno
         FROM order_items oi
         LEFT JOIN products p ON p.product_id = oi.product_id
-        LEFT JOIN serial_numbers sn ON sn.item_id = oi.item_id
+        LEFT JOIN device_transaction dt 
+            ON dt.order_id = oi.order_id 
+            AND dt.sku_id = p.sku_id
         WHERE oi.order_id = :oid
         ORDER BY oi.item_id
     """), {"oid": order_id}).fetchall()
 
     items = {}
+
     for r in rows:
         if r.item_id not in items:
             items[r.item_id] = {
                 "item_id": r.item_id,
                 "product_id": r.product_id,
-                "product_name": r.product_name,   # ← ADD THIS
+                "product_name": r.product_name,
                 "quantity": r.quantity,
                 "serials": []
             }
-        if r.sr_number:
-            items[r.item_id]["serials"].append(r.sr_number)
+        if r.device_srno:
+            items[r.item_id]["serials"].append(r.device_srno)
 
     return list(items.values())
+
 
 
 @router.post("/{order_id}/serial_numbers/save")
 def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)):
     """
-    Expect payload:
-    {
-        "entries": [
-            {
-                "item_id": 12,
-                "serials": ["SN1", "SN2", ...]
-            }
-        ]
-    }
+    Updated version:
+    - Deletes old serials for each item_id (device) BEFORE inserting new ones
+    - Stores new serials ONLY in device_transaction
     """
-    entries = data.get("entries", [])
 
+    entries = data.get("entries", [])
     if not entries:
         raise HTTPException(status_code=400, detail="No serial data provided")
+
+    # Fetch order items for unit price, model_name, sku_id
+    order_items = db.execute(text("""
+        SELECT 
+            oi.item_id,
+            oi.product_id,
+            oi.unit_price,
+            p.name AS model_name,
+            p.sku_id
+        FROM order_items oi
+        LEFT JOIN products p ON p.product_id = oi.product_id
+        WHERE oi.order_id = :oid
+    """), {"oid": order_id}).fetchall()
+
+    # Map item_id → details
+    item_map = {
+        row.item_id: {
+            "unit_price": row.unit_price,
+            "model_name": row.model_name,
+            "sku_id": row.sku_id
+        }
+        for row in order_items
+    }
 
     for entry in entries:
         item_id = entry.get("item_id")
         serials = entry.get("serials", [])
 
-        if not item_id:
+        if not item_id or item_id not in item_map:
             continue
 
-        # Delete old serial numbers for this item
-        db.execute(text("""
-            DELETE FROM serial_numbers
-            WHERE item_id = :iid
-        """), {"iid": item_id})
+        item = item_map[item_id]
+        sku = item["sku_id"]
 
-        # Insert new serials
+        # ---------------------------------------------------------
+        # DELETE old serial numbers for this item (THIS FIXES DUPLICATION)
+        # ---------------------------------------------------------
+        db.execute(text("""
+            DELETE FROM device_transaction
+            WHERE order_id = :oid
+              AND sku_id = :sku
+        """), {"oid": order_id, "sku": sku})
+
+        # ---------------------------------------------------------
+        # INSERT NEW SERIALS
+        # ---------------------------------------------------------
         for sr in serials:
-            if sr.strip():
-                db.execute(text("""
-                    INSERT INTO serial_numbers (item_id, sr_number)
-                    VALUES (:iid, :sr)
-                """), {"iid": item_id, "sr": sr.strip()})
+            sr = sr.strip()
+            if not sr:
+                continue
+
+            db.execute(text("""
+                INSERT INTO device_transaction
+                    (device_srno, model_name, sku_id, order_id, in_out, create_date, price, remarks)
+                VALUES
+                    (:sr, :model, :sku, :oid, 2, CURDATE(), :price, NULL)
+            """), {
+                "sr": sr,
+                "model": item["model_name"],
+                "sku": sku,
+                "oid": order_id,
+                "price": item["unit_price"]
+            })
 
     db.commit()
-    return {"message": "Serial numbers saved successfully"}
+
+    return {"message": "Serial numbers updated successfully"}
+
+
 
 @router.put("/{order_id}/toggle-payment")
 def toggle_payment(order_id: str, db: Session = Depends(get_db)):
@@ -483,3 +615,55 @@ def update_order_remarks(order_id: str, data: dict, db: Session = Depends(get_db
     db.commit()
 
     return {"success": True, "order_id": order_id, "remarks": remarks}
+
+@router.get("/search/suggestions")
+def search_suggestions(q: str, db: Session = Depends(get_db)):
+    if not q or len(q.strip()) < 2:
+        return []
+
+    q = f"%{q.lower()}%"
+
+    rows = db.execute(text("""
+        SELECT DISTINCT result FROM (
+
+            -- Order ID
+            SELECT order_id AS result FROM orders WHERE LOWER(order_id) LIKE :q
+
+            UNION
+
+            -- AWB
+            SELECT CAST(awb_number AS CHAR) FROM orders WHERE LOWER(awb_number) LIKE :q
+
+            UNION
+
+            -- Customer (online)
+            SELECT name FROM customer WHERE LOWER(name) LIKE :q
+            UNION
+            SELECT mobile FROM customer WHERE LOWER(mobile) LIKE :q
+
+            UNION
+
+            -- Customer (offline)
+            SELECT name FROM offline_customer WHERE LOWER(name) LIKE :q
+            UNION
+            SELECT mobile FROM offline_customer WHERE LOWER(mobile) LIKE :q
+
+            UNION
+
+            -- Address fields
+            SELECT address_line FROM address WHERE LOWER(address_line) LIKE :q
+            UNION
+            SELECT city FROM address WHERE LOWER(city) LIKE :q
+            UNION
+            SELECT pincode FROM address WHERE LOWER(pincode) LIKE :q
+
+            UNION
+
+            -- Product names
+            SELECT name FROM products WHERE LOWER(name) LIKE :q
+
+        ) AS all_results
+        LIMIT 10;
+    """), {"q": q}).fetchall()
+
+    return [r[0] for r in rows]

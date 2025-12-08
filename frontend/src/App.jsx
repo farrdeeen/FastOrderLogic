@@ -6,23 +6,26 @@ import SearchBar from "./components/SearchBar";
 import CreateOrderForm from "./components/CreateOrderForm";
 import NavDrawer from "./components/NavDrawer";
 import ChatPage from "./components/chat/ChatPage";
-import { Autocomplete, TextField, createFilterOptions } from "@mui/material";
+import { Dialog, DialogTitle, DialogContent } from "@mui/material";
+
+import CustomerForm from "./components/forms/CustomerForm";
 
 import {
+  Autocomplete,
+  TextField,
+  createFilterOptions,
   Box,
   Typography,
   CircularProgress,
   Button,
   Fade,
   Paper,
+  Modal,
 } from "@mui/material";
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function App() {
-  // ==========================
-  // STATE
-  // ==========================
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -38,19 +41,23 @@ export default function App() {
 
   const [activePage, setActivePage] = useState("orders");
 
-  // NEW STATES FOR CREATE ORDER PAGE
+  // Dropdowns
   const [productList, setProductList] = useState([]);
   const [customerList, setCustomerList] = useState([]);
+  const [statesList, setStatesList] = useState([]);
 
   const [selectedProduct, setSelectedProduct] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState("");
 
+  // Modal state
+  const [customerModalOpen, setCustomerModalOpen] = useState(false);
+
+  // Filter for Autocomplete
   const customerFilter = createFilterOptions({
     stringify: (option) =>
       `${option.name} ${option.type} ${option.mobile ?? ""}`.toLowerCase(),
   });
 
-  // PAGE TITLES
   const pageTitle = {
     dashboard: "📊 Dashboard Overview",
     orders: "📦 Orders Management",
@@ -60,9 +67,7 @@ export default function App() {
     "create-order": "🆕 Create New Order",
   }[activePage];
 
-  // ==========================
-  // FETCH ORDERS
-  // ==========================
+  // Fetch orders
   useEffect(() => {
     if (activePage === "orders") fetchOrders();
   }, [filters, activePage]);
@@ -71,140 +76,138 @@ export default function App() {
     setLoading(true);
     try {
       const res = await axios.get(`${API_URL}/orders`, { params: filters });
-      setOrders(res.data);
+      setOrders(res.data || []);
     } catch (err) {
       console.error("Fetch orders error:", err);
+      setOrders([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // ==========================
-  // LOAD DROPDOWNS FOR CREATE ORDER PAGE
-  // ==========================
+  // Load dropdowns when create-order page opens
   useEffect(() => {
-    if (activePage === "create-order") {
-      axios
-        .get(`${API_URL}/dropdowns/products/list`)
-        .then((res) => setProductList(res.data))
-        .catch((err) => console.error("Product load err:", err));
+    if (activePage !== "create-order") return;
 
-      axios
-        .get(`${API_URL}/dropdowns/customers/list`)
-        .then((res) => setCustomerList(res.data))
-        .catch((err) => console.error("Customer load err:", err));
-    }
+    axios
+      .get(`${API_URL}/dropdowns/products/list`)
+      .then((res) => setProductList(res.data || []))
+      .catch(console.error);
+
+    axios
+      .get(`${API_URL}/dropdowns/customers/list`)
+      .then((res) => setCustomerList(res.data || []))
+      .catch(console.error);
+
+    axios
+      .get(`${API_URL}/states/list`)
+      .then((res) => setStatesList(res.data || []))
+      .catch(console.error);
   }, [activePage]);
 
-  // ==========================
-  // SYNC WIX
-  // ==========================
+  // Sync Wix
   const handleSyncWix = async () => {
     try {
       setSyncing(true);
       const res = await axios.get(`${API_URL}/sync/wix`);
-
-      alert(
-        `🔄 Wix Sync Completed\nInserted: ${res.data.inserted}\nSkipped: ${res.data.skipped}`
-      );
-
+      alert(`Wix Sync Completed\nInserted: ${res.data.inserted}\nSkipped: ${res.data.skipped}`);
       fetchOrders();
     } catch (err) {
-      console.error("Wix sync error:", err);
+      console.error(err);
       alert("❌ Wix sync failed");
     } finally {
       setSyncing(false);
     }
   };
 
-  // ==========================
-  // ZOHO INVOICE CREATION
-  // ==========================
+  // Create Zoho Invoice
   const handleCreateInvoice = async (order) => {
+    if (!order) return alert("Order not found");
+
     try {
       const res = await axios.post(`${API_URL}/zoho/invoice`, order);
-      alert("🧾 Invoice created successfully in Zoho Books!");
-      console.log("Zoho Invoice:", res.data);
+      console.log(res.data);
+      alert("Invoice created!");
       fetchOrders();
     } catch (err) {
-      console.error("Zoho Invoice Error:", err);
-      alert("❌ Failed to create invoice");
+      console.error(err);
+      alert("❌ Invoice creation failed");
     }
   };
 
-  // ==========================
-  // GENERIC ORDER ACTION HANDLER
-  // ==========================
-  const handleOrderAction = async (orderId, action) => {
-    try {
-      // Skip update-delivery (handled separately)
-      if (action === "update-delivery") return;
-
-      await axios.put(
-        `${API_URL}/orders/${encodeURIComponent(orderId)}/${action}`
-      );
-
-      fetchOrders();
-    } catch (err) {
-      console.error("Order action error:", err);
-      alert("❌ Action failed");
-    }
+  // PUT actions
+  const callSimplePut = async (orderId, actionPath) => {
+    const url = `${API_URL}/orders/${encodeURIComponent(orderId)}/${actionPath}`;
+    return axios.put(url);
   };
 
-  // ==========================
-  // MASTER ACTION ROUTER (FIXED!)
-  // ==========================
   const handleAction = async (orderId, action, payload) => {
     try {
-      // Delivery status update
       if (action === "update-delivery") {
         await axios.put(`${API_URL}/orders/${orderId}/update-delivery`, {
           status: payload,
         });
-        fetchOrders();
-        return;
+        return fetchOrders();
       }
 
-      // Invoice creation requires passing the whole order
       if (action === "create-invoice") {
         const order = orders.find((o) => o.order_id === orderId);
         return handleCreateInvoice(order);
       }
 
-      // Download invoice
       if (action === "download-invoice") {
         window.open(`${API_URL}/zoho/orders/${orderId}/invoice/download`);
         return;
       }
 
-      // Default: toggle payment and others
-      await handleOrderAction(orderId, action);
+      if (action === "update-remarks") {
+        await axios.put(`${API_URL}/orders/${orderId}/remarks`, {
+          remarks: payload,
+        });
+        return fetchOrders();
+      }
+
+      const simpleActions = ["toggle-payment", "mark-paid", "mark-fulfilled", "mark-delhivery", "mark-invoiced"];
+      if (simpleActions.includes(action)) {
+        await callSimplePut(orderId, action);
+        return fetchOrders();
+      }
+
+      console.warn("Unknown action:", action);
     } catch (err) {
-      console.error("Action Error:", err);
+      console.error("Action error:", err);
       alert("❌ Action failed");
     }
   };
 
-  // ==========================
-  // NAVIGATION
-  // ==========================
   const handleNavigate = (section) => {
-    if (section === "logout") {
-      alert("Logging out…");
-      return;
-    }
+    if (section === "logout") return alert("Logging out…");
     setActivePage(section);
   };
 
-  // ==========================
-  // RENDER UI
-  // ==========================
+  // After customer is saved → refresh list + auto-select latest
+  const refreshCustomersAfterCreate = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/dropdowns/customers/list`);
+      const list = res.data || [];
+      setCustomerList(list);
+
+      if (list.length) {
+        const last = list[list.length - 1];
+        setSelectedCustomer(`${last.type}:${last.id}`);
+      }
+
+      setCustomerModalOpen(false);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to refresh customers");
+    }
+  };
+
   return (
     <Box sx={{ display: "flex", fontFamily: "Inter, sans-serif" }}>
-      {/* SIDEBAR */}
       <NavDrawer onNavigate={handleNavigate} />
 
-      {/* MAIN PANEL */}
       <Box
         component="main"
         sx={{
@@ -218,51 +221,28 @@ export default function App() {
           {pageTitle}
         </Typography>
 
-        {/* ========================== */}
         {/* ORDERS PAGE */}
-        {/* ========================== */}
         <Fade in={activePage === "orders"} timeout={300} unmountOnExit>
           <Box>
-            {/* SYNC WIX */}
             <Button
               variant="contained"
               onClick={handleSyncWix}
               disabled={syncing}
-              sx={{
-                backgroundColor: "#020202ff",
-                mb: 2,
-                px: 3,
-                py: 1,
-                borderRadius: "8px",
-                fontWeight: 600,
-                textTransform: "none",
-              }}
+              sx={{ backgroundColor: "#020202ff", mb: 2 }}
             >
               {syncing ? "Syncing..." : "🔄 Sync Wix Orders"}
             </Button>
 
-            {/* CREATE ORDER */}
             <Button
               variant="contained"
               onClick={() => setActivePage("create-order")}
-              sx={{
-                backgroundColor: "#000000ff",
-                mb: 2,
-                ml: 2,
-                px: 3,
-                py: 1,
-                borderRadius: "8px",
-                fontWeight: 600,
-                textTransform: "none",
-              }}
+              sx={{ backgroundColor: "#000", mb: 2, ml: 2 }}
             >
               ➕ Create Order
             </Button>
 
-            {/* SEARCH */}
             <SearchBar filters={filters} setFilters={setFilters} />
 
-            {/* TABLE / LOADER */}
             {loading ? (
               <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
                 <CircularProgress />
@@ -273,27 +253,18 @@ export default function App() {
           </Box>
         </Fade>
 
-        {/* ========================== */}
         {/* CREATE ORDER PAGE */}
-        {/* ========================== */}
         <Fade in={activePage === "create-order"} timeout={300} unmountOnExit>
           <Paper sx={{ p: 3, borderRadius: 3 }}>
-            {/* BACK BUTTON */}
             <Button
               variant="outlined"
               onClick={() => setActivePage("orders")}
-              sx={{
-                mb: 3,
-                textTransform: "none",
-                borderRadius: "8px",
-                fontWeight: 600,
-                backgroundColor: "#f3f4f6",
-              }}
+              sx={{ mb: 3 }}
             >
               ⬅ Back to Orders
             </Button>
 
-            {/* PRODUCT + CUSTOMER DROPDOWNS */}
+            {/* SEARCH DROPDOWNS */}
             <Box
               sx={{
                 display: "grid",
@@ -302,57 +273,25 @@ export default function App() {
                 mb: 3,
               }}
             >
-              {/* PRODUCT SEARCH */}
               <Autocomplete
                 freeSolo
-                options={productList.map((p) => ({
-                  id: p.id,
-                  label: p.name,
-                }))}
-                onChange={(e, value) => {
-                  if (value) setSelectedProduct(value.id);
-                }}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Search Product…"
-                    placeholder="Type to search products"
-                    variant="outlined"
-                    sx={{ background: "white", borderRadius: 1 }}
-                  />
-                )}
+                options={productList.map((p) => ({ id: p.id, label: p.name }))}
+                onChange={(e, v) => v && setSelectedProduct(v.id)}
+                renderInput={(params) => <TextField {...params} label="Search Product…" />}
               />
 
-              {/* CUSTOMER SEARCH */}
               <Autocomplete
                 options={customerList}
                 filterOptions={customerFilter}
                 getOptionLabel={(c) => `${c.name} (${c.type})`}
                 value={
-                  customerList.find(
-                    (c) => `${c.type}:${c.id}` === selectedCustomer
-                  ) || null
+                  customerList.find((c) => `${c.type}:${c.id}` === selectedCustomer) ||
+                  null
                 }
-                onChange={(e, newValue) => {
-                  if (newValue) {
-                    setSelectedCustomer(`${newValue.type}:${newValue.id}`);
-                  } else {
-                    setSelectedCustomer("");
-                  }
-                }}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Select Customer…"
-                    size="small"
-                    sx={{
-                      "& .MuiOutlinedInput-root": {
-                        borderRadius: "8px",
-                      },
-                    }}
-                  />
-                )}
-                sx={{ width: "100%" }}
+                onChange={(e, v) =>
+                  v ? setSelectedCustomer(`${v.type}:${v.id}`) : setSelectedCustomer("")
+                }
+                renderInput={(params) => <TextField {...params} label="Select Customer…" />}
               />
             </Box>
 
@@ -368,32 +307,19 @@ export default function App() {
                 mb: 3,
               }}
             >
-              <Button
-                variant="contained"
-                sx={{
-                  background: "#2563eb",
-                  borderRadius: "8px",
-                  textTransform: "none",
-                  fontWeight: 600,
-                }}
-              >
+              <Button variant="contained" sx={{ background: "#2563eb" }}>
                 Browse Products
               </Button>
 
               <Button
                 variant="contained"
-                sx={{
-                  background: "#22c55e",
-                  borderRadius: "8px",
-                  textTransform: "none",
-                  fontWeight: 600,
-                }}
+                sx={{ background: "#22c55e" }}
+                onClick={() => setCustomerModalOpen(true)}
               >
-                Select Customer
+                Add Customer
               </Button>
             </Box>
 
-            {/* ORDER FORM */}
             <CreateOrderForm
               onOrderCreated={() => setActivePage("orders")}
               selectedCustomer={selectedCustomer}
@@ -414,6 +340,26 @@ export default function App() {
         <Fade in={activePage === "chat"} timeout={200} unmountOnExit>
           <ChatPage />
         </Fade>
+
+        {/* CUSTOMER CREATE MODAL */}
+        <Dialog
+  open={customerModalOpen}
+  onClose={() => setCustomerModalOpen(false)}
+  maxWidth="md"
+  fullWidth
+>
+  <DialogTitle sx={{ fontWeight: 600 }}>Create Customer</DialogTitle>
+
+  <DialogContent sx={{ pb: 3 }}>
+    <CustomerForm
+      states={statesList}
+      onClose={() => setCustomerModalOpen(false)}
+      onSuccess={refreshCustomersAfterCreate}
+    />
+  </DialogContent>
+</Dialog>
+
+
       </Box>
     </Box>
   );

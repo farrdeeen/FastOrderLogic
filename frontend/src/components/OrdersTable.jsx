@@ -4,53 +4,36 @@ import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-export default function OrdersTable({ orders, onAction }) {
+export default function OrdersTable({ orders = [], onAction }) {
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState(null);
 
-  // SERIAL NUMBER MODAL
+  // Serial modal
   const [serialModalOpen, setSerialModalOpen] = useState(false);
   const [serialItems, setSerialItems] = useState([]);
   const [activeOrderId, setActiveOrderId] = useState(null);
 
-  const rowsPerPage = 8;
-  const totalPages = Math.ceil((orders?.length || 0) / rowsPerPage);
-  const paginated = (orders || []).slice(
-    (page - 1) * rowsPerPage,
-    page * rowsPerPage
-  );
+  // Remarks editing
+  const [editingRemarksFor, setEditingRemarksFor] = useState(null);
+  const [remarksValue, setRemarksValue] = useState("");
 
-  const toggleExpand = (id) => {
-    setExpanded(expanded === id ? null : id);
+  const rowsPerPage = 8;
+  const totalPages = Math.max(1, Math.ceil((orders.length || 0) / rowsPerPage));
+  const paginated = orders.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+  const toggleExpand = (id) => setExpanded(expanded === id ? null : id);
+
+  const safeAction = (id, action, payload) => {
+    if (!action) return console.warn("Undefined action");
+    onAction(id, action, payload);
   };
 
-  const badge = (text, color) => (
-    <span
-      style={{
-        background: color,
-        color: "white",
-        padding: "3px 8px",
-        borderRadius: "6px",
-        fontSize: "0.75rem",
-        fontWeight: "500",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {text}
-    </span>
-  );
-
-  // ---------------------------------------------------------
-  // OPEN SERIAL NUMBER MODAL
-  // ---------------------------------------------------------
-  const openSerialModal = async (order) => {
-    setActiveOrderId(order.order_id);
-
+  // Load serials
+  const openSerialModal = async (o) => {
     try {
       const res = await axios.get(
-        `${API_URL}/orders/${order.order_id}/serial_numbers`
+        `${API_URL}/orders/${encodeURIComponent(o.order_id)}/serial_numbers`
       );
-
       const formatted = res.data.map((item) => ({
         ...item,
         serials:
@@ -58,41 +41,44 @@ export default function OrdersTable({ orders, onAction }) {
             ? item.serials
             : Array(item.quantity).fill(""),
       }));
-
+      setActiveOrderId(o.order_id);
       setSerialItems(formatted);
       setSerialModalOpen(true);
     } catch (err) {
-      alert("Unable to fetch serial numbers.");
       console.error(err);
+      alert("Unable to load serial numbers");
     }
   };
 
-  // ---------------------------------------------------------
-  // SAVE SERIAL NUMBERS
-  // ---------------------------------------------------------
   const saveSerialNumbers = async () => {
     try {
       await axios.post(
-        `${API_URL}/orders/${activeOrderId}/serial_numbers/save`,
+        `${API_URL}/orders/${encodeURIComponent(activeOrderId)}/serial_numbers/save`,
         { entries: serialItems }
       );
-
       alert("Serial numbers saved!");
       setSerialModalOpen(false);
     } catch (err) {
-      alert(err.response?.data?.detail || "Failed to save serials");
       console.error(err);
+      alert("Failed to save serials");
     }
   };
 
-  // ---------------------------------------------------------
-  // MAIN TABLE
-  // ---------------------------------------------------------
-  if (!orders?.length)
+  // Remarks
+  const startEditRemarks = (o) => {
+    setEditingRemarksFor(o.order_id);
+    setRemarksValue(o.remarks || "");
+  };
+
+  const submitRemarks = async (id) => {
+    await safeAction(id, "update-remarks", remarksValue);
+    setEditingRemarksFor(null);
+    setRemarksValue("");
+  };
+
+  if (!orders.length)
     return (
-      <p style={{ textAlign: "center", color: "#6b7280", marginTop: "1rem" }}>
-        No orders found.
-      </p>
+      <p style={{ textAlign: "center", color: "#6b7280" }}>No orders found.</p>
     );
 
   return (
@@ -104,19 +90,12 @@ export default function OrdersTable({ orders, onAction }) {
           boxShadow: "0 2px 6px rgba(0,0,0,0.1)",
         }}
       >
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            fontSize: "0.9rem",
-            background: "white",
-          }}
-        >
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               {[
                 "",
-                "Order ID",
+                "Customer Name", // changed ✔️
                 "Created",
                 "Items",
                 "Amount (₹)",
@@ -125,18 +104,18 @@ export default function OrdersTable({ orders, onAction }) {
                 "Serials",
                 "Delivery",
                 "Invoice",
-              ].map((heading) => (
+              ].map((h) => (
                 <th
-                  key={heading}
+                  key={h}
                   style={{
                     padding: "10px",
                     borderBottom: "2px solid #d1d5db",
-                    fontWeight: "600",
+                    fontWeight: 600,
                     textAlign: "left",
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {heading}
+                  {h}
                 </th>
               ))}
             </tr>
@@ -144,9 +123,7 @@ export default function OrdersTable({ orders, onAction }) {
 
           <tbody>
             {paginated.map((o, i) => {
-              const isExpanded = expanded === o.order_id;
-
-              // SERIAL STATUS indicator (backend flag)
+              const exp = expanded === o.order_id;
               const serialDot =
                 o.serial_status === "complete"
                   ? "🟢"
@@ -156,14 +133,15 @@ export default function OrdersTable({ orders, onAction }) {
 
               return (
                 <>
+                  {/* MAIN ROW */}
                   <tr
                     key={o.order_id}
                     style={{
-                      background: i % 2 === 0 ? "#f3f4f6" : "#ffffff",
+                      background: i % 2 === 0 ? "#f3f4f6" : "white",
                     }}
                   >
                     {/* Expand */}
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
+                    <td style={{ padding: 10 }}>
                       <button
                         onClick={() => toggleExpand(o.order_id)}
                         style={{
@@ -172,106 +150,82 @@ export default function OrdersTable({ orders, onAction }) {
                           cursor: "pointer",
                         }}
                       >
-                        {isExpanded ? <FaChevronUp /> : <FaChevronDown />}
+                        {exp ? <FaChevronUp /> : <FaChevronDown />}
                       </button>
                     </td>
 
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
-                      {o.order_id}
-                    </td>
+                    {/* Customer Name (header 1) */}
+                    <td style={{ padding: 10 }}>{o.customer?.name || "—"}</td>
 
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
+                    <td style={{ padding: 10 }}>
                       {o.created_at
                         ? new Date(o.created_at).toLocaleString()
                         : "—"}
                     </td>
 
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
-                      {o.total_items}
+                    <td style={{ padding: 10 }}>{o.total_items}</td>
+
+                    <td style={{ padding: 10 }}>
+                      {(o.total_amount || 0).toFixed(2)}
                     </td>
 
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
-                      {o.total_amount?.toFixed(2)}
-                    </td>
+                    <td style={{ padding: 10 }}>{o.channel}</td>
 
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
-                      {o.channel}
-                    </td>
-
-                    {/* ------------ PAYMENT ------------ */}
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
-                      <div
+                    {/* PAYMENT */}
+                    <td style={{ padding: 10 }}>
+                      <span
                         style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "6px",
-                          height: "20px",
-                          lineHeight: "1",
+                          background:
+                            o.payment_status === "paid" ? "#16a34a" : "#dc2626",
+                          color: "white",
+                          padding: "3px 8px",
+                          borderRadius: 6,
+                          marginRight: 6,
                         }}
                       >
-                        {o.payment_status === "paid"
-                          ? badge("Paid", "#16a34a")
-                          : badge("Pending", "#dc2626")}
+                        {o.payment_status === "paid" ? "Paid" : "Pending"}
+                      </span>
 
+                      <button
+                        onClick={() =>
+                          safeAction(o.order_id, "toggle-payment")
+                        }
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {o.payment_status === "paid" ? "✓" : "✕"}
+                      </button>
+                    </td>
+
+                    {/* SERIALS */}
+                    <td style={{ padding: 10 }}>
+                      <span style={{ marginRight: 6 }}>{serialDot}</span>
+                      {o.payment_status === "paid" ? (
                         <button
-                          onClick={() =>
-                            onAction(o.order_id, "toggle-payment")
-                          }
+                          onClick={() => openSerialModal(o)}
                           style={{
                             background: "transparent",
                             border: "none",
                             cursor: "pointer",
-                            fontSize: "16px",
-                            padding: 0,
-                            lineHeight: "1",
+                            fontSize: 18,
                           }}
                         >
-                          {o.payment_status === "paid" ? "✓" : "✕"}
+                          🔑
                         </button>
-                      </div>
+                      ) : (
+                        "—"
+                      )}
                     </td>
 
-                    {/* ------------ SERIALS ------------ */}
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
-                      <div
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "6px",
-                          height: "20px",
-                          lineHeight: "1",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {/* Status dot */}
-                        <span style={{ fontSize: "14px" }}>{serialDot}</span>
-
-                        {/* Only allow assigning serials when payment done */}
-                        {o.payment_status === "paid" ? (
-                          <button
-                            onClick={() => openSerialModal(o)}
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              cursor: "pointer",
-                              fontSize: "18px",
-                              padding: 0,
-                            }}
-                          >
-                            🔑
-                          </button>
-                        ) : (
-                          "—"
-                        )}
-                      </div>
-                    </td>
-
-                    {/* ------------ DELIVERY ------------ */}
-                    <td style={{ padding: "10px", verticalAlign: "middle" }}>
+                    {/* DELIVERY */}
+                    <td style={{ padding: 10 }}>
                       <select
                         value={o.delivery_status}
                         onChange={(e) =>
-                          onAction(
+                          safeAction(
                             o.order_id,
                             "update-delivery",
                             e.target.value
@@ -279,9 +233,8 @@ export default function OrdersTable({ orders, onAction }) {
                         }
                         style={{
                           padding: "4px 6px",
-                          borderRadius: "6px",
+                          borderRadius: 6,
                           border: "1px solid #d1d5db",
-                          whiteSpace: "nowrap",
                           background:
                             o.delivery_status === "NOT_SHIPPED"
                               ? "#fee2e2"
@@ -296,135 +249,186 @@ export default function OrdersTable({ orders, onAction }) {
                       </select>
                     </td>
 
-                    {/* ------------ INVOICE ------------ */}
-                    {/* ------------ INVOICE ------------ */}
-<td style={{ padding: "10px", verticalAlign: "middle" }}>
-  <div
-    style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "6px",
-      height: "20px",
-      lineHeight: "1",
-    }}
-  >
-    {!o.invoice_number ? (
-      // CREATE INVOICE BUTTON
-      <button
-        onClick={() => onAction(o.order_id, "create-invoice")}
-        style={{
-          fontSize: "20px",
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-          padding: 0,
-        }}
-      >
-        🧾
-      </button>
-    ) : (
-      <>
-        {/* GREEN CHECK ICON */}
-        <span
-          style={{
-            fontSize: "20px",
-            color: "#16a34a",
-            fontWeight: "bold",
-          }}
-          title={`Invoice Created (${o.invoice_number})`}
-        >
-          ✔️
-        </span>
-
-        {/* PRINT / DOWNLOAD BUTTON */}
-        <button
-          onClick={() => onAction(o.order_id, "download-invoice")}
-          style={{
-            fontSize: "20px",
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            padding: 0,
-          }}
-          title="Download Invoice"
-        >
-          🖨️
-        </button>
-      </>
-    )}
-  </div>
-</td>
-
-                  </tr>
-
-                  {/* EXPANDED ROW */}
-                  {isExpanded && (
-                    <tr>
-                      <td colSpan={10} style={{ padding: 0 }}>
-                        <div
+                    {/* INVOICE */}
+                    <td style={{ padding: 10 }}>
+                      {!o.invoice_number ? (
+                        <button
+                          onClick={() =>
+                            safeAction(o.order_id, "create-invoice")
+                          }
                           style={{
-                            padding: "1rem",
-                            background: "#eef2ff",
-                            borderTop: "1px solid #c7d2fe",
-                            display: "grid",
-                            gridTemplateColumns: "1fr 1fr",
-                            gap: "1rem",
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                            fontSize: 20,
                           }}
                         >
-                          {/* Customer */}
-                          <div>
-                            <h4>Customer</h4>
-                            <p>Name: {o.customer?.name}</p>
-                            <p>Mobile: {o.customer?.mobile}</p>
-                            <p>Email: {o.customer?.email}</p>
-                          </div>
+                          🧾
+                        </button>
+                      ) : (
+                        <>
+                          <span style={{ fontSize: 20, color: "#16a34a" }}>
+                            ✔️
+                          </span>
+                          <button
+                            onClick={() =>
+                              safeAction(o.order_id, "download-invoice")
+                            }
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              cursor: "pointer",
+                              fontSize: 20,
+                            }}
+                          >
+                            🖨️
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
 
-                          {/* Address */}
-                          <div>
-                            <h4>Address</h4>
-                            {o.address ? (
-                              <>
-                                <p>{o.address.address_line}</p>
-                                <p>
-                                  {o.address.city} - {o.address.pincode}
-                                </p>
-                                <p>State: {o.address.state_id}</p>
-                              </>
-                            ) : (
-                              <p>No address</p>
-                            )}
-                          </div>
+                  {/* EXPANDED SECTION — NOW INSIDE THE TABLE ✔️ */}
+                  {exp && (
+  <tr>
+    <td colSpan={10} style={{ padding: 0 }}>
+      <div
+        style={{
+          padding: "1rem",
+          background: "#eef2ff",
+          borderTop: "1px solid #c7d2fe",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "1rem",
+        }}
+      >
+        {/* CUSTOMER */}
+        <div>
+          <h4>Customer</h4>
+          <p><strong>Name:</strong> {o.customer?.name}</p>
+          <p><strong>Mobile:</strong> {o.customer?.mobile}</p>
+          <p><strong>Email:</strong> {o.customer?.email}</p>
 
-                          {/* Items */}
-                          <div style={{ gridColumn: "1 / -1" }}>
-                            <h4>Items</h4>
-                            {o.items.map((it) => (
-                              <div
-                                key={it.item_id}
-                                style={{
-                                  padding: "0.6rem",
-                                  marginBottom: "0.5rem",
-                                  background: "white",
-                                  borderRadius: "6px",
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-                                }}
-                              >
-                                <div>
-                                  <strong>{it.product_name}</strong>
-                                  <p>
-                                    Qty: {it.quantity} × {it.unit_price}
-                                  </p>
-                                </div>
-                                <strong>₹{it.total_price}</strong>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+          <p style={{ marginTop: 10 }}>
+            <strong>Order ID:</strong> {o.order_id}
+          </p>
+        </div>
+
+        {/* ADDRESS */}
+        <div>
+          <h4>Address</h4>
+          {o.address ? (
+            <>
+              <p>{o.address.address_line}</p>
+              <p>{o.address.city} - {o.address.pincode}</p>
+              <p>State: {o.address.state_name || o.address.state_id}</p>
+            </>
+          ) : (
+            <p>No address</p>
+          )}
+        </div>
+
+        {/* 🔥 REMARKS — MOVED ABOVE ITEMS */}
+        <div style={{ gridColumn: "1 / -1" }}>
+          <h4>Remarks</h4>
+
+          {editingRemarksFor === o.order_id ? (
+            <>
+              <textarea
+                value={remarksValue}
+                onChange={(e) => setRemarksValue(e.target.value)}
+                style={{
+                  width: "100%",
+                  minHeight: 80,
+                  padding: 8,
+                  borderRadius: 6,
+                  border: "1px solid #ccc",
+                }}
+              />
+
+              <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => submitRemarks(o.order_id)}
+                  style={{
+                    padding: "8px 12px",
+                    background: "#2563eb",
+                    color: "white",
+                    borderRadius: 6,
+                    border: "none",
+                  }}
+                >
+                  Save
+                </button>
+
+                <button
+                  onClick={() => {
+                    setEditingRemarksFor(null);
+                    setRemarksValue("");
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    background: "#e5e7eb",
+                    borderRadius: 6,
+                    border: "none",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p>{o.remarks || "—"}</p>
+
+              <button
+                onClick={() => startEditRemarks(o)}
+                style={{
+                  padding: "6px 12px",
+                  background: "#2563eb",
+                  color: "white",
+                  borderRadius: 6,
+                  border: "none",
+                }}
+              >
+                Edit Remarks
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* ITEMS — NOW BELOW REMARKS */}
+        <div style={{ gridColumn: "1 / -1" }}>
+          <h4>Items</h4>
+
+          {o.items.map((it) => (
+            <div
+              key={it.item_id}
+              style={{
+                padding: "0.6rem",
+                background: "white",
+                marginBottom: "0.5rem",
+                borderRadius: 6,
+                display: "flex",
+                justifyContent: "space-between",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+              }}
+            >
+              <div>
+                <strong>{it.product_name}</strong>
+                <p>
+                  Qty: {it.quantity} × {it.unit_price}
+                </p>
+              </div>
+
+              <strong>₹{it.total_price}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+    </td>
+  </tr>
+)}
+
                 </>
               );
             })}
@@ -444,12 +448,7 @@ export default function OrdersTable({ orders, onAction }) {
           <button
             disabled={page === 1}
             onClick={() => setPage(page - 1)}
-            style={{
-              padding: "6px 12px",
-              borderRadius: "5px",
-              background: "#e5e7eb",
-              border: "none",
-            }}
+            style={{ padding: "6px 12px", borderRadius: 5, border: "none" }}
           >
             ◀ Prev
           </button>
@@ -461,12 +460,7 @@ export default function OrdersTable({ orders, onAction }) {
           <button
             disabled={page === totalPages}
             onClick={() => setPage(page + 1)}
-            style={{
-              padding: "6px 12px",
-              borderRadius: "5px",
-              background: "#e5e7eb",
-              border: "none",
-            }}
+            style={{ padding: "6px 12px", borderRadius: 5, border: "none" }}
           >
             Next ▶
           </button>
@@ -490,8 +484,8 @@ export default function OrdersTable({ orders, onAction }) {
             style={{
               background: "white",
               padding: "1rem",
-              borderRadius: "10px",
-              width: "600px",
+              borderRadius: 10,
+              width: 600,
               maxHeight: "90vh",
               overflowY: "auto",
             }}
@@ -503,14 +497,12 @@ export default function OrdersTable({ orders, onAction }) {
                 key={idx}
                 style={{
                   border: "1px solid #ddd",
-                  borderRadius: "8px",
+                  borderRadius: 8,
                   padding: "1rem",
                   marginBottom: "1rem",
                 }}
               >
-                <h4>
-                  {item.product_name} — Qty: {item.quantity}
-                </h4>
+                <h4>{item.product_name} — Qty: {item.quantity}</h4>
 
                 {item.serials.map((sn, i) => (
                   <input
@@ -525,9 +517,9 @@ export default function OrdersTable({ orders, onAction }) {
                     }}
                     style={{
                       width: "100%",
-                      padding: "8px",
+                      padding: 8,
                       margin: "6px 0",
-                      borderRadius: "6px",
+                      borderRadius: 6,
                       border: "1px solid #ddd",
                     }}
                   />
@@ -535,16 +527,14 @@ export default function OrdersTable({ orders, onAction }) {
               </div>
             ))}
 
-            <div
-              style={{ display: "flex", justifyContent: "flex-end", gap: "1rem" }}
-            >
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button
                 onClick={() => setSerialModalOpen(false)}
                 style={{
-                  padding: "8px 14px",
+                  padding: "8px 12px",
                   background: "#e5e7eb",
-                  borderRadius: "6px",
                   border: "none",
+                  borderRadius: 6,
                 }}
               >
                 Cancel
@@ -553,10 +543,10 @@ export default function OrdersTable({ orders, onAction }) {
               <button
                 onClick={saveSerialNumbers}
                 style={{
-                  padding: "8px 14px",
+                  padding: "8px 12px",
                   background: "#4f46e5",
                   color: "white",
-                  borderRadius: "6px",
+                  borderRadius: 6,
                   border: "none",
                 }}
               >
