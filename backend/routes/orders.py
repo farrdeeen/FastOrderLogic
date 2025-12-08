@@ -425,16 +425,17 @@ def get_serial_numbers(order_id: str, db: Session = Depends(get_db)):
 @router.post("/{order_id}/serial_numbers/save")
 def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)):
     """
-    Updated version:
-    - Deletes old serials for each item_id (device) BEFORE inserting new ones
-    - Stores new serials ONLY in device_transaction
+    - Deletes old serials for each SKU
+    - Inserts new serials into device_transaction (OUT entries)
+    - Restores model_name using previous IN record
+    - Returns serial_status = complete | partial | none
     """
 
     entries = data.get("entries", [])
     if not entries:
         raise HTTPException(status_code=400, detail="No serial data provided")
 
-    # Fetch order items for unit price, model_name, sku_id
+    # Fetch order items (to know sku_id, price, model_name)
     order_items = db.execute(text("""
         SELECT 
             oi.item_id,
@@ -447,7 +448,6 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
         WHERE oi.order_id = :oid
     """), {"oid": order_id}).fetchall()
 
-    # Map item_id → details
     item_map = {
         row.item_id: {
             "unit_price": row.unit_price,
@@ -457,6 +457,9 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
         for row in order_items
     }
 
+    # ---------------------------------------------------------
+    # PROCESS EACH ENTRY
+    # ---------------------------------------------------------
     for entry in entries:
         item_id = entry.get("item_id")
         serials = entry.get("serials", [])
@@ -468,12 +471,13 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
         sku = item["sku_id"]
 
         # ---------------------------------------------------------
-        # DELETE old serial numbers for this item (THIS FIXES DUPLICATION)
+        # DELETE old OUT serial numbers for this SKU
         # ---------------------------------------------------------
         db.execute(text("""
             DELETE FROM device_transaction
             WHERE order_id = :oid
               AND sku_id = :sku
+              AND in_out = 2
         """), {"oid": order_id, "sku": sku})
 
         # ---------------------------------------------------------
@@ -484,6 +488,19 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
             if not sr:
                 continue
 
+            # Look up correct model_name from last IN record
+            result = db.execute(text("""
+                SELECT model_name
+                FROM device_transaction
+                WHERE device_srno = :sr
+                  AND in_out = 1
+                ORDER BY auto_id DESC
+                LIMIT 1
+            """), {"sr": sr}).fetchone()
+
+            correct_model_name = result.model_name if result else item["model_name"]
+
+            # Insert OUT entry
             db.execute(text("""
                 INSERT INTO device_transaction
                     (device_srno, model_name, sku_id, order_id, in_out, create_date, price, remarks)
@@ -491,7 +508,7 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
                     (:sr, :model, :sku, :oid, 2, CURDATE(), :price, NULL)
             """), {
                 "sr": sr,
-                "model": item["model_name"],
+                "model": correct_model_name,
                 "sku": sku,
                 "oid": order_id,
                 "price": item["unit_price"]
@@ -499,7 +516,38 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
 
     db.commit()
 
-    return {"message": "Serial numbers updated successfully"}
+    # ---------------------------------------------------------
+    # SERIAL STATUS CALCULATION FOR FRONTEND
+    # ---------------------------------------------------------
+
+    # Get required SKUs for this order
+    order_skus = [row.sku_id for row in order_items]
+
+    # Count inserted serials (OUT entries)
+    serial_counts = db.execute(text("""
+        SELECT sku_id, COUNT(*) AS count
+        FROM device_transaction
+        WHERE order_id = :oid AND in_out = 2
+        GROUP BY sku_id
+    """), {"oid": order_id}).fetchall()
+
+    serial_map = {row.sku_id: row.count for row in serial_counts}
+
+    # Determine complete/partial/none
+    if all(sku in serial_map and serial_map[sku] > 0 for sku in order_skus):
+        serial_status = "complete"
+    elif any(sku in serial_map and serial_map[sku] > 0 for sku in order_skus):
+        serial_status = "partial"
+    else:
+        serial_status = "none"
+
+    return {
+        "message": "Serial numbers updated successfully",
+        "serial_status": serial_status
+    }
+
+
+
 
 
 
