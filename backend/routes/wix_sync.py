@@ -1,16 +1,11 @@
 # routes/wix_sync.py
 """
-Optimized Wix sync (Option C, final).
-- Clean, compact, robust implementation.
-- Fixes:
-  * Proper Wix order number handling (use number when present; fallback only when missing)
-  * Payment status determined from totals.paid
-  * Final amount from totals.paymentDue (or totals.total)
-  * Subtotal from totals.subtotal when available
-  * Ensures customer name is saved (creates customer if absent)
-  * Reuses existing addresses where possible
-  * force=1 support (recreate order_items)
-  * Predictable logging and per-order commit/rollback
+Optimized Wix sync (Option C, final) - MERGED (Option A1 name/address extraction).
+- Robust extraction for fullName (handles str/dict/absent).
+- Robust invoice logic (delivery distribution, subtotal).
+- Proper payment and totals determination.
+- Duplicate detection, force=1 item recreation.
+- Per-order commit/rollback and predictable logging.
 - Drop into routes/ and wire router as before.
 """
 
@@ -18,11 +13,10 @@ import os
 import re
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import requests
-from dateutil import parser
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -250,16 +244,75 @@ def create_or_get_offline_customer(db: Session, name=None, mobile=None, email=No
 def find_state_id(db: Session, state_text: Optional[str]):
     if not state_text:
         return None
+
     s = state_text.strip().lower()
-    s = re.sub(r',.*$', '', s).strip()
-    abbrev = {"up": "uttar pradesh", "mh": "maharashtra", "mp": "madhya pradesh", "tn": "tamil nadu", "dl": "delhi"}
+
+    # Handle Wix "IN-BR", "IN-UP", etc.
+    if "-" in s:
+        parts = s.split("-", 1)
+        if len(parts) == 2:
+            s = parts[1]  # BR, UP, MH
+
+    # Map short codes properly
+    abbrev = {
+    # States
+    "ap": "andhra pradesh",
+    "ar": "arunachal pradesh",
+    "as": "assam",
+    "br": "bihar",
+    "ct": "chhattisgarh",
+    "ga": "goa",
+    "gj": "gujarat",
+    "hr": "haryana",
+    "hp": "himachal pradesh",
+    "jh": "jharkhand",
+    "jk": "jammu and kashmir",
+    "ka": "karnataka",
+    "kl": "kerala",
+    "mp": "madhya pradesh",
+    "mh": "maharashtra",
+    "mn": "manipur",
+    "ml": "meghalaya",
+    "mz": "mizoram",
+    "nl": "nagaland",
+    "or": "odisha",
+    "pb": "punjab",
+    "rj": "rajasthan",
+    "sk": "sikkim",
+    "tn": "tamil nadu",
+    "tg": "telangana",
+    "tr": "tripura",
+    "up": "uttar pradesh",
+    "ut": "uttarakhand",
+    "wb": "west bengal",
+
+    # Union Territories
+    "an": "andaman and nicobar islands",
+    "ch": "chandigarh",
+    "dn": "dadra and nagar haveli and daman and diu",
+    "dd": "daman and diu",  # legacy
+    "dh": "dadra and nagar haveli",  # legacy
+    "dl": "delhi",
+    "la": "ladakh",
+    "ld": "lakshadweep",
+    "py": "puducherry"
+}
+
     if s in abbrev:
         s = abbrev[s]
+
+    # Exact match
     r = db.execute(text("SELECT state_id FROM state WHERE LOWER(name)=:n LIMIT 1"), {"n": s}).first()
     if r:
         return int(r[0])
-    r2 = db.execute(text("SELECT state_id FROM state WHERE LOWER(name) LIKE :n LIMIT 1"), {"n": f"%{s}%"}).first()
-    return int(r2[0]) if r2 else None
+
+    # Partial match only if input is longer (avoid AP → Andhra)
+    if len(s) > 2:
+        r2 = db.execute(text("SELECT state_id FROM state WHERE LOWER(name) LIKE :n LIMIT 1"),
+                        {"n": f"%{s}%"}).first()
+        return int(r2[0]) if r2 else None
+
+    return None
 
 def find_existing_address(db: Session, address_line: str, mobile: str, pincode: str, city: str):
     addr = (address_line or "").strip()
@@ -362,10 +415,39 @@ def fetch_wix_order_number(order_id: str):
             logger.warning("fetch_wix_order_number failed for %s: %s", order_id, res.text[:200])
             return None
         data = res.json()
+        # Wix returns order object under "order"
         return data.get("order", {}).get("number")
     except Exception as e:
         logger.exception("fetch_wix_order_number error: %s", e)
         return None
+
+# ---------------------------
+# Helpers: robust fullName normalization (Option A1)
+# ---------------------------
+def normalize_fullname(val: Any) -> str:
+    """
+    Handle Wix's fullName which can be:
+     - string "Amit Shah"
+     - dict {"firstName": "Amit", "lastName": "Shah", "formatted": "Amit Shah"}
+     - None/other types
+    Return a clean string (may be empty).
+    """
+    if not val:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, dict):
+        # try formatted first
+        fmt = val.get("formatted")
+        if isinstance(fmt, str) and fmt.strip():
+            return fmt.strip()
+        fn = val.get("firstName") or ""
+        ln = val.get("lastName") or ""
+        return f"{fn} {ln}".strip()
+    try:
+        return str(val).strip()
+    except Exception:
+        return ""
 
 # ---------------------------
 # Main sync endpoint (final optimized)
@@ -406,16 +488,17 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
     details: List[Dict] = []
 
     for w in wix_orders:
+        # reset per-order DB transaction state if used externally
         order_result = {"wix_order_id": None, "status": None, "reasons": [], "items": []}
 
         try:
-            # ---- DETERMINE ORDER ID ----
+            # 1) Determine the wix order number (prefer number; fallback only if missing)
             wix_number = w.get("number")
             if not wix_number:
                 wix_number = fetch_wix_order_number(w.get("id")) or w.get("id")
 
             raw_id = safe_str(wix_number).strip()
-            wix_order_id = f"WIX#{raw_id}"
+            wix_order_id = f"WIX#{raw_id}" if raw_id else None
             order_result["wix_order_id"] = wix_order_id
 
             if not wix_order_id:
@@ -425,8 +508,8 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 details.append(order_result)
                 continue
 
-            # ---- DUPLICATE CHECK ----
-            existing_order = db.execute(
+            # Duplicate check (match WIX#number, raw id or previous versions)
+            existing_order_row = db.execute(
                 text("""
                     SELECT order_id 
                     FROM orders
@@ -438,6 +521,8 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 {"oid_raw": wix_order_id, "noprefix": raw_id}
             ).first()
 
+            existing_order = bool(existing_order_row)
+
             if existing_order and not force:
                 skipped += 1
                 order_result["status"] = "skipped_existing"
@@ -445,6 +530,7 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 details.append(order_result)
                 continue
 
+            # created_at from DB server
             created_at = db.execute(text("SELECT NOW()")).scalar()
 
             # ----------------------
@@ -454,201 +540,359 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
             shipping = w.get("shippingInfo") or {}
             buyer = w.get("buyerInfo") or {}
 
+            # robust extraction (Option A1)
             def _extract_address_info():
+                # shipping destination preferred
                 ship_dest = (shipping.get("logistics") or {}).get("shippingDestination") or {}
                 ship_addr = ship_dest.get("address") or (shipping.get("shipmentDetails") or {}).get("address") or {}
                 ship_contact = ship_dest.get("contactDetails") or (shipping.get("shipmentDetails") or {}).get("contactDetails") or {}
 
+                # detect presence
                 if ship_addr or ship_contact:
-                    fn = ship_contact.get("firstName") or ship_addr.get("firstName")
-                    ln = ship_contact.get("lastName") or ship_addr.get("lastName")
+                    # try multiple sources for name
+                    fn = ""
+                    ln = ""
+                    # shipping contact may be dict
+                    if isinstance(ship_contact, dict):
+                        fn = ship_contact.get("firstName") or ""
+                        ln = ship_contact.get("lastName") or ""
+                        # sometimes fullName may exist
+                        if not fn and isinstance(ship_contact.get("fullName"), (str, dict)):
+                            fn_full = normalize_fullname(ship_contact.get("fullName"))
+                            if fn_full:
+                                parts = fn_full.split()
+                                fn = parts[0] if parts else ""
+                                ln = " ".join(parts[1:]) if len(parts) > 1 else ln
+                    # ship_addr may have fullName block
+                    if (not fn and isinstance(ship_addr, dict)) and ship_addr.get("fullName"):
+                        fn_full = normalize_fullname(ship_addr.get("fullName"))
+                        if fn_full:
+                            parts = fn_full.split()
+                            fn = parts[0] if parts else ""
+                            ln = " ".join(parts[1:]) if len(parts) > 1 else ln
+
+                    # last fallback to explicit fields
+                    if not fn and isinstance(ship_addr, dict):
+                        fn = ship_addr.get("firstName") or ""
+                        ln = ship_addr.get("lastName") or ""
+
                     full = f"{fn or ''} {ln or ''}".strip()
+
                     return {
                         "fullName": full or None,
-                        "firstName": fn,
-                        "lastName": ln,
+                        "firstName": fn.strip() or None,
+                        "lastName": ln.strip() or None,
                         "phone": ship_contact.get("phone") or ship_addr.get("phone"),
                         "email": ship_addr.get("email") or ship_contact.get("email"),
-                        "addressLine1": ship_addr.get("addressLine") or ship_addr.get("addressLine1"),
+                        "addressLine1": ship_addr.get("addressLine") or ship_addr.get("addressLine1") or ship_addr.get("addressLine"),
                         "postalCode": ship_addr.get("postalCode") or ship_addr.get("zipCode"),
                         "city": ship_addr.get("city"),
-                        "region": ship_addr.get("state") or ship_addr.get("region")
+                        "region": (
+                            ship_addr.get("subdivision")
+                            or ship_addr.get("subdivisionFullname")
+                            or ship_addr.get("state")
+                            or ship_addr.get("region")
+                            or ship_addr.get("province")
+                            or ship_addr.get("administrativeArea")
+                        )
                     }
 
+                # billing fallback
                 bill_addr = billing.get("address") or {}
                 bill_contact = billing.get("contactDetails") or {}
-
                 if bill_addr or bill_contact:
-                    fn = bill_contact.get("firstName") or bill_addr.get("firstName")
-                    ln = bill_contact.get("lastName") or bill_addr.get("lastName")
+                    fn = ""
+                    ln = ""
+                    if isinstance(bill_contact, dict):
+                        fn = bill_contact.get("firstName") or ""
+                        ln = bill_contact.get("lastName") or ""
+                        if not fn and isinstance(bill_contact.get("fullName"), (str, dict)):
+                            fn_full = normalize_fullname(bill_contact.get("fullName"))
+                            if fn_full:
+                                parts = fn_full.split()
+                                fn = parts[0] if parts else ""
+                                ln = " ".join(parts[1:]) if len(parts) > 1 else ln
+                    if (not fn and isinstance(bill_addr, dict)) and bill_addr.get("fullName"):
+                        fn_full = normalize_fullname(bill_addr.get("fullName"))
+                        if fn_full:
+                            parts = fn_full.split()
+                            fn = parts[0] if parts else ""
+                            ln = " ".join(parts[1:]) if len(parts) > 1 else ln
+
+                    if not fn and isinstance(bill_addr, dict):
+                        fn = bill_addr.get("firstName") or ""
+                        ln = bill_addr.get("lastName") or ""
+
                     full = f"{fn or ''} {ln or ''}".strip()
+
                     return {
                         "fullName": full or None,
-                        "firstName": fn,
-                        "lastName": ln,
+                        "firstName": fn.strip() or None,
+                        "lastName": ln.strip() or None,
                         "phone": bill_contact.get("phone") or bill_addr.get("phone"),
                         "email": bill_addr.get("email") or bill_contact.get("email"),
-                        "addressLine1": bill_addr.get("addressLine"),
-                        "postalCode": bill_addr.get("postalCode"),
+                        "addressLine1": bill_addr.get("addressLine") or bill_addr.get("addressLine1") or bill_addr.get("addressLine"),
+                        "postalCode": bill_addr.get("postalCode") or bill_addr.get("zipCode"),
                         "city": bill_addr.get("city"),
-                        "region": bill_addr.get("state")
+                        "region": (
+                            bill_addr.get("subdivision")
+                            or bill_addr.get("subdivisionFullname")
+                            or bill_addr.get("state")
+                            or bill_addr.get("region")
+                            or bill_addr.get("province")
+                            or bill_addr.get("administrativeArea")
+                        )
                     }
 
-                fn = buyer.get("firstName")
-                ln = buyer.get("lastName")
-                full = f"{fn or ''} {ln or ''}".strip()
+                # buyer fallback
+                bn_fn = ""
+                bn_ln = ""
+                if isinstance(buyer, dict):
+                    bn_fn = buyer.get("firstName") or ""
+                    bn_ln = buyer.get("lastName") or ""
+                    if not bn_fn and buyer.get("fullName"):
+                        bn_full = normalize_fullname(buyer.get("fullName"))
+                        if bn_full:
+                            parts = bn_full.split()
+                            bn_fn = parts[0] if parts else ""
+                            bn_ln = " ".join(parts[1:]) if len(parts) > 1 else bn_ln
+                full = f"{bn_fn or ''} {bn_ln or ''}".strip()
                 return {
                     "fullName": full or None,
-                    "firstName": fn,
-                    "lastName": ln,
+                    "firstName": bn_fn.strip() or None,
+                    "lastName": bn_ln.strip() or None,
                     "phone": buyer.get("phone"),
                     "email": buyer.get("email"),
-                    "addressLine1": buyer.get("address"),
+                    "addressLine1": buyer.get("addressLine") or buyer.get("address") or "",
                     "postalCode": "",
                     "city": "",
-                    "region": buyer.get("region")
+                    "region": (
+                        buyer.get("region")
+                        or buyer.get("state")
+                        or buyer.get("province")
+                    )
                 }
 
             contact = _extract_address_info()
-            name = safe_str(contact.get("fullName") or contact.get("firstName") or "")
-            phone = re.sub(r"\D", "", safe_str(contact.get("phone") or "")) or ""
+            # Ensure we have a name: prefer fullName then firstName then buyer names
+            name_candidate = safe_str(contact.get("fullName") or contact.get("firstName") or (buyer.get("firstName") or buyer.get("lastName")) or "")
+            name = name_candidate.strip() or None
+            phone_raw = safe_str(contact.get("phone") or "")
+            phone_digits = re.sub(r'\D', '', phone_raw)
+            if phone_digits and len(phone_digits) < 7:
+                phone_digits = ""
             email = safe_str(contact.get("email") or "")
 
-            customer_id = upsert_customer(db, name, phone, email)
+            logger.debug("Extracted contact for wix order %s: %s", wix_order_id, contact)
+
+            # customer resolution: ensure a customer row exists (create if missing)
+            customer_id = None
             offline_customer_id = None
-            if not customer_id:
-                offline_customer_id = create_or_get_offline_customer(db, name, phone, email)
+            try:
+                customer_id = upsert_customer(db, name, phone_digits, email)
+                if not customer_id:
+                    offline_customer_id = create_or_get_offline_customer(db, name, phone_digits, email)
+            except Exception as e:
+                logger.exception("customer resolution failed: %s", e)
+                order_result["reasons"].append(f"customer_resolution_failed:{e}")
 
-            addr_line = sanitize_scalar(contact.get("addressLine1") or "")
-            pincode = sanitize_scalar(contact.get("postalCode") or "")
-            city = sanitize_scalar(contact.get("city") or "")
-            region = contact.get("region")
+            # address handling: reuse existing or create new
+            addr_line_raw = sanitize_scalar(contact.get("addressLine1") or "")
+            pincode_raw = sanitize_scalar(contact.get("postalCode") or "")
+            city_raw = sanitize_scalar(contact.get("city") or "")
 
-            existing_addr = find_existing_address(db, addr_line, phone, pincode, city)
+            address_id = None
+            resolved_state_id = None
+            try:
+                existing_addr = find_existing_address(db, addr_line_raw, phone_digits, pincode_raw, city_raw)
+                if existing_addr:
+                    address_id = existing_addr.get("address_id")
+                    resolved_state_id = existing_addr.get("state_id") or None
+                    logger.debug("Reused address %s for order %s", address_id, wix_order_id)
+                else:
+                    resolved_state_id = find_state_id(db, contact.get("region"))
+                    addr_payload = {
+                        "name": sanitize_scalar(name or "Wix Customer"),
+                        "mobile": sanitize_scalar(phone_digits or ""),
+                        "pincode": sanitize_scalar(pincode_raw or ""),
+                        "locality": "",
+                        "address_line": sanitize_scalar(addr_line_raw or ""),
+                        "city": sanitize_scalar(city_raw or ""),
+                        "state_id": resolved_state_id or 1,
+                        "address_type": "shipping",
+                        "created_at": created_at,
+                        "updated_at": created_at,
+                        "is_available": 1
+                    }
+                    if customer_id:
+                        addr_payload["customer_id"] = customer_id
+                    elif offline_customer_id:
+                        addr_payload["offline_customer_id"] = offline_customer_id
+                    address_id = create_address(db, addr_payload)
+                    logger.debug("Created address %s for order %s", address_id, wix_order_id)
+            except Exception as e:
+                logger.exception("address handling failed for %s: %s", wix_order_id, e)
+                order_result["reasons"].append(f"address_handling_failed:{e}")
 
-            if existing_addr:
-                address_id = existing_addr.get("address_id")
-                state_id = existing_addr.get("state_id")
-            else:
-                state_id = find_state_id(db, region)
-                addr_payload = {
-                    "name": sanitize_scalar(name),
-                    "mobile": sanitize_scalar(phone),
-                    "pincode": pincode,
-                    "locality": "",
-                    "address_line": addr_line,
-                    "city": city,
-                    "state_id": state_id or 1,
-                    "address_type": "shipping",
-                    "created_at": created_at,
-                    "updated_at": created_at,
-                    "is_available": 1
-                }
-                if customer_id:
-                    addr_payload["customer_id"] = customer_id
-                elif offline_customer_id:
-                    addr_payload["offline_customer_id"] = offline_customer_id
-                address_id = create_address(db, addr_payload)
+            if address_id and not resolved_state_id:
+                try:
+                    rr = db.execute(text("SELECT state_id FROM address WHERE address_id = :aid LIMIT 1"), {"aid": address_id}).first()
+                    if rr and rr[0]:
+                        resolved_state_id = int(rr[0])
+                except Exception:
+                    pass
 
             # ----------------------
-            #   LINE ITEMS
+            #   LINE ITEMS + INVOICE LOGIC
             # ----------------------
             line_items = w.get("lineItems") or w.get("items") or []
             items_out = []
 
+            # If force and existing order -> delete order_items for recreation
             if existing_order and force:
-                db.execute(text("DELETE FROM order_items WHERE order_id = :oid"), {"oid": wix_order_id})
+                try:
+                    db.execute(text("DELETE FROM order_items WHERE order_id = :oid"), {"oid": wix_order_id})
+                    logger.debug("Deleted previous order_items for %s (force)", wix_order_id)
+                except Exception as e:
+                    logger.exception("Failed delete order_items for %s: %s", wix_order_id, e)
 
-            # 1️⃣ Extract base prices first
+            # Step 1: gather base unit prices and product mapping
             for li in line_items:
-                sku = safe_str((li.get("physicalProperties") or {}).get("sku") or li.get("sku") or "")
-                wix_pid = safe_str((li.get("catalogReference") or {}).get("catalogItemId") or "")
-                name_field = li.get("productName") or li.get("title") or ""
-                title = safe_str(name_field.get("original") if isinstance(name_field, dict) else name_field)
-                qty = int(li.get("quantity") or 1)
-                base_price = extract_price_value(li)
+                try:
+                    if not isinstance(li, dict):
+                        continue
+                    sku = safe_str((li.get("physicalProperties") or {}).get("sku") or li.get("sku") or li.get("variantSku") or li.get("skuId") or "")
+                    wix_pid = safe_str((li.get("catalogReference") or {}).get("catalogItemId") if isinstance(li.get("catalogReference"), dict) else li.get("productId") or li.get("product_id") or "")
+                    name_field = li.get("productName") or li.get("name") or li.get("title") or ""
+                    title = safe_str(name_field.get("original") if isinstance(name_field, dict) else name_field)
+                    qty = int(li.get("quantity") or li.get("qty") or 1)
+                    base_price = extract_price_value(li)
 
-                # Resolve product
-                product = None
-                mapping = None
+                    product = None
+                    mapping = None
+                    if is_valid_sku(sku):
+                        product = find_product_by_sku(db, sku)
+                        mapping = f"sku:{sku}" if product else mapping
 
-                if is_valid_sku(sku):
-                    product = find_product_by_sku(db, sku)
-                    mapping = f"sku:{sku}" if product else None
+                    if not product and wix_pid:
+                        product = find_product_by_wix_pid(db, wix_pid)
+                        mapping = mapping or (f"wixpid:{wix_pid}" if product else None)
 
-                if not product and wix_pid:
-                    product = find_product_by_wix_pid(db, wix_pid)
-                    mapping = mapping or (f"wixpid:{wix_pid}" if product else None)
+                    if not product and title:
+                        product = find_product_by_name(db, title)
+                        mapping = mapping or (f"name:{title}" if product else None)
 
-                if not product and title:
-                    product = find_product_by_name(db, title)
-                    mapping = mapping or (f"name:{title}" if product else None)
+                    # Enforce misc product fallback if still unknown
+                    if not product:
+                        misc_row = db.execute(
+                            text("SELECT product_id, name, sku_id, IFNULL(zoho_sku,'') AS zoho_sku FROM products WHERE sku_id = 'misc' LIMIT 1")
+                        ).first()
+                        if not misc_row:
+                            raise HTTPException(500, "Misc product (sku='misc') not found. Please create it in products table.")
+                        product = dict(misc_row._mapping)
+                        mapping = mapping or "misc_assigned"
 
-                if not product:
-                    misc_row = db.execute(
-                        text("SELECT product_id, name, sku_id FROM products WHERE sku_id = 'misc' LIMIT 1")
-                    ).first()
-                    if not misc_row:
-                        raise HTTPException(500, "Missing misc product (sku='misc')")
-                    product = dict(misc_row._mapping)
-                    mapping = "misc_assigned"
+                    pid = product.get("product_id") if product else None
+                    items_out.append({
+                        "title": title,
+                        "sku": sku,
+                        "wix_product_id": wix_pid,
+                        "product_id": pid,
+                        "quantity": qty,
+                        "base_unit_price": base_price,
+                        "mapping": mapping or "unknown"
+                    })
+                except Exception as e:
+                    logger.exception("Failed to process line item (gather): %s", e)
+                    order_result["reasons"].append(f"line_item_failed:{e}")
 
-                pid = product["product_id"]
-
-                items_out.append({
-                    "title": title,
-                    "sku": sku,
-                    "product_id": pid,
-                    "quantity": qty,
-                    "base_unit_price": base_price,
-                    "mapping": mapping or "unknown"
-                })
-
-            # 2️⃣ Delivery charge distribution AFTER all items are known
-            totals = w.get("totals") or {}
-            delivery_charge = float(
-                totals.get("shipping") or totals.get("shippingFee") or totals.get("deliveryCharge") or totals.get("shippingAmount") or 0
-            )
+            # Step 2: delivery charge distribution AFTER items gathered
+            try:
+                totals = w.get("totals") or {}
+                delivery_charge = float(
+                    totals.get("shipping") or totals.get("shippingFee") or totals.get("deliveryCharge") or totals.get("shippingAmount") or 0
+                )
+            except Exception:
+                delivery_charge = 0.0
 
             total_qty = sum(i["quantity"] for i in items_out) or 1
-            delivery_per_unit = round(delivery_charge / total_qty, 2)
+            delivery_per_unit = round(delivery_charge / total_qty, 2) if total_qty else 0.0
 
+            # Insert order_items with distributed delivery
             subtotal_sum = 0.0
-
             for item in items_out:
-                unit_price = float(item["base_unit_price"]) + delivery_per_unit
-                total_price = round(unit_price * item["quantity"], 2)
+                try:
+                    unit_price = float(item["base_unit_price"]) + delivery_per_unit
+                    total_price = round(unit_price * item["quantity"], 2)
 
-                item["unit_price"] = unit_price
-                item["total_price"] = total_price
+                    item["unit_price"] = unit_price
+                    item["total_price"] = total_price
 
-                subtotal_sum += total_price
+                    subtotal_sum += total_price
 
-                # Insert order_items
-                db.execute(text("""
-                    INSERT INTO order_items (order_id, product_id, model_id, color_id,
-                                             quantity, unit_price, total_price)
-                    VALUES (:oid, :pid, NULL, NULL, :qty, :unit, :total)
-                """), {
-                    "oid": wix_order_id,
-                    "pid": item["product_id"],
-                    "qty": item["quantity"],
-                    "unit": unit_price,
-                    "total": total_price
-                })
+                    # Insert order_items
+                    db.execute(text("""
+                        INSERT INTO order_items (order_id, product_id, model_id, color_id,
+                                                 quantity, unit_price, total_price)
+                        VALUES (:oid, :pid, NULL, NULL, :qty, :unit, :total)
+                    """), {
+                        "oid": wix_order_id,
+                        "pid": item["product_id"],
+                        "qty": item["quantity"],
+                        "unit": unit_price,
+                        "total": total_price
+                    })
+                except Exception as e:
+                    logger.exception("order_item insert failed: %s", e)
+                    order_result["reasons"].append(f"order_item_insert_failed:{e}")
 
             # ----------------------
-            #  PAYMENT + ORDER ROW
+            #  PAYMENT & ORDER ROW
             # ----------------------
             totals = w.get("totals") or {}
-            paid_amount = float(totals.get("paid") or 0)
-            payment_status_raw = safe_str(totals.get("paymentStatus") or "").upper()
+            billing = w.get("billingInfo") or {}
 
-            is_paid = paid_amount > 0 or payment_status_raw in ["PAID", "ACCEPTED", "SUCCESS"]
+            # Extract raw status values Wix may send
+            payment_status_raw = (
+                (totals.get("paymentStatus") or "")
+                or (billing.get("paymentStatus") or "")
+                or w.get("paymentStatus")
+                or ""
+            )
+            payment_status_raw = safe_str(payment_status_raw).upper()
+
+            gateway_status = (
+                ((billing.get("paymentGateway") or {}).get("transactionStatus"))
+                or ((billing.get("paymentGatewayInfo") or {}).get("status"))
+                or ""
+            )
+            gateway_status = safe_str(gateway_status).upper()
+
+            try:
+                paid_amount = float(totals.get("paid") or 0)
+            except Exception:
+                paid_amount = 0.0
+
+            # Determine paid/unpaid using robust rules
+            is_paid = False
+            if paid_amount > 0:
+                is_paid = True
+            elif payment_status_raw in ["PAID", "ACCEPTED", "SUCCESS"]:
+                is_paid = True
+            elif gateway_status in ["SUCCESS", "PAID", "CAPTURED"]:
+                is_paid = True
+
             payment_status = "paid" if is_paid else "pending"
 
-            payment_due = totals.get("paymentDue") or totals.get("total") or subtotal_sum
-            subtotal_val = totals.get("subtotal") or subtotal_sum
+            # totals: prefer paymentDue then total, subtotal prefer totals.subtotal
+            try:
+                payment_due = float(totals.get("paymentDue") or totals.get("total") or subtotal_sum)
+            except Exception:
+                payment_due = subtotal_sum
+            try:
+                subtotal_val = float(totals.get("subtotal") or subtotal_sum)
+            except Exception:
+                subtotal_val = subtotal_sum
 
             order_index = get_next_order_index(db)
 
@@ -656,9 +900,9 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 "order_id": wix_order_id,
                 "customer_id": customer_id,
                 "offline_customer_id": offline_customer_id,
-                "address_id": address_id,
+                "address_id": address_id or 0,
                 "total_items": len(items_out),
-                "subtotal": round(float(subtotal_val), 2),
+                "subtotal": round(subtotal_val, 2),
                 "total_amount": float(payment_due),
                 "channel": "wix",
                 "payment_status": payment_status,
@@ -668,52 +912,76 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 "order_index": order_index,
                 "payment_type": "online",
                 "gst": 0.0,
-                "upload_wbn": w.get("wbn")
+                "upload_wbn": w.get("wbn") or None
             }
 
-            if not existing_order:
-                db.execute(text("""
-                    INSERT INTO orders
-                    (order_id, customer_id, offline_customer_id, address_id,
-                     total_items, subtotal, total_amount, channel, payment_status,
-                     delivery_status, created_at, updated_at, order_index, payment_type, gst, upload_wbn)
-                    VALUES
-                    (:order_id, :customer_id, :offline_customer_id, :address_id,
-                     :total_items, :subtotal, :total_amount, :channel, :payment_status,
-                     :delivery_status, :created_at, :updated_at, :order_index, :payment_type, :gst, :upload_wbn)
-                """), order_payload)
-            else:
-                db.execute(text("""
-                    UPDATE orders SET
-                      total_items = :total_items,
-                      subtotal = :subtotal,
-                      total_amount = :total_amount,
-                      payment_status = :payment_status,
-                      updated_at = :updated_at
-                    WHERE order_id = :order_id
-                """), order_payload)
+            # Insert or update order row
+            try:
+                if not existing_order:
+                    db.execute(text("""
+                        INSERT INTO orders
+                        (order_id, customer_id, offline_customer_id, address_id,
+                         total_items, subtotal, total_amount, channel, payment_status,
+                         delivery_status, created_at, updated_at, order_index, payment_type, gst, upload_wbn)
+                        VALUES
+                        (:order_id, :customer_id, :offline_customer_id, :address_id,
+                         :total_items, :subtotal, :total_amount, :channel, :payment_status,
+                         :delivery_status, :created_at, :updated_at, :order_index, :payment_type, :gst, :upload_wbn)
+                    """), order_payload)
+                else:
+                    db.execute(text("""
+                        UPDATE orders SET
+                          total_items = :total_items,
+                          subtotal = :subtotal,
+                          total_amount = :total_amount,
+                          payment_status = :payment_status,
+                          updated_at = :updated_at
+                        WHERE order_id = :order_id
+                    """), {
+                        "total_items": order_payload["total_items"],
+                        "subtotal": round(order_payload["subtotal"], 2),
+                        "total_amount": float(order_payload["total_amount"]),
+                        "payment_status": order_payload["payment_status"],
+                        "updated_at": order_payload["updated_at"],
+                        "order_id": order_payload["order_id"]
+                    })
+                db.commit()
+                if not existing_order:
+                    inserted += 1
+                    order_result["status"] = "inserted"
+                else:
+                    order_result["status"] = "updated"
+                order_result["items"] = items_out
+                order_result["customer_id"] = customer_id
+                order_result["offline_customer_id"] = offline_customer_id
+                order_result["address_id"] = address_id
+                logger.info("Processed order %s (items=%d)", wix_order_id, len(items_out))
+            except Exception as e:
+                try:
+                    db.rollback()
+                except Exception:
+                    logger.exception("Rollback failed for order %s", wix_order_id)
+                skipped += 1
+                order_result["status"] = "skipped"
+                order_result["reasons"].append(f"order_insert_failed:{e}")
+                logger.exception("Order insert/update failed for %s: %s", wix_order_id, e)
+                details.append(order_result)
+                continue
 
-            db.commit()
-
-            inserted += 1 if not existing_order else 0
-            order_result["status"] = "inserted" if not existing_order else "updated"
-            order_result["items"] = items_out
+            details.append(order_result)
 
         except Exception as e:
             logger.exception("Unexpected error processing order: %s", e)
-            db.rollback()
+            try:
+                db.rollback()
+            except Exception:
+                logger.exception("Rollback after unexpected error failed.")
             skipped += 1
-            order_result["status"] = "skipped"
-            order_result["reasons"].append(str(e))
+            details.append({"wix_order_id": safe_str(w.get("id")), "status": "skipped", "reasons": [str(e)], "items": []})
+            continue
 
-        details.append(order_result)
-
-    return {
-        "message": "Wix sync completed",
-        "inserted": inserted,
-        "skipped": skipped,
-        "details": details
-    }
+    logger.info("Wix sync done: inserted=%d skipped=%d", inserted, skipped)
+    return {"message": "Wix sync completed", "inserted": inserted, "skipped": skipped, "details": details}
 
 # ---------------------------
 # Recover endpoint
@@ -749,6 +1017,9 @@ def recover_missing_orders(db: Session = Depends(get_db)):
             missing.append(o)
     return {"total_wix_orders": len(all_orders), "orders_in_db": len(db_orders), "missing_count": len(missing), "missing_order_ids": [o.get("id") for o in missing][:50]}
 
+# ---------------------------
+# Reconcile endpoint
+# ---------------------------
 @router.get("/wix/reconcile")
 def reconcile_wix_orders(fix: Optional[int] = 0, limit: Optional[int] = 200, db: Session = Depends(get_db)):
     """
@@ -882,13 +1153,13 @@ def reconcile_wix_orders(fix: Optional[int] = 0, limit: Optional[int] = 200, db:
             # --- 2) subtotal
             db_sub = float(o.get("subtotal") or 0)
             if round(db_sub, 2) != round(wix_subtotal_val, 2):
-                order_report["differences"].append({"field": "subtotal", "db": db_sub, "wix": wix_subtotal_val})
+                order_report["differences"].append({"field": "subtotal", "db": db_sub,"wix": wix_subtotal_val})
                 if fixes:
                     try:
-                        db.execute(text("UPDATE orders SET subtotal = :s, updated_at = :u WHERE order_id = :oid"),
-                                   {"s": round(wix_subtotal_val, 2), "u": datetime.utcnow(), "oid": o.get("order_id")})
+                        db.execute(text("UPDATE orders SET subtotal = :st, updated_at = :u WHERE order_id = :oid"),
+                                   {"st": wix_subtotal_val, "u": datetime.utcnow(), "oid": o.get("order_id")})
                         db.commit()
-                        order_report["fixed"].append({"field": "subtotal", "to": round(wix_subtotal_val, 2)})
+                        order_report["fixed"].append({"field": "subtotal", "to": wix_subtotal_val})
                     except Exception as e:
                         db.rollback()
                         order_report["differences"].append({"fix_failed": f"subtotal update failed: {e}"})
@@ -896,253 +1167,39 @@ def reconcile_wix_orders(fix: Optional[int] = 0, limit: Optional[int] = 200, db:
             # --- 3) total_amount
             db_total = float(o.get("total_amount") or 0)
             if round(db_total, 2) != round(wix_payment_due, 2):
-                order_report["differences"].append({"field": "total_amount", "db": db_total, "wix": wix_payment_due})
+                order_report["differences"].append({
+                    "field": "total_amount",
+                    "db": db_total,
+                    "wix": wix_payment_due
+                })
                 if fixes:
                     try:
-                        db.execute(text("UPDATE orders SET total_amount = :t, updated_at = :u WHERE order_id = :oid"),
-                                   {"t": float(wix_payment_due), "u": datetime.utcnow(), "oid": o.get("order_id")})
+                        db.execute(text("""
+                            UPDATE orders
+                            SET total_amount = :ta, updated_at = :u
+                            WHERE order_id = :oid
+                        """), {
+                            "ta": wix_payment_due,
+                            "u": datetime.utcnow(),
+                            "oid": o.get("order_id")
+                        })
                         db.commit()
-                        order_report["fixed"].append({"field": "total_amount", "to": float(wix_payment_due)})
+                        order_report["fixed"].append({"field": "total_amount", "to": wix_payment_due})
                     except Exception as e:
                         db.rollback()
                         order_report["differences"].append({"fix_failed": f"total_amount update failed: {e}"})
 
-            # --- 4) delivery_status (map common wix shipping states to your DB)
-            # determine wix delivery marker
-            wix_delivery_status = "NOT_SHIPPED"
-            shipping_info = (w.get("shippingInfo") or {})
-            # rough mapping - tweak if you use other codes
-            if (w.get("status") or "").upper() in ["COMPLETED", "FULFILLED", "SHIPPED"]:
-                wix_delivery_status = "SHIPPED"
-            elif (shipping_info.get("status") or "").upper() in ["FULFILLED", "SHIPPED", "COMPLETED"]:
-                wix_delivery_status = "SHIPPED"
-            db_delivery = (o.get("delivery_status") or "").upper()
-            if db_delivery != wix_delivery_status:
-                order_report["differences"].append({"field": "delivery_status", "db": db_delivery, "wix": wix_delivery_status})
-                if fixes:
-                    try:
-                        db.execute(text("UPDATE orders SET delivery_status = :ds, updated_at = :u WHERE order_id = :oid"),
-                                   {"ds": wix_delivery_status, "u": datetime.utcnow(), "oid": o.get("order_id")})
-                        db.commit()
-                        order_report["fixed"].append({"field": "delivery_status", "to": wix_delivery_status})
-                    except Exception as e:
-                        db.rollback()
-                        order_report["differences"].append({"fix_failed": f"delivery_status update failed: {e}"})
-
-            # --- 5) customer (name, mobile, email)
-            db_customer_id = o.get("customer_id")
-            db_offline_customer_id = o.get("offline_customer_id")
-            wix_contact = None
-            # reuse the same address extraction logic used in sync
-            billing_info = w.get("billingInfo") or {}
-            shipping_info = w.get("shippingInfo") or {}
-            buyer_info = w.get("buyerInfo") or {}
-            # prefer shipping then billing then buyer
-            ship_dest = (shipping_info.get("logistics") or {}).get("shippingDestination") or {}
-            ship_addr = ship_dest.get("address") or (shipping_info.get("shipmentDetails") or {}).get("address") or {}
-            ship_contact = ship_dest.get("contactDetails") or (shipping_info.get("shipmentDetails") or {}).get("contactDetails") or {}
-            if ship_addr or ship_contact:
-                wix_contact = {
-                    "name": safe_str(ship_contact.get("firstName") or ship_addr.get("fullName", {}).get("firstName") or ship_addr.get("firstName") or "") + " " + safe_str(ship_contact.get("lastName") or ship_addr.get("fullName", {}).get("lastName") or ship_addr.get("lastName") or ""),
-                    "mobile": re.sub(r'\D', '', safe_str(ship_contact.get("phone") or ship_addr.get("phone") or "")),
-                    "email": safe_str(ship_addr.get("email") or ship_contact.get("email") or "")
-                }
-            else:
-                bill_addr = billing_info.get("address") or {}
-                bill_contact = billing_info.get("contactDetails") or {}
-                if bill_addr or bill_contact:
-                    wix_contact = {
-                        "name": safe_str(bill_contact.get("firstName") or bill_addr.get("fullName", {}).get("firstName") or bill_addr.get("firstName") or "") + " " + safe_str(bill_contact.get("lastName") or bill_addr.get("fullName", {}).get("lastName") or bill_addr.get("lastName") or ""),
-                        "mobile": re.sub(r'\D', '', safe_str(bill_contact.get("phone") or bill_addr.get("phone") or "")),
-                        "email": safe_str(bill_addr.get("email") or bill_contact.get("email") or "")
-                    }
-                else:
-                    wix_contact = {
-                        "name": safe_str(buyer_info.get("firstName") or "") + " " + safe_str(buyer_info.get("lastName") or ""),
-                        "mobile": re.sub(r'\D', '', safe_str(buyer_info.get("phone") or "")),
-                        "email": safe_str(buyer_info.get("email") or "")
-                    }
-
-            # compare DB customer fields
-            if db_customer_id:
-                row = db.execute(text("SELECT name, mobile, email FROM customer WHERE customer_id = :cid LIMIT 1"), {"cid": db_customer_id}).first()
-                if row:
-                    db_cust = dict(row._mapping)
-                    # name/mobile/email differences
-                    if (safe_str(db_cust.get("name")) != safe_str(wix_contact.get("name")).strip()) or (safe_str(db_cust.get("mobile")) != safe_str(wix_contact.get("mobile"))) or (safe_str(db_cust.get("email")) != safe_str(wix_contact.get("email"))):
-                        order_report["differences"].append({"field": "customer", "db": db_cust, "wix": wix_contact})
-                        if fixes:
-                            try:
-                                db.execute(text("UPDATE customer SET name = :n, mobile = :m, email = :e WHERE customer_id = :cid"),
-                                           {"n": sanitize_scalar(wix_contact.get("name").strip()), "m": sanitize_scalar(wix_contact.get("mobile")), "e": sanitize_scalar(wix_contact.get("email")), "cid": db_customer_id})
-                                db.commit()
-                                order_report["fixed"].append({"field": "customer", "to": wix_contact})
-                            except Exception as e:
-                                db.rollback()
-                                order_report["differences"].append({"fix_failed": f"customer update failed: {e}"})
-            elif db_offline_customer_id:
-                row = db.execute(text("SELECT name, mobile, email FROM offline_customer WHERE customer_id = :cid LIMIT 1"), {"cid": db_offline_customer_id}).first()
-                if row:
-                    db_cust = dict(row._mapping)
-                    if (safe_str(db_cust.get("name")) != safe_str(wix_contact.get("name")).strip()) or (safe_str(db_cust.get("mobile")) != safe_str(wix_contact.get("mobile"))) or (safe_str(db_cust.get("email")) != safe_str(wix_contact.get("email"))):
-                        order_report["differences"].append({"field": "offline_customer", "db": db_cust, "wix": wix_contact})
-                        if fixes:
-                            try:
-                                db.execute(text("UPDATE offline_customer SET name = :n, mobile = :m, email = :e WHERE customer_id = :cid"),
-                                           {"n": sanitize_scalar(wix_contact.get("name").strip()), "m": sanitize_scalar(wix_contact.get("mobile")), "e": sanitize_scalar(wix_contact.get("email")), "cid": db_offline_customer_id})
-                                db.commit()
-                                order_report["fixed"].append({"field": "offline_customer", "to": wix_contact})
-                            except Exception as e:
-                                db.rollback()
-                                order_report["differences"].append({"fix_failed": f"offline_customer update failed: {e}"})
-            else:
-                # Order has no associated customer rows — if fix requested, create a customer or offline_customer
-                order_report["differences"].append({"field": "customer_missing", "wix": wix_contact})
-                if fixes:
-                    try:
-                        new_cid = create_customer(db, wix_contact.get("name").strip(), wix_contact.get("mobile"), wix_contact.get("email"))
-                        db.execute(text("UPDATE orders SET customer_id = :cid, updated_at = :u WHERE order_id = :oid"), {"cid": new_cid, "u": datetime.utcnow(), "oid": o.get("order_id")})
-                        db.commit()
-                        order_report["fixed"].append({"field": "customer_created", "cid": new_cid})
-                    except Exception as e:
-                        db.rollback()
-                        order_report["differences"].append({"fix_failed": f"customer create failed: {e}"})
-
-            # --- 6) address check (compare address_line, pincode, city, state)
-            wix_addr_line = sanitize_scalar((ship_addr.get("addressLine") or ship_addr.get("addressLine1") or ship_addr.get("addressLine") or w.get("shippingInfo", {}).get("address", {}) or "")) if isinstance(ship_addr, dict) else sanitize_scalar(w.get("shippingInfo", {}).get("address", "") or "")
-            wix_pincode = sanitize_scalar(ship_addr.get("postalCode") or ship_addr.get("zipCode") or "")
-            wix_city = sanitize_scalar(ship_addr.get("city") or "")
-            # try resolve wix state id using helper
-            wix_state_id = find_state_id(db, (ship_addr.get("subdivision") or ship_addr.get("subdivisionFullname") or ""))
-            db_addr = db.execute(text("SELECT address_line, pincode, city, state_id FROM address WHERE address_id = :aid LIMIT 1"), {"aid": o.get("address_id")}).first()
-            if db_addr:
-                db_addr_d = dict(db_addr._mapping)
-                addr_mismatch = False
-                if sanitize_scalar(db_addr_d.get("address_line") or "") != sanitize_scalar(wix_addr_line or ""):
-                    addr_mismatch = True
-                if sanitize_scalar(db_addr_d.get("pincode") or "") != sanitize_scalar(wix_pincode or ""):
-                    addr_mismatch = True
-                if sanitize_scalar(db_addr_d.get("city") or "") != sanitize_scalar(wix_city or ""):
-                    addr_mismatch = True
-                # compare state_id if wix_state_id resolved
-                if wix_state_id and int(db_addr_d.get("state_id") or 0) != int(wix_state_id):
-                    addr_mismatch = True
-                if addr_mismatch:
-                    order_report["differences"].append({"field": "address", "db": db_addr_d, "wix": {"address_line": wix_addr_line, "pincode": wix_pincode, "city": wix_city, "state_id": wix_state_id}})
-                    if fixes:
-                        try:
-                            # create a new address and attach it to order (safer than updating existing address row)
-                            new_addr_payload = {
-                                "name": sanitize_scalar(wix_contact.get("name") or "Wix Customer"),
-                                "mobile": sanitize_scalar(wix_contact.get("mobile") or ""),
-                                "pincode": sanitize_scalar(wix_pincode or ""),
-                                "address_line": sanitize_scalar(wix_addr_line or ""),
-                                "city": sanitize_scalar(wix_city or ""),
-                                "state_id": wix_state_id or (db_addr_d.get("state_id") or 1),
-                                "address_type": "shipping",
-                                "created_at": datetime.utcnow(),
-                                "updated_at": datetime.utcnow(),
-                                "is_available": 1
-                            }
-                            if db_customer_id:
-                                new_addr_payload["customer_id"] = db_customer_id
-                            elif db_offline_customer_id:
-                                new_addr_payload["offline_customer_id"] = db_offline_customer_id
-                            new_addr_id = create_address(db, new_addr_payload)
-                            db.execute(text("UPDATE orders SET address_id = :aid, updated_at = :u WHERE order_id = :oid"), {"aid": new_addr_id, "u": datetime.utcnow(), "oid": o.get("order_id")})
-                            db.commit()
-                            order_report["fixed"].append({"field": "address", "new_address_id": new_addr_id})
-                        except Exception as e:
-                            db.rollback()
-                            order_report["differences"].append({"fix_failed": f"address create/update failed: {e}"})
-            else:
-                order_report["differences"].append({"field": "address_missing_in_db"})
-                if fixes:
-                    try:
-                        new_addr_payload = {
-                            "name": sanitize_scalar(wix_contact.get("name") or "Wix Customer"),
-                            "mobile": sanitize_scalar(wix_contact.get("mobile") or ""),
-                            "pincode": sanitize_scalar(wix_pincode or ""),
-                            "address_line": sanitize_scalar(wix_addr_line or ""),
-                            "city": sanitize_scalar(wix_city or ""),
-                            "state_id": wix_state_id or 1,
-                            "address_type": "shipping",
-                            "created_at": datetime.utcnow(),
-                            "updated_at": datetime.utcnow(),
-                            "is_available": 1
-                        }
-                        if db_customer_id:
-                            new_addr_payload["customer_id"] = db_customer_id
-                        elif db_offline_customer_id:
-                            new_addr_payload["offline_customer_id"] = db_offline_customer_id
-                        new_addr_id = create_address(db, new_addr_payload)
-                        db.execute(text("UPDATE orders SET address_id = :aid, updated_at = :u WHERE order_id = :oid"), {"aid": new_addr_id, "u": datetime.utcnow(), "oid": o.get("order_id")})
-                        db.commit()
-                        order_report["fixed"].append({"field": "address_created", "new_address_id": new_addr_id})
-                    except Exception as e:
-                        db.rollback()
-                        order_report["differences"].append({"fix_failed": f"address create failed: {e}"})
-
-            # --- 7) line items (compare counts, quantities, prices, SKUs)
-            # fetch db items
-            db_items_rows = db.execute(text("SELECT item_id, product_id, quantity, unit_price, total_price FROM order_items WHERE order_id = :oid"), {"oid": o.get("order_id")}).fetchall()
-            db_items = [dict(r._mapping) for r in db_items_rows]
-            # construct wix items list normalized
-            wix_items_norm = []
-            for li in line_items:
-                sku = safe_str((li.get("physicalProperties") or {}).get("sku") or li.get("sku") or li.get("variantSku") or li.get("skuId") or "")
-                qty = int(li.get("quantity") or li.get("qty") or 1)
-                unit_price = float(extract_price_value(li) or 0.0)
-                wix_items_norm.append({"sku": sku, "quantity": qty, "unit_price": unit_price, "total_price": round(unit_price * qty, 2)})
-
-            # basic count mismatch
-            if len(db_items) != len(wix_items_norm):
-                order_report["differences"].append({"field": "line_items_count", "db": len(db_items), "wix": len(wix_items_norm)})
-            # detailed comparison by index (best-effort)
-            line_mismatches = []
-            for i, wix_it in enumerate(wix_items_norm):
-                db_it = db_items[i] if i < len(db_items) else None
-                # attempt to find by sku->product mapping if db_it exists and product_id present
-                db_sku = None
-                if db_it and db_it.get("product_id"):
-                    r = db.execute(text("SELECT sku_id FROM products WHERE product_id = :pid LIMIT 1"), {"pid": db_it.get("product_id")}).first()
-                    db_sku = r[0] if r else None
-                # compare sku, quantity, unit_price
-                sku_ok = (safe_str(db_sku) == safe_str(wix_it.get("sku")))
-                qty_ok = db_it and int(db_it.get("quantity") or 0) == int(wix_it.get("quantity") or 0)
-                price_ok = db_it and round(float(db_it.get("unit_price") or 0), 2) == round(float(wix_it.get("unit_price") or 0), 2)
-                if not (sku_ok and qty_ok and price_ok):
-                    line_mismatches.append({"index": i, "db": db_it, "wix": wix_it})
-            if line_mismatches:
-                order_report["differences"].append({"field": "line_items_details", "mismatches": line_mismatches})
-                if fixes:
-                    # naive but safe fix: delete existing order_items and recreate from wix_items_norm
-                    try:
-                        db.execute(text("DELETE FROM order_items WHERE order_id = :oid"), {"oid": o.get("order_id")})
-                        for wix_it in wix_items_norm:
-                            # map sku -> product_id
-                            product = None
-                            if wix_it.get("sku"):
-                                product = find_product_by_sku(db, wix_it.get("sku"))
-                            if not product:
-                                product = ensure_unknown_product(db)
-                            pid = product.get("product_id") if product else None
-                            db.execute(text("""
-                                INSERT INTO order_items (order_id, product_id, quantity, unit_price, total_price)
-                                VALUES (:oid, :pid, :qty, :unit, :t)
-                            """), {"oid": o.get("order_id"), "pid": pid, "qty": wix_it.get("quantity"), "unit": wix_it.get("unit_price"), "t": wix_it.get("total_price")})
-                        db.commit()
-                        order_report["fixed"].append({"field": "line_items_recreated", "count": len(wix_items_norm)})
-                    except Exception as e:
-                        db.rollback()
-                        order_report["differences"].append({"fix_failed": f"line_items recreation failed: {e}"})
-
-            # finish per-order
+            # done for this order
             report.append(order_report)
 
         except Exception as e:
-            logger.exception("Reconcile loop error for wix order %s: %s", safe_str(w.get("id")), e)
-            report.append({"wix_id": safe_str(w.get("id")), "error": str(e)})
-            continue
+            order_report["differences"].append({"error": str(e)})
+            report.append(order_report)
+            logger.exception("Error during reconcile for order %s: %s", w.get("id"), e)
 
-    return {"summary": {"processed": len(wix_orders), "with_differences": sum(1 for r in report if r.get("differences"))}, "details": report}
+    return {
+        "message": "Wix reconciliation complete",
+        "fix_mode": fixes,
+        "checked_orders": len(wix_orders),
+        "report": report
+    }

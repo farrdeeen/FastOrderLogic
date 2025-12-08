@@ -107,7 +107,7 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     last_suffix = db.execute(text("""
         SELECT CAST(SUBSTRING_INDEX(order_id, '#', -1) AS UNSIGNED) AS suffix
         FROM orders
-        WHERE order_id LIKE '%#%'
+        WHERE order_id REGEXP '^[0-9]{5}#[0-9]{5}$'
         ORDER BY suffix DESC
         LIMIT 1
     """)).scalar()
@@ -161,8 +161,15 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     # ---------------------------------------------
     for it in data.items:
 
-        new_unit_price = float(it.final_unit_price) + delivery_per_unit
+        # If offline order → do NOT add delivery into unit price
+        if data.channel.lower() == "offline":
+            new_unit_price = float(it.final_unit_price)
+        else:
+            # Wix or other channels keep existing logic
+            new_unit_price = float(it.final_unit_price) + delivery_per_unit
+
         new_total_price = round(new_unit_price * it.qty, 2)
+
 
         print(
             f"PRODUCT {it.product_id}: original={it.final_unit_price}, "
@@ -187,7 +194,6 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         "success": True,
         "order_id": order_id
     }
-
 
 
 
