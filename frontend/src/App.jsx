@@ -173,16 +173,27 @@ export default function App() {
         return fetchOrders();
       }
       if (action === "serial-status-updated") {
-  // Update serial status in the local orders array
-  setOrders(prev =>
-    prev.map(o =>
-      o.order_id === orderId
-        ? { ...o, serial_status: payload }
-        : o
-    )
-  );
-  return;
-}
+        // Update serial status in the local orders array
+        setOrders(prev =>
+          prev.map(o =>
+            o.order_id === orderId
+              ? { ...o, serial_status: payload }
+              : o
+          )
+        );
+        return;
+      }
+      if (action === "delete-order") {
+        try {
+          await axios.delete(`${API_URL}/orders/${encodeURIComponent(orderId)}`);
+          alert("Order deleted successfully!");
+          fetchOrders();
+        } catch (err) {
+          console.error(err);
+          alert("Failed to delete order");
+        }
+        return;
+      }
 
       console.warn("Unknown action:", action);
     } catch (err) {
@@ -354,21 +365,21 @@ export default function App() {
 
         {/* CUSTOMER CREATE MODAL */}
         <Dialog
-  open={customerModalOpen}
-  onClose={() => setCustomerModalOpen(false)}
-  maxWidth="md"
-  fullWidth
->
-  <DialogTitle sx={{ fontWeight: 600 }}>Create Customer</DialogTitle>
+          open={customerModalOpen}
+          onClose={() => setCustomerModalOpen(false)}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle sx={{ fontWeight: 600 }}>Create Customer</DialogTitle>
 
-  <DialogContent sx={{ pb: 3 }}>
-    <CustomerForm
-      states={statesList}
-      onClose={() => setCustomerModalOpen(false)}
-      onSuccess={refreshCustomersAfterCreate}
-    />
-  </DialogContent>
-</Dialog>
+          <DialogContent sx={{ pb: 3 }}>
+            <CustomerForm
+              states={statesList}
+              onClose={() => setCustomerModalOpen(false)}
+              onSuccess={refreshCustomersAfterCreate}
+            />
+          </DialogContent>
+        </Dialog>
 
 
       </Box>

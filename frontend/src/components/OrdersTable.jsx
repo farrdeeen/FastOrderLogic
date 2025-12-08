@@ -51,28 +51,28 @@ export default function OrdersTable({ orders = [], onAction }) {
   };
 
   // SAVE SERIAL NUMBERS + UPDATE FRONTEND ICON IMMEDIATELY
-const saveSerialNumbers = async () => {
-  try {
-    const res = await axios.post(
-      `${API_URL}/orders/${encodeURIComponent(activeOrderId)}/serial_numbers/save`,
-      { entries: serialItems }
-    );
+  const saveSerialNumbers = async () => {
+    try {
+      const res = await axios.post(
+        `${API_URL}/orders/${encodeURIComponent(activeOrderId)}/serial_numbers/save`,
+        { entries: serialItems }
+      );
 
-    // Backend returns: complete | partial | none
-    const newStatus = res.data.serial_status;
+      // Backend returns: complete | partial | none
+      const newStatus = res.data.serial_status;
 
-    // 🔥 Notify parent that serial status has changed
-    // This updates the dot instantly without reloading the page
-    safeAction(activeOrderId, "serial-status-updated", newStatus);
+      // 🔥 Notify parent that serial status has changed
+      // This updates the dot instantly without reloading the page
+      safeAction(activeOrderId, "serial-status-updated", newStatus);
 
-    alert("Serial numbers saved!");
-    setSerialModalOpen(false);
+      alert("Serial numbers saved!");
+      setSerialModalOpen(false);
 
-  } catch (err) {
-    console.error(err);
-    alert("Failed to save serials");
-  }
-};
+    } catch (err) {
+      console.error(err);
+      alert("Failed to save serials");
+    }
+  };
 
   // Remarks
   const startEditRemarks = (o) => {
@@ -139,8 +139,8 @@ const saveSerialNumbers = async () => {
                 o.serial_status === "complete"
                   ? "🟢"
                   : o.serial_status === "partial"
-                  ? "🟡"
-                  : "🔴";
+                    ? "🟡"
+                    : "🔴";
 
               return (
                 <>
@@ -252,8 +252,8 @@ const saveSerialNumbers = async () => {
                             o.delivery_status === "NOT_SHIPPED"
                               ? "#fee2e2"
                               : o.delivery_status === "SHIPPED"
-                              ? "#fef9c3"
-                              : "#dcfce7",
+                                ? "#fef9c3"
+                                : "#dcfce7",
                         }}
                       >
                         <option value="NOT_SHIPPED">Not Shipped</option>
@@ -299,6 +299,28 @@ const saveSerialNumbers = async () => {
                         </>
                       )}
                     </td>
+                    {/* DELETE ORDER */}
+                    <td style={{ padding: 10 }}>
+                      <button
+                        onClick={() => {
+                          if (window.confirm("Are you sure you want to delete this order?")) {
+                            safeAction(o.order_id, "delete-order");
+                          }
+                        }}
+                        style={{
+                          background: "#ef4444",
+                          color: "white",
+                          padding: "6px 10px",
+                          borderRadius: 6,
+                          border: "none",
+                          cursor: "pointer",
+                          fontWeight: 600,
+                        }}
+                      >
+                        🗑️
+                      </button>
+                    </td>
+
                   </tr>
 
                   {/* EXPANDED SECTION */}
@@ -594,4 +616,3 @@ const saveSerialNumbers = async () => {
     </>
   );
 }
-  

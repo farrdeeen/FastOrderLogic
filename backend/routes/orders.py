@@ -190,6 +190,7 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
 
 
+
 # ================================
 # LIST ORDERS (unchanged but cleaned)
 # ================================
@@ -714,3 +715,35 @@ def search_suggestions(q: str, db: Session = Depends(get_db)):
     """), {"q": q}).fetchall()
 
     return [r[0] for r in rows]
+
+@router.delete("/{order_id}")
+def delete_order(order_id: str, db: Session = Depends(get_db)):
+    try:
+        # 1️⃣ Check if order exists
+        order = db.query(Order).filter(Order.order_id == order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        # 2️⃣ Delete from order_items
+        db.execute(
+            text("DELETE FROM order_items WHERE order_id = :oid"),
+            {"oid": order_id}
+        )
+
+        # 3️⃣ Delete from device_transactions
+        db.execute(
+            text("DELETE FROM device_transaction WHERE order_id = :oid"),
+            {"oid": order_id}
+        )
+
+        # 4️⃣ Delete main order
+        db.delete(order)
+
+        db.commit()
+
+        return {"success": True, "message": "Order deleted successfully"}
+
+    except Exception as e:
+        db.rollback()
+        print("Order delete error:", e)
+        raise HTTPException(status_code=500, detail="Failed to delete order")
