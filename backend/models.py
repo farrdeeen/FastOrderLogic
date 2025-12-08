@@ -39,7 +39,7 @@ class Order(Base):
     gst = Column(DECIMAL(10, 2))
     invoice_number = Column(String(30))
     remarks = Column(String(255))
-
+    invoice_id= Column(String(30))
     __table_args__ = (
         CheckConstraint('(customer_id IS NOT NULL) OR (offline_customer_id IS NOT NULL)', name='check_customer_type'),
     )

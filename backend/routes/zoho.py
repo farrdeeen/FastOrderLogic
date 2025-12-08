@@ -1,6 +1,7 @@
 # routes/zoho.py
+from io import BytesIO
 from fastapi import APIRouter, HTTPException, Request, Depends
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
 import requests
 import os
 import time
@@ -153,15 +154,17 @@ def get_zoho_item_by_sku(sku: str):
 def create_invoice(order: dict, db=Depends(get_db)):
 
     print("\n=== /zoho/invoice called ===")
-    print("Incoming order (trimmed):", json.dumps(
-        {k: order[k] for k in ("order_id", "customer")}, indent=2
-    ))
+    print("Incoming order:", order.get("order_id"), order.get("customer"))
 
+    # ---------------------------------------
     # Fix frontend nested payload
+    # ---------------------------------------
     if isinstance(order.get("order_id"), dict):
         order = order["order_id"]
 
+    # ---------------------------------------
     # Validate
+    # ---------------------------------------
     if "items" not in order or not order["items"]:
         raise HTTPException(400, "Order has no items")
 
@@ -169,8 +172,10 @@ def create_invoice(order: dict, db=Depends(get_db)):
     if not addr:
         raise HTTPException(400, "Order missing address")
 
+    cust = order["customer"]
+
     # ---------------------------------------
-    # Resolve State Name + Code
+    # Resolve State Name & Code
     # ---------------------------------------
     state_row = db.execute(
         text("SELECT name, abbreviation FROM state WHERE state_id = :sid"),
@@ -180,21 +185,20 @@ def create_invoice(order: dict, db=Depends(get_db)):
     if not state_row:
         raise HTTPException(400, "Invalid state_id")
 
-    order["address"]["state_name"] = state_row.name
-    order["address"]["state_code"] = state_row.abbreviation
-    print(f"✔ Resolved state: {state_row.name} {state_row.abbreviation}")
+    addr["state_name"] = state_row.name
+    addr["state_code"] = state_row.abbreviation
+
+    print(f"✔ State resolved → {state_row.name} ({state_row.abbreviation})")
 
     # ---------------------------------------
-    # Resolve Zoho Items (SKU -> Zoho item)
+    # Resolve SKU → Zoho Item
     # ---------------------------------------
     zoho_items = []
 
     for item in order["items"]:
-        product_id = item["product_id"]
-
         sku = db.execute(
-            text("SELECT sku_id FROM products WHERE product_id = :p"),
-            {"p": product_id}
+            text("SELECT sku_id FROM products WHERE product_id = :pid"),
+            {"pid": item["product_id"]}
         ).scalar()
 
         z_item = get_zoho_item_by_sku(sku)
@@ -203,13 +207,11 @@ def create_invoice(order: dict, db=Depends(get_db)):
 
         zoho_items.append(z_item)
 
-    print(f"✔ Resolved {len(zoho_items)} Zoho items for order items")
+    print(f"✔ Resolved {len(zoho_items)} Zoho items")
 
     # ---------------------------------------
-    # GST Lookup (customer + offline_customer)
+    # GST LOOKUP from DB
     # ---------------------------------------
-    cust = order["customer"]
-
     gst_number = db.execute(
         text("SELECT gst_number FROM customer WHERE mobile = :m"),
         {"m": cust["mobile"]}
@@ -224,16 +226,16 @@ def create_invoice(order: dict, db=Depends(get_db)):
     is_gst = bool(gst_number and gst_number.strip())
     gst_treatment = "business_gst" if is_gst else "consumer"
 
-    print(f"GST DETECTED={is_gst}, GST NUMBER={gst_number}, gst_treatment={gst_treatment}")
+    print(f"✔ GST: {gst_number}, B2B={is_gst}")
 
     # ---------------------------------------
-    # Build Zoho Contact Payload
+    # Build Contact Payload
     # ---------------------------------------
     contact_payload = {
         "contact_name": cust["name"],
         "email": cust.get("email", ""),
         "phone": cust["mobile"],
-        "company_name": cust["name"],  # Zoho requires company_name for B2B
+        "company_name": cust["name"] if is_gst else "",
         "billing_address": {
             "address": addr["address_line"],
             "city": addr["city"],
@@ -249,43 +251,76 @@ def create_invoice(order: dict, db=Depends(get_db)):
             "zip": addr["pincode"],
             "country": "India"
         },
-        "gst_treatment": gst_treatment
+        "gst_treatment": gst_treatment,
+        "keep_contact_persons": True
     }
 
     if is_gst:
         contact_payload["gst_no"] = gst_number
 
-    print("➡️ Creating Zoho contact with payload:", json.dumps(contact_payload, indent=2))
+    print("➡️ Zoho Contact Payload Prepared")
 
-    # Find existing Zoho contact
-    existing = requests.get(
-        f"{ZOHO_API_BASE}/contacts",
-        headers=zoho_headers(),
-        params={"search_text": cust["mobile"]}
-    ).json()
+    # ---------------------------------------
+    # SEARCH OR CREATE CONTACT (DO NOT REMOVE)
+    # ---------------------------------------
+    contact_id = None
 
-    contacts = existing.get("contacts", [])
-    if contacts:
-        contact_id = contacts[0]["contact_id"]
-        print(f"✔ Existing contact found: {contact_id}")
-    else:
+    # Search by email
+    if cust.get("email"):
+        res_email = requests.get(
+            f"{ZOHO_API_BASE}/contacts",
+            headers=zoho_headers(),
+            params={"email": cust["email"]}
+        ).json()
+        contacts = res_email.get("contacts", [])
+        if contacts:
+            contact_id = contacts[0]["contact_id"]
+
+    # Search by mobile
+    if not contact_id:
+        res_mobile = requests.get(
+            f"{ZOHO_API_BASE}/contacts",
+            headers=zoho_headers(),
+            params={"phone": cust["mobile"]}
+        ).json()
+        contacts = res_mobile.get("contacts", [])
+        if contacts:
+            contact_id = contacts[0]["contact_id"]
+
+    # Search by name
+    if not contact_id:
+        res_name = requests.get(
+            f"{ZOHO_API_BASE}/contacts",
+            headers=zoho_headers(),
+            params={"search_text": cust["name"]}
+        ).json()
+        contacts = res_name.get("contacts", [])
+        if contacts:
+            contact_id = contacts[0]["contact_id"]
+
+    # Create if still not found
+    if not contact_id:
         created = requests.post(
             f"{ZOHO_API_BASE}/contacts",
             headers=zoho_headers(),
             json=contact_payload
         ).json()
 
-        print("🆕 Zoho contact create response:", created)
-
         contact_id = created.get("contact", {}).get("contact_id")
         if not contact_id:
             raise HTTPException(400, {"error": "Contact creation failed", "data": created})
 
+    print(f"✔ Zoho Contact ID = {contact_id}")
+
     # ---------------------------------------
-    # Fetch Serial Numbers
+    # Serial Numbers
     # ---------------------------------------
     serial_rows = db.execute(
-        text("SELECT device_srno, sku_id FROM device_transaction WHERE order_id = :oid"),
+        text("""
+            SELECT device_srno, sku_id 
+            FROM device_transaction 
+            WHERE order_id = :oid
+        """),
         {"oid": order["order_id"]}
     ).fetchall()
 
@@ -294,77 +329,82 @@ def create_invoice(order: dict, db=Depends(get_db)):
         serial_map.setdefault(r.sku_id, []).append(r.device_srno)
 
     # ---------------------------------------
-    # Build Invoice Payload (Item-wise Pricing)
+    # Build Invoice Payload
     # ---------------------------------------
-    payload = {
+    invoice_payload = {
         "customer_id": contact_id,
         "reference_number": order["order_id"],
-        "place_of_supply": order["address"]["state_code"],
-        "line_items": []
+        "place_of_supply": addr["state_code"],
+        "salesperson_name": "mtm-store",
+        "line_items": [],
     }
 
     for idx, item in enumerate(order["items"]):
         z = zoho_items[idx]
-        sku = z.get("sku")
+        sku = z["sku"]
 
-        # DB product name
         product_name = db.execute(
             text("SELECT name FROM products WHERE sku_id = :sku"),
             {"sku": sku}
         ).scalar() or ""
 
-        # Serial numbers
         serials = serial_map.get(sku, [])
-        if serials:
-            description_text = f"{product_name} | Serial Numbers: {', '.join(serials)}"
-        else:
-            description_text = product_name
+        desc = f"{product_name} | Serial Numbers: {', '.join(serials)}" if serials else product_name
 
-        # Correct per-item GST-exclusive rate
         unit_price = float(item["unit_price"])
-        base_rate = round(unit_price / 1.18, 2)
+        rate_ex_gst = round(unit_price / 1.18, 2)
 
-        payload["line_items"].append({
+        invoice_payload["line_items"].append({
             "item_id": z["item_id"],
-            "name": z["name"],  # Zoho item name stays
-            "rate": base_rate,
+            "name": z["name"],
+            "rate": rate_ex_gst,
             "quantity": float(item["quantity"]),
             "sku": sku,
-            "description": description_text
+            "description": desc
         })
 
     print("\n--- FINAL INVOICE PAYLOAD ---")
-    print(json.dumps(payload, indent=2))
+    print(json.dumps(invoice_payload, indent=2))
 
     # ---------------------------------------
-    # Create Invoice
+    # Create Invoice in Zoho
     # ---------------------------------------
     r = requests.post(
         f"{ZOHO_API_BASE}/invoices",
         headers=zoho_headers(),
-        json=payload
+        json=invoice_payload
     )
 
-    print("➡️ Zoho invoices API status:", r.status_code)
-    print("➡️ Zoho invoices API response:", r.text[:900])
-
     rj = r.json()
+    print("Zoho Response:", rj)
+
     if "invoice" not in rj:
         raise HTTPException(400, rj)
 
     invoice_no = rj["invoice"]["invoice_number"]
-    print(f"✅ Zoho invoice created: {invoice_no}")
+    invoice_id = rj["invoice"]["invoice_id"]
+
+    print(f"✔ Invoice Created: {invoice_no} | ID: {invoice_id}")
 
     # ---------------------------------------
-    # Update Local Order
+    # SAVE BOTH invoice_number + invoice_id  (CRITICAL)
     # ---------------------------------------
     db.execute(
-        text("UPDATE orders SET invoice_number = :inv WHERE order_id = :oid"),
-        {"inv": invoice_no, "oid": order["order_id"]}
+        text("""
+            UPDATE orders 
+            SET invoice_number = :inv,
+                invoice_id = :iid
+            WHERE order_id = :oid
+        """),
+        {
+            "inv": invoice_no,
+            "iid": invoice_id,
+            "oid": order["order_id"]
+        }
     )
     db.commit()
 
-    print(f"✔ Local order updated with invoice number: {invoice_no}")
+    print("✔ Saved invoice_number and invoice_id in DB")
 
     return rj
 
@@ -375,79 +415,52 @@ def create_invoice(order: dict, db=Depends(get_db)):
 # ---------------------------------------
 # DOWNLOAD INVOICE PDF
 # ---------------------------------------
-@router.get("/orders/{order_id}/invoice/download")
-def download_invoice(order_id: str, db: Session = Depends(get_db)):
+
+# ---------------------------------------
+# PRINT INVOICE (Zoho print view PDF)
+# ---------------------------------------
+@router.get("/orders/{order_id:path}/invoice/print")
+def print_invoice(order_id: str, db: Session = Depends(get_db)):
+    """
+    Fetch INVOICE PDF from Zoho (Zoho Books India does NOT support /print endpoint)
+    """
 
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order:
-        raise HTTPException(404, "Order not found")
+        raise HTTPException(404, f"Order not found: {order_id}")
 
-    if not order.invoice_number:
-        raise HTTPException(400, "Invoice not yet generated")
+    if not order.invoice_id:
+        raise HTTPException(400, "invoice_id missing — invoice not generated")
 
-    pdf_path = f"invoices/{order.invoice_number}.pdf"
+    zoho_invoice_id = order.invoice_id
 
-    try:
-        return FileResponse(pdf_path, media_type="application/pdf", filename=f"{order.invoice_number}.pdf")
-    except:
-        raise HTTPException(500, "Invoice file missing")
-    
-@router.get("/orders/{order_id}/invoice/download")
-def download_invoice(order_id: str, db: Session = Depends(get_db)):
-    """
-    Download invoice PDF using order_id.
-    If not downloaded earlier, fetch from Zoho and save locally.
-    """
+    # ✔ Correct & ONLY valid PDF endpoint for Zoho Books India
+    pdf_url = f"{ZOHO_API_BASE}/invoices/{zoho_invoice_id}?accept=pdf"
 
-    # 1. Get order
-    order = db.query(Order).filter(Order.order_id == order_id).first()
-    if not order:
-        raise HTTPException(404, "Order not found")
-
-    if not order.invoice_number:
-        raise HTTPException(400, "Invoice not yet generated")
-
-    invoice_number = order.invoice_number
-    pdf_path = f"invoices/{invoice_number}.pdf"
-
-    # 2. If already downloaded, return directly
-    if os.path.exists(pdf_path):
-        return FileResponse(
-            pdf_path,
-            media_type="application/pdf",
-            filename=f"{invoice_number}.pdf"
-        )
-
-    # 3. Download fresh PDF from Zoho
-    pdf_url = f"{ZOHO_API_BASE}/invoices/{invoice_number}?accept=pdf"
     headers = {
         "Authorization": f"Zoho-oauthtoken {ensure_access_token()}",
         "X-com-zoho-books-organizationid": ZOHO_ORG_ID,
     }
 
-    r = requests.get(pdf_url, headers=headers)
+    res = requests.get(pdf_url, headers=headers)
 
-    if r.status_code != 200:
+    if res.status_code != 200:
         raise HTTPException(
             400,
             {
-                "error": "Could not download invoice PDF from Zoho",
-                "status": r.status_code,
-                "detail": r.text[:300]
+                "error": "Failed to fetch invoice PDF from Zoho",
+                "status_code": res.status_code,
+                "detail": res.text[:300],
+                "pdf_url": pdf_url
             }
         )
 
-    # 4. Ensure /invoices folder exists
-    os.makedirs("invoices", exist_ok=True)
-
-    # 5. Save file
-    with open(pdf_path, "wb") as f:
-        f.write(r.content)
-
-    # 6. Return PDF
-    return FileResponse(
-        pdf_path,
+    return StreamingResponse(
+        BytesIO(res.content),
         media_type="application/pdf",
-        filename=f"{invoice_number}.pdf"
+        headers={
+            "Content-Disposition": f"inline; filename=invoice_{zoho_invoice_id}.pdf"
+        }
     )
+
 

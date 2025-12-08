@@ -24,7 +24,7 @@ export default function OrdersTable({ orders = [], onAction }) {
   const toggleExpand = (id) => setExpanded(expanded === id ? null : id);
 
   const safeAction = (id, action, payload) => {
-    if (!action) return console.warn("Undefined action");
+    if (!action) return console.warn("Undefined action:", action);
     onAction(id, action, payload);
   };
 
@@ -50,19 +50,29 @@ export default function OrdersTable({ orders = [], onAction }) {
     }
   };
 
-  const saveSerialNumbers = async () => {
-    try {
-      await axios.post(
-        `${API_URL}/orders/${encodeURIComponent(activeOrderId)}/serial_numbers/save`,
-        { entries: serialItems }
-      );
-      alert("Serial numbers saved!");
-      setSerialModalOpen(false);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to save serials");
-    }
-  };
+  // SAVE SERIAL NUMBERS + UPDATE FRONTEND ICON IMMEDIATELY
+const saveSerialNumbers = async () => {
+  try {
+    const res = await axios.post(
+      `${API_URL}/orders/${encodeURIComponent(activeOrderId)}/serial_numbers/save`,
+      { entries: serialItems }
+    );
+
+    // Backend returns: complete | partial | none
+    const newStatus = res.data.serial_status;
+
+    // 🔥 Notify parent that serial status has changed
+    // This updates the dot instantly without reloading the page
+    safeAction(activeOrderId, "serial-status-updated", newStatus);
+
+    alert("Serial numbers saved!");
+    setSerialModalOpen(false);
+
+  } catch (err) {
+    console.error(err);
+    alert("Failed to save serials");
+  }
+};
 
   // Remarks
   const startEditRemarks = (o) => {
@@ -95,7 +105,7 @@ export default function OrdersTable({ orders = [], onAction }) {
             <tr style={{ background: "#e5e7eb" }}>
               {[
                 "",
-                "Customer Name", // changed ✔️
+                "Customer Name",
                 "Created",
                 "Items",
                 "Amount (₹)",
@@ -124,6 +134,7 @@ export default function OrdersTable({ orders = [], onAction }) {
           <tbody>
             {paginated.map((o, i) => {
               const exp = expanded === o.order_id;
+
               const serialDot =
                 o.serial_status === "complete"
                   ? "🟢"
@@ -154,7 +165,6 @@ export default function OrdersTable({ orders = [], onAction }) {
                       </button>
                     </td>
 
-                    {/* Customer Name (header 1) */}
                     <td style={{ padding: 10 }}>{o.customer?.name || "—"}</td>
 
                     <td style={{ padding: 10 }}>
@@ -176,7 +186,9 @@ export default function OrdersTable({ orders = [], onAction }) {
                       <span
                         style={{
                           background:
-                            o.payment_status === "paid" ? "#16a34a" : "#dc2626",
+                            o.payment_status === "paid"
+                              ? "#16a34a"
+                              : "#dc2626",
                           color: "white",
                           padding: "3px 8px",
                           borderRadius: 6,
@@ -203,6 +215,7 @@ export default function OrdersTable({ orders = [], onAction }) {
                     {/* SERIALS */}
                     <td style={{ padding: 10 }}>
                       <span style={{ marginRight: 6 }}>{serialDot}</span>
+
                       {o.payment_status === "paid" ? (
                         <button
                           onClick={() => openSerialModal(o)}
@@ -288,147 +301,167 @@ export default function OrdersTable({ orders = [], onAction }) {
                     </td>
                   </tr>
 
-                  {/* EXPANDED SECTION — NOW INSIDE THE TABLE ✔️ */}
+                  {/* EXPANDED SECTION */}
                   {exp && (
-  <tr>
-    <td colSpan={10} style={{ padding: 0 }}>
-      <div
-        style={{
-          padding: "1rem",
-          background: "#eef2ff",
-          borderTop: "1px solid #c7d2fe",
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "1rem",
-        }}
-      >
-        {/* CUSTOMER */}
-        <div>
-          <h4>Customer</h4>
-          <p><strong>Name:</strong> {o.customer?.name}</p>
-          <p><strong>Mobile:</strong> {o.customer?.mobile}</p>
-          <p><strong>Email:</strong> {o.customer?.email}</p>
+                    <tr>
+                      <td colSpan={10} style={{ padding: 0 }}>
+                        <div
+                          style={{
+                            padding: "1rem",
+                            background: "#eef2ff",
+                            borderTop: "1px solid #c7d2fe",
+                            display: "grid",
+                            gridTemplateColumns: "1fr 1fr",
+                            gap: "1rem",
+                          }}
+                        >
+                          {/* CUSTOMER */}
+                          <div>
+                            <h4>Customer</h4>
+                            <p>
+                              <strong>Name:</strong> {o.customer?.name}
+                            </p>
+                            <p>
+                              <strong>Mobile:</strong> {o.customer?.mobile}
+                            </p>
+                            <p>
+                              <strong>Email:</strong> {o.customer?.email}
+                            </p>
 
-          <p style={{ marginTop: 10 }}>
-            <strong>Order ID:</strong> {o.order_id}
-          </p>
-        </div>
+                            <p style={{ marginTop: 10 }}>
+                              <strong>Order ID:</strong> {o.order_id}
+                            </p>
+                          </div>
 
-        {/* ADDRESS */}
-        <div>
-          <h4>Address</h4>
-          {o.address ? (
-            <>
-              <p>{o.address.address_line}</p>
-              <p>{o.address.city} - {o.address.pincode}</p>
-              <p>State: {o.address.state_name || o.address.state_id}</p>
-            </>
-          ) : (
-            <p>No address</p>
-          )}
-        </div>
+                          {/* ADDRESS */}
+                          <div>
+                            <h4>Address</h4>
+                            {o.address ? (
+                              <>
+                                <p>{o.address.address_line}</p>
+                                <p>
+                                  {o.address.city} - {o.address.pincode}
+                                </p>
+                                <p>
+                                  State:{" "}
+                                  {o.address.state_name || o.address.state_id}
+                                </p>
+                              </>
+                            ) : (
+                              <p>No address</p>
+                            )}
+                          </div>
 
-        {/* 🔥 REMARKS — MOVED ABOVE ITEMS */}
-        <div style={{ gridColumn: "1 / -1" }}>
-          <h4>Remarks</h4>
+                          {/* REMARKS */}
+                          <div style={{ gridColumn: "1 / -1" }}>
+                            <h4>Remarks</h4>
 
-          {editingRemarksFor === o.order_id ? (
-            <>
-              <textarea
-                value={remarksValue}
-                onChange={(e) => setRemarksValue(e.target.value)}
-                style={{
-                  width: "100%",
-                  minHeight: 80,
-                  padding: 8,
-                  borderRadius: 6,
-                  border: "1px solid #ccc",
-                }}
-              />
+                            {editingRemarksFor === o.order_id ? (
+                              <>
+                                <textarea
+                                  value={remarksValue}
+                                  onChange={(e) =>
+                                    setRemarksValue(e.target.value)
+                                  }
+                                  style={{
+                                    width: "100%",
+                                    minHeight: 80,
+                                    padding: 8,
+                                    borderRadius: 6,
+                                    border: "1px solid #ccc",
+                                  }}
+                                />
 
-              <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-                <button
-                  onClick={() => submitRemarks(o.order_id)}
-                  style={{
-                    padding: "8px 12px",
-                    background: "#2563eb",
-                    color: "white",
-                    borderRadius: 6,
-                    border: "none",
-                  }}
-                >
-                  Save
-                </button>
+                                <div
+                                  style={{
+                                    marginTop: 8,
+                                    display: "flex",
+                                    gap: 8,
+                                  }}
+                                >
+                                  <button
+                                    onClick={() =>
+                                      submitRemarks(o.order_id)
+                                    }
+                                    style={{
+                                      padding: "8px 12px",
+                                      background: "#2563eb",
+                                      color: "white",
+                                      borderRadius: 6,
+                                      border: "none",
+                                    }}
+                                  >
+                                    Save
+                                  </button>
 
-                <button
-                  onClick={() => {
-                    setEditingRemarksFor(null);
-                    setRemarksValue("");
-                  }}
-                  style={{
-                    padding: "8px 12px",
-                    background: "#e5e7eb",
-                    borderRadius: 6,
-                    border: "none",
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p>{o.remarks || "—"}</p>
+                                  <button
+                                    onClick={() => {
+                                      setEditingRemarksFor(null);
+                                      setRemarksValue("");
+                                    }}
+                                    style={{
+                                      padding: "8px 12px",
+                                      background: "#e5e7eb",
+                                      borderRadius: 6,
+                                      border: "none",
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <p>{o.remarks || "—"}</p>
 
-              <button
-                onClick={() => startEditRemarks(o)}
-                style={{
-                  padding: "6px 12px",
-                  background: "#2563eb",
-                  color: "white",
-                  borderRadius: 6,
-                  border: "none",
-                }}
-              >
-                Edit Remarks
-              </button>
-            </>
-          )}
-        </div>
+                                <button
+                                  onClick={() => startEditRemarks(o)}
+                                  style={{
+                                    padding: "6px 12px",
+                                    background: "#2563eb",
+                                    color: "white",
+                                    borderRadius: 6,
+                                    border: "none",
+                                  }}
+                                >
+                                  Edit Remarks
+                                </button>
+                              </>
+                            )}
+                          </div>
 
-        {/* ITEMS — NOW BELOW REMARKS */}
-        <div style={{ gridColumn: "1 / -1" }}>
-          <h4>Items</h4>
+                          {/* ITEMS */}
+                          <div style={{ gridColumn: "1 / -1" }}>
+                            <h4>Items</h4>
 
-          {o.items.map((it) => (
-            <div
-              key={it.item_id}
-              style={{
-                padding: "0.6rem",
-                background: "white",
-                marginBottom: "0.5rem",
-                borderRadius: 6,
-                display: "flex",
-                justifyContent: "space-between",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-              }}
-            >
-              <div>
-                <strong>{it.product_name}</strong>
-                <p>
-                  Qty: {it.quantity} × {it.unit_price}
-                </p>
-              </div>
+                            {o.items.map((it) => (
+                              <div
+                                key={it.item_id}
+                                style={{
+                                  padding: "0.6rem",
+                                  background: "white",
+                                  marginBottom: "0.5rem",
+                                  borderRadius: 6,
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+                                }}
+                              >
+                                <div>
+                                  <strong>{it.product_name}</strong>
+                                  <p>
+                                    Qty: {it.quantity} × {it.unit_price}
+                                  </p>
+                                </div>
 
-              <strong>₹{it.total_price}</strong>
-            </div>
-          ))}
-        </div>
-      </div>
-    </td>
-  </tr>
-)}
-
+                                <strong>₹{it.total_price}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                 </>
               );
             })}
@@ -502,7 +535,9 @@ export default function OrdersTable({ orders = [], onAction }) {
                   marginBottom: "1rem",
                 }}
               >
-                <h4>{item.product_name} — Qty: {item.quantity}</h4>
+                <h4>
+                  {item.product_name} — Qty: {item.quantity}
+                </h4>
 
                 {item.serials.map((sn, i) => (
                   <input
@@ -559,3 +594,4 @@ export default function OrdersTable({ orders = [], onAction }) {
     </>
   );
 }
+  

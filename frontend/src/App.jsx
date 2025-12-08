@@ -144,7 +144,7 @@ export default function App() {
   const handleAction = async (orderId, action, payload) => {
     try {
       if (action === "update-delivery") {
-        await axios.put(`${API_URL}/orders/${orderId}/update-delivery`, {
+        await axios.put(`${API_URL}/orders/${encodeURIComponent(orderId)}/update-delivery`, {
           status: payload,
         });
         return fetchOrders();
@@ -156,12 +156,12 @@ export default function App() {
       }
 
       if (action === "download-invoice") {
-        window.open(`${API_URL}/zoho/orders/${orderId}/invoice/download`);
+        window.open(`${API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`);
         return;
       }
 
       if (action === "update-remarks") {
-        await axios.put(`${API_URL}/orders/${orderId}/remarks`, {
+        await axios.put(`${API_URL}/orders}/remarks`, {
           remarks: payload,
         });
         return fetchOrders();
@@ -172,6 +172,17 @@ export default function App() {
         await callSimplePut(orderId, action);
         return fetchOrders();
       }
+      if (action === "serial-status-updated") {
+  // Update serial status in the local orders array
+  setOrders(prev =>
+    prev.map(o =>
+      o.order_id === orderId
+        ? { ...o, serial_status: payload }
+        : o
+    )
+  );
+  return;
+}
 
       console.warn("Unknown action:", action);
     } catch (err) {

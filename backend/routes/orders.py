@@ -91,13 +91,12 @@ class OrderCreate(BaseModel):
 @router.post("/create")
 def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
-    # --------------------------
-    # VALIDATION
-    # --------------------------
     if not data.address_id:
         raise HTTPException(status_code=400, detail="Address not selected")
 
-    # PREFIX = offline_customer_id preferred
+    # ---------------------------------------------
+    # ORDER ID GENERATION
+    # ---------------------------------------------
     if data.offline_customer_id:
         prefix = f"{data.offline_customer_id:05d}"
     elif data.customer_id:
@@ -105,51 +104,35 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     else:
         raise HTTPException(400, "Customer is required")
 
-    # --------------------------
-    # GLOBAL SUFFIX LOGIC
-    # --------------------------
-    last = db.execute(text("""
-        SELECT order_id
+    last_suffix = db.execute(text("""
+        SELECT CAST(SUBSTRING_INDEX(order_id, '#', -1) AS UNSIGNED) AS suffix
         FROM orders
         WHERE order_id LIKE '%#%'
-        ORDER BY created_at DESC
+        ORDER BY suffix DESC
         LIMIT 1
-    """)).fetchone()
+    """)).scalar()
 
-    if last:
-        try:
-            last_suffix = int(last[0].split("#")[1])
-            new_suffix = last_suffix + 1
-        except:
-            new_suffix = 1
-    else:
-        new_suffix = 1
-
-    suffix = f"{new_suffix:05d}"
-
-    # FINAL order_id
-    # FINAL ORDER ID BUILDER (offline preferred, otherwise online)
-    if data.offline_customer_id:
-        order_id = generate_order_id(db, data.offline_customer_id)
-    else:
-    # generate online order ID using same suffix logic
-        prefix = f"{data.customer_id:05d}"
-
-    last_suffix = get_global_suffix(db)
-    next_suffix = str(last_suffix + 1).zfill(5)
-
-    order_id = f"{prefix}#{next_suffix}"
-
-
+    next_suffix = (last_suffix + 1) if last_suffix else 1
+    order_id = f"{prefix}#{next_suffix:05d}"
 
     now = datetime.now()
-
-    # order_index MUST be unique → use timestamp
     order_index = int(now.timestamp())
 
-    # --------------------------
+    # ---------------------------------------------
+    # DELIVERY CHARGE CALCULATION (CRITICAL FIX)
+    # ---------------------------------------------
+    total_qty = sum(item.qty for item in data.items)
+
+    delivery_per_unit = 0
+    if data.delivery_charge and total_qty > 0:
+        delivery_per_unit = round(data.delivery_charge / total_qty, 2)
+
+    print("TOTAL QTY =", total_qty)
+    print("DELIVERY / UNIT =", delivery_per_unit)
+
+    # ---------------------------------------------
     # INSERT ORDER
-    # --------------------------
+    # ---------------------------------------------
     order = Order(
         order_id=order_id,
         customer_id=data.customer_id,
@@ -166,17 +149,26 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         created_at=now,
         updated_at=now,
         order_index=order_index,
-        payment_type=data.payment_type,
+        payment_type=data.payment_type
     )
 
     db.add(order)
     db.commit()
     db.refresh(order)
 
-    # --------------------------
-    # INSERT ITEMS
-    # --------------------------
+    # ---------------------------------------------
+    # INSERT ITEMS (NOW WITH DELIVERY INCLUDED)
+    # ---------------------------------------------
     for it in data.items:
+
+        new_unit_price = float(it.final_unit_price) + delivery_per_unit
+        new_total_price = round(new_unit_price * it.qty, 2)
+
+        print(
+            f"PRODUCT {it.product_id}: original={it.final_unit_price}, "
+            f"unit+delivery={new_unit_price}, qty={it.qty}, total={new_total_price}"
+        )
+
         db.execute(text("""
             INSERT INTO order_items
             (order_id, product_id, quantity, unit_price, total_price)
@@ -185,8 +177,8 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
             "oid": order_id,
             "pid": it.product_id,
             "qty": it.qty,
-            "unit": it.final_unit_price,
-            "line_total": it.line_total
+            "unit": new_unit_price,
+            "line_total": new_total_price
         })
 
     db.commit()
@@ -195,6 +187,7 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         "success": True,
         "order_id": order_id
     }
+
 
 
 # ================================
@@ -274,19 +267,18 @@ def list_orders(
         address = db.execute(
             text("""
                 SELECT 
-    a.address_id,
-    a.name,
-    a.mobile,
-    a.pincode,
-    a.address_line,
-    a.city,
-    a.state_id,
-    s.name AS state_name,
-    a.landmark
-FROM address a
-LEFT JOIN state s ON s.state_id = a.state_id
-WHERE a.address_id = :aid
-
+                    a.address_id,
+                    a.name,
+                    a.mobile,
+                    a.pincode,
+                    a.address_line,
+                    a.city,
+                    a.state_id,
+                    s.name AS state_name,
+                    a.landmark
+                FROM address a
+                LEFT JOIN state s ON s.state_id = a.state_id
+                WHERE a.address_id = :aid
             """),
             {"aid": o.address_id}
         ).first()
@@ -296,7 +288,7 @@ WHERE a.address_id = :aid
         items = db.execute(
             text("""
                 SELECT oi.item_id, oi.product_id, p.name AS product_name,
-                    oi.quantity, oi.unit_price, oi.total_price
+                       oi.quantity, oi.unit_price, oi.total_price
                 FROM order_items oi
                 LEFT JOIN products p ON p.product_id = oi.product_id
                 WHERE oi.order_id = :oid
@@ -307,20 +299,25 @@ WHERE a.address_id = :aid
         items = [dict(row._mapping) for row in items]
         base["items"] = items
 
-        # SERIAL STATUS
-        serial_rows = db.execute(
-            text("""
-                SELECT item_id, COUNT(sr_number) AS assigned
-                FROM serial_numbers
-                WHERE item_id IN (
-                    SELECT item_id FROM order_items WHERE order_id = :oid
-                )
-                GROUP BY item_id
-            """),
-            {"oid": o.order_id}
-        ).fetchall()
+        # ======================================================
+        # 🔥 FIXED SERIAL STATUS - using device_transaction OUT
+        # ======================================================
+        serial_rows = db.execute(text("""
+            SELECT 
+                oi.item_id,
+                COUNT(dt.device_srno) AS assigned
+            FROM order_items oi
+            LEFT JOIN products p ON p.product_id = oi.product_id
+            LEFT JOIN device_transaction dt
+                ON dt.order_id = oi.order_id
+                AND dt.sku_id = p.sku_id
+                AND dt.in_out = 2
+            WHERE oi.order_id = :oid
+            GROUP BY oi.item_id
+        """), {"oid": o.order_id}).fetchall()
 
         serial_map = {r.item_id: r.assigned for r in serial_rows}
+
         total_required = sum(it["quantity"] for it in items)
         total_assigned = sum(serial_map.get(it["item_id"], 0) for it in items)
 
@@ -330,10 +327,12 @@ WHERE a.address_id = :aid
             base["serial_status"] = "partial"
         else:
             base["serial_status"] = "complete"
+        # ======================================================
 
         out.append(base)
 
     return out
+
 
 
 

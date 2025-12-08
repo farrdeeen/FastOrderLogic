@@ -18,7 +18,7 @@ import os
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
 import requests
@@ -412,7 +412,10 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
             wix_number = w.get("number")
             if not wix_number:
                 wix_number = fetch_wix_order_number(w.get("id")) or w.get("id")
-            wix_order_id = safe_str(wix_number)
+            raw_id = safe_str(wix_number).strip()
+
+            # Always prefix with WIX#
+            wix_order_id = f"WIX#{raw_id}"
             order_result["wix_order_id"] = wix_order_id
 
             if not wix_order_id:
@@ -422,21 +425,33 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 details.append(order_result)
                 continue
 
-            # duplicate check
-            existing_order = db.execute(text("SELECT order_id FROM orders WHERE order_id = :oid LIMIT 1"), {"oid": wix_order_id}).first()
-            if existing_order and not force:
-                skipped += 1
-                order_result["status"] = "skipped"
-                order_result["reasons"].append("duplicate_order_id")
-                details.append(order_result)
-                continue
+        # --- Duplicate check (WIX# + non-prefixed matching) ---
+            oid_raw = wix_order_id            # WIX#12345
+            oid_no_prefix = raw_id  
 
+            existing_order = db.execute(
+                text("""
+                    SELECT order_id 
+                    FROM orders
+                    WHERE order_id = :oid_raw
+                    OR order_id = CONCAT('WIX#', :noprefix)
+                    OR REPLACE(order_id, 'WIX#', '') = :noprefix
+                    LIMIT 1
+                """),
+                {"oid_raw": oid_raw, "noprefix": oid_no_prefix}
+            ).first()
+
+            order_exists = bool(existing_order)
+
+            if order_exists and not force:
+                # Completely skip order AND item insertion
+                skipped += 1
+                order_result["status"] = "skipped_existing"
+                order_result["reasons"].append("order_already_synced")
+                details.append(order_result)
+                continue  # ← THIS PREVENTS ITEMS BEING INSERTED AGAIN
             # parse created_at
-            dt = w.get("createdDate") or w.get("dateCreated") or w.get("purchasedDate") or w.get("updatedDate") or w.get("paidDate")
-            try:
-                created_at = parser.parse(dt) if dt else datetime.utcnow()
-            except Exception:
-                created_at = datetime.utcnow()
+            created_at = db.execute(text("SELECT NOW()")).scalar()
 
             # contact extraction (shipping -> billing -> buyer)
             billing = w.get("billingInfo") or {}
@@ -462,7 +477,14 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         "addressLine1": ship_addr.get("addressLine") or ship_addr.get("addressLine1") or ship_addr.get("addressLine"),
                         "postalCode": ship_addr.get("postalCode") or ship_addr.get("zipCode"),
                         "city": ship_addr.get("city"),
-                        "region": ship_addr.get("subdivision") or ship_addr.get("subdivisionFullname")
+                        "region": (
+                                    ship_addr.get("subdivision")
+                                    or ship_addr.get("subdivisionFullname")
+                                    or ship_addr.get("state")
+                                    or ship_addr.get("region")
+                                    or ship_addr.get("province")
+                                    or ship_addr.get("administrativeArea")
+)
                     }
                 bill_addr = billing.get("address") or {}
                 bill_contact = billing.get("contactDetails") or {}
@@ -479,7 +501,14 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         "addressLine1": bill_addr.get("addressLine") or bill_addr.get("addressLine1") or bill_addr.get("addressLine"),
                         "postalCode": bill_addr.get("postalCode") or bill_addr.get("zipCode"),
                         "city": bill_addr.get("city"),
-                        "region": bill_addr.get("subdivision") or bill_addr.get("subdivisionFullname")
+                        "region": (
+                                    bill_addr.get("subdivision")
+                                    or bill_addr.get("subdivisionFullname")
+                                    or bill_addr.get("state")
+                                    or bill_addr.get("region")
+                                    or bill_addr.get("province")
+                                    or bill_addr.get("administrativeArea")
+                                )
                     }
                 # buyer fallback
                 fn = buyer.get("firstName") or ""
@@ -494,7 +523,11 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                     "addressLine1": buyer.get("addressLine") or buyer.get("address") or "",
                     "postalCode": "",
                     "city": "",
-                    "region": ""
+                    "region": (
+                                buyer.get("region")
+                                or buyer.get("state")
+                                or buyer.get("province")
+                            )
                 }
 
             contact = _extract_address_info()
@@ -603,13 +636,21 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         product = find_product_by_name(db, title)
                         mapping = mapping or (f"name:{title}" if product else None)
 
-                    if not product and is_valid_sku(sku):
-                        product = create_product_fallback(db, sku, title or "Auto Product")
-                        mapping = mapping or f"auto_by_sku:{sku}"
-
+                    # --- ENFORCE MISC PRODUCT FOR ALL UNKNOWN PRODUCTS ---
                     if not product:
-                        product = create_product_fallback(db, None, title or "Auto Product")
-                        mapping = mapping or "auto_by_title"
+                        misc_row = db.execute(
+                            text("SELECT product_id, name, sku_id, IFNULL(zoho_sku,'') AS zoho_sku FROM products WHERE sku_id = 'misc' LIMIT 1")
+                        ).first()
+
+                        if not misc_row:
+                            raise HTTPException(
+                                500,
+                                "Misc product (sku='misc') not found. Please create it in products table."
+                            )
+
+                        product = dict(misc_row._mapping)
+                        mapping = mapping or "misc_assigned"
+
 
                     pid = product.get("product_id") if product else None
                     invoice_desc = invoice_description_for_product(product)
@@ -744,8 +785,11 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                     logger.debug("Updated order %s (force mode)", wix_order_id)
 
                 db.commit()
-                inserted += 1
-                order_result["status"] = "inserted"
+                if not order_exists:
+                    inserted += 1
+                    order_result["status"] = "inserted"
+                else:
+                    order_result["status"] = "updated"
                 order_result["items"] = items_out
                 order_result["customer_id"] = customer_id
                 order_result["offline_customer_id"] = offline_customer_id
@@ -885,10 +929,12 @@ def reconcile_wix_orders(fix: Optional[int] = 0, limit: Optional[int] = 200, db:
     for w in wix_orders:
         order_report = {"wix_id": w.get("id"), "wix_number": w.get("number"), "db_order_id": None, "differences": [], "fixed": []}
         try:
-            # prefer number, fallback to id
-            wix_identifier = w.get("number") or w.get("id")
-            wix_order_id = safe_str(wix_identifier)
+            # Prefer number, fallback to id
+            wix_number = w.get("number") or fetch_wix_order_number(w.get("id")) or w.get("id")
+            raw_id = safe_str(wix_number).strip()
 
+            # Always prefix with WIX#
+            wix_order_id = f"WIX#{raw_id}"
             order_report["wix_order_id"] = wix_order_id
 
             # load DB order by order_id (match either number or UUID/id)
