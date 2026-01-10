@@ -8,6 +8,7 @@ export default function OrdersTable({
   onLoadMore,
   hasMore = true,
   isLoadingMore = false,
+  invoiceLoading = {},
 }) {
   const [expanded, setExpanded] = useState(null);
 
@@ -139,6 +140,7 @@ export default function OrdersTable({
               editingRemarksFor={editingRemarksFor}
               remarksValue={remarksValue}
               setRemarksValue={setRemarksValue}
+              invoiceLoading={invoiceLoading[order.order_id]}
               startEditRemarks={(o) => {
                 setEditingRemarksFor(o.order_id);
                 setRemarksValue(

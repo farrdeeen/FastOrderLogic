@@ -15,7 +15,9 @@ const OrderRow = memo(function OrderRow({
   setRemarksValue,
   startEditRemarks,
   submitRemarks,
+  invoiceLoading, // ✅ ADD THIS
 }) {
+
   if (!order) return null; // 🛡️ hard safety guard
 
   const serialStatus = details?.serial_status ?? "none";
@@ -102,10 +104,16 @@ const OrderRow = memo(function OrderRow({
         <td style={{ padding: 10 }}>
           {!order.invoice_number ? (
             <button
+              disabled={invoiceLoading}
               onClick={() => safeAction(order.order_id, "create-invoice")}
-              style={{ background: "transparent", border: "none", cursor: "pointer" }}
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: invoiceLoading ? "not-allowed" : "pointer",
+                opacity: invoiceLoading ? 0.5 : 1,
+              }}
             >
-              🧾
+              {invoiceLoading ? "⏳" : "🧾"}
             </button>
           ) : (
             <>
@@ -119,6 +127,7 @@ const OrderRow = memo(function OrderRow({
             </>
           )}
         </td>
+
 
         {/* DELETE */}
         <td style={{ padding: 10 }}>

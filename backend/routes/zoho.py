@@ -119,13 +119,27 @@ def zoho_headers():
 # --------------------------------------------------
 # ZOHO ITEM LOOKUP
 # --------------------------------------------------
+def normalize(s: str):
+    return s.strip().lower() if s else ""
+
 def get_zoho_item_by_sku(sku: str):
     r = requests.get(
         f"{ZOHO_API_BASE}/items",
         headers=zoho_headers(),
         params={"search_text": sku},
     ).json()
-    return r.get("items", [None])[0]
+
+    if r.get("code") != 0:
+        raise HTTPException(400, r)
+
+    norm_sku = normalize(sku)
+
+    for item in r.get("items", []):
+        if normalize(item.get("sku")) == norm_sku:
+            return item
+
+    return None
+
 
 # --------------------------------------------------
 # CREATE INVOICE (NEW PATH, OLD LOGIC)
@@ -286,6 +300,9 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
         ).scalar()
 
         z = get_zoho_item_by_sku(sku)
+        print("DB SKU:", sku)
+        print("ZOHO SEARCH RESPONSE:", z)
+
         if not z:
             raise HTTPException(400, f"SKU {sku} not found in Zoho")
 
@@ -300,7 +317,7 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
             "rate": rate_ex_gst,
             "description": desc,
         })
-
+    
     # -------------------------------
     # CREATE INVOICE
     # -------------------------------

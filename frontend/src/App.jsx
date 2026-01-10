@@ -57,6 +57,7 @@ export default function App() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
+const [invoiceLoading, setInvoiceLoading] = useState({});
 
 
   // dropdown data
@@ -146,16 +147,6 @@ const loadMoreOrders = async () => {
   }
 };
 
-useEffect(() => {
-  if (activePage !== "orders") return;
-  if (!hasMore || loadingMore) return;
-
-  const timer = setTimeout(() => {
-    loadMoreOrders();
-  }, 800); // adjust speed if needed
-
-  return () => clearTimeout(timer);
-}, [hasMore, loadingMore, activePage]);
 
   // ---------------- BACKGROUND REFRESH ----------------
   const backgroundRefresh = async () => {
@@ -263,12 +254,22 @@ useEffect(() => {
       }
 
       if (action === "create-invoice") {
-        await api.post(
-          `/zoho/invoice/${encodeURIComponent(orderId)}`
-        );
-        scheduleBackgroundRefresh();
-        return;
-      }
+          setInvoiceLoading((prev) => ({ ...prev, [orderId]: true }));
+
+          try {
+            await api.post(`/zoho/invoice/${encodeURIComponent(orderId)}`);
+            alert("✅ Invoice created successfully"); // ⭐ INSTANT FEEDBACK
+            scheduleBackgroundRefresh();
+          } catch (err) {
+            console.error(err);
+            alert("❌ Invoice creation failed");
+          } finally {
+            setInvoiceLoading((prev) => ({ ...prev, [orderId]: false }));
+          }
+          return;
+        }
+
+
 
       if (action === "download-invoice") {
         window.open(
@@ -404,12 +405,14 @@ useEffect(() => {
                 <CircularProgress sx={{ mt: 4 }} />
               ) : (
                 <OrdersTable
-                    orders={orders}
-                    onAction={handleAction}
-                    onLoadMore={loadMoreOrders}
-                    hasMore={hasMore}
-                    isLoadingMore={loadingMore}
-                  />
+                  orders={orders}
+                  onAction={handleAction}
+                  onLoadMore={loadMoreOrders}
+                  hasMore={hasMore}
+                  isLoadingMore={loadingMore}
+                  invoiceLoading={invoiceLoading} // ✅ ADD
+                />
+
 
               )}
             </Box>
