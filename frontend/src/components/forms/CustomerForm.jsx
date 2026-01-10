@@ -1,5 +1,5 @@
 import { useState } from "react";
-import axios from "axios";
+import api from "../../api/axiosInstance";
 import {
   Grid,
   TextField,
@@ -8,8 +8,6 @@ import {
   Typography,
   Box,
 } from "@mui/material";
-
-const API_URL = import.meta.env.VITE_API_URL;
 
 export default function CustomerForm({ onClose, onSuccess, states }) {
   const [form, setForm] = useState({
@@ -38,7 +36,7 @@ export default function CustomerForm({ onClose, onSuccess, states }) {
     }
 
     try {
-      await axios.post(`${API_URL}/customers/create`, form);
+      await api.post(`/customers/create`, form);
       alert("Customer added successfully!");
       onSuccess();
     } catch (err) {

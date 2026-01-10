@@ -1,37 +1,31 @@
 import { useState, useEffect } from "react";
 
 export default function SearchBar({ filters, setFilters }) {
-  const [searchType, setSearchType] = useState("search");
+  const [searchType, setSearchType] = useState("search"); // UI only
   const [query, setQuery] = useState("");
 
-  // 🔁 Dynamic live search (instant + smart debounce)
+  // 🔁 Live search with debounce (backend-compatible)
   useEffect(() => {
-    if (query.trim() === "") {
+    const q = query.trim();
+
+    if (!q) {
       setFilters((prev) => ({ ...prev, search: "" }));
       return;
     }
 
-    // Update instantly for short input (<3 chars)
-    if (query.length < 3) {
-      setFilters((prev) => ({
-        ...prev,
-        search: `${searchType}:${query.trim()}`,
-      }));
-      return;
-    }
+    const delay = q.length < 3 ? 0 : 200;
 
-    // Debounce longer queries (for smoother performance)
     const timeout = setTimeout(() => {
       setFilters((prev) => ({
         ...prev,
-        search: `${searchType}:${query.trim()}`,
+        search: q, // ✅ BACKEND EXPECTS RAW SEARCH STRING
       }));
-    }, 200);
+    }, delay);
 
     return () => clearTimeout(timeout);
-  }, [query, searchType]);
+  }, [query, setFilters]);
 
-  // 🔄 Handle filter dropdowns and dates
+  // 🔄 Handle dropdown filters & dates
   const handleFilterChange = (e) => {
     const { name, value } = e.target;
     setFilters((prev) => ({
@@ -67,7 +61,7 @@ export default function SearchBar({ filters, setFilters }) {
         boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
       }}
     >
-      {/* 🔽 Search type dropdown */}
+      {/* 🔽 Search type dropdown (UI only for now) */}
       <select
         value={searchType}
         onChange={(e) => setSearchType(e.target.value)}
@@ -90,7 +84,7 @@ export default function SearchBar({ filters, setFilters }) {
       {/* 🔍 Search input */}
       <input
         type={searchType === "total_amount" ? "number" : "text"}
-        placeholder={`Search by ${searchType.replace("_", " ")}`}
+        placeholder={`Search orders`}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         style={{
@@ -165,7 +159,7 @@ export default function SearchBar({ filters, setFilters }) {
         <option value="website">Website</option>
       </select>
 
-      {/* 📅 Date range filters */}
+      {/* 📅 Date filters */}
       <input
         type="date"
         name="date_from"

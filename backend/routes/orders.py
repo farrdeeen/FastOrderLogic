@@ -5,13 +5,31 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, or_, func, String
 from typing import Optional, List
 from datetime import datetime
-
+from auth.clerk_auth import get_current_user as require_user
+from fastapi import Depends
+from fastapi import Request
 from pydantic import BaseModel
 from database import SessionLocal
 from models import Order
+from sqlalchemy import Table, MetaData
 
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
+
+
+metadata = MetaData()
+
+customer_tbl = Table(
+    "customer",
+    metadata,
+    autoload_with=SessionLocal().bind
+)
+
+offline_customer_tbl = Table(
+    "offline_customer",
+    metadata,
+    autoload_with=SessionLocal().bind
+)
 
 
 def get_global_suffix(db):
@@ -200,17 +218,22 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 # ================================
 # LIST ORDERS (unchanged but cleaned)
 # ================================
-@router.get("/")
+@router.get("")
 def list_orders(
+    request: Request,
+    _= Depends(require_user),
     payment_status: Optional[str] = Query(None),
     delivery_status: Optional[str] = Query(None),
     channel: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    limit: int = Query(500, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
+    
 ):
-
+    print("AUTH HEADER:", request.headers.get("authorization"))
     query = db.query(Order)
 
     # FILTERS
@@ -229,16 +252,47 @@ def list_orders(
     if search:
         s = search.lower().strip()
         like = f"%{s}%"
-        query = query.filter(
-            or_(
-                func.lower(Order.order_id).like(like),
-                func.lower(Order.payment_status).like(like),
-                func.lower(Order.delivery_status).like(like),
-                func.cast(Order.awb_number, String).like(like)
+
+        query = (
+            query
+            .outerjoin(
+                customer_tbl,
+                customer_tbl.c.customer_id == Order.customer_id
+            )
+            .outerjoin(
+                offline_customer_tbl,
+                offline_customer_tbl.c.customer_id == Order.offline_customer_id
+            )
+            .filter(
+                or_(
+                    # Order fields
+                    func.lower(Order.order_id).like(like),
+                    func.lower(Order.payment_status).like(like),
+                    func.lower(Order.delivery_status).like(like),
+                    func.cast(Order.awb_number, String).like(like),
+
+                    # Online customer
+                    func.lower(customer_tbl.c.name).like(like),
+                    func.cast(customer_tbl.c.mobile, String).like(like),
+
+                    # Offline customer
+                    func.lower(offline_customer_tbl.c.name).like(like),
+                    func.cast(offline_customer_tbl.c.mobile, String).like(like),
+                )
             )
         )
 
-    results = query.order_by(Order.created_at.desc()).all()
+
+
+    results = (
+    query
+    .order_by(Order.created_at.desc())
+    .limit(limit)
+    .offset(offset)
+    .all()
+    )
+
+
     out = []
 
     for o in results:
@@ -247,11 +301,8 @@ def list_orders(
             for k, v in o.__dict__.items()
             if not k.startswith("_")
         }
-        
-        # ADD INVOICE NUMBER
-        base["invoice_number"] = o.invoice_number
 
-        # CUSTOMER
+        # CUSTOMER (lightweight, keep this)
         customer = None
         if o.customer_id:
             row = db.execute(
@@ -260,6 +311,7 @@ def list_orders(
             ).first()
             if row:
                 customer = dict(row._mapping)
+
         elif o.offline_customer_id:
             row = db.execute(
                 text("SELECT name, mobile, email FROM offline_customer WHERE customer_id=:cid"),
@@ -270,75 +322,12 @@ def list_orders(
 
         base["customer"] = customer
 
-        # ADDRESS
-        address = db.execute(
-            text("""
-                SELECT 
-                    a.address_id,
-                    a.name,
-                    a.mobile,
-                    a.pincode,
-                    a.address_line,
-                    a.city,
-                    a.state_id,
-                    s.name AS state_name,
-                    a.landmark
-                FROM address a
-                LEFT JOIN state s ON s.state_id = a.state_id
-                WHERE a.address_id = :aid
-            """),
-            {"aid": o.address_id}
-        ).first()
-        base["address"] = dict(address._mapping) if address else None
-
-        # ITEMS
-        items = db.execute(
-            text("""
-                SELECT oi.item_id, oi.product_id, p.name AS product_name,
-                       oi.quantity, oi.unit_price, oi.total_price
-                FROM order_items oi
-                LEFT JOIN products p ON p.product_id = oi.product_id
-                WHERE oi.order_id = :oid
-            """),
-            {"oid": o.order_id}
-        ).fetchall()
-
-        items = [dict(row._mapping) for row in items]
-        base["items"] = items
-
-        # ======================================================
-        # 🔥 FIXED SERIAL STATUS - using device_transaction OUT
-        # ======================================================
-        serial_rows = db.execute(text("""
-            SELECT 
-                oi.item_id,
-                COUNT(dt.device_srno) AS assigned
-            FROM order_items oi
-            LEFT JOIN products p ON p.product_id = oi.product_id
-            LEFT JOIN device_transaction dt
-                ON dt.order_id = oi.order_id
-                AND dt.sku_id = p.sku_id
-                AND dt.in_out = 2
-            WHERE oi.order_id = :oid
-            GROUP BY oi.item_id
-        """), {"oid": o.order_id}).fetchall()
-
-        serial_map = {r.item_id: r.assigned for r in serial_rows}
-
-        total_required = sum(it["quantity"] for it in items)
-        total_assigned = sum(serial_map.get(it["item_id"], 0) for it in items)
-
-        if total_assigned == 0:
-            base["serial_status"] = "none"
-        elif total_assigned < total_required:
-            base["serial_status"] = "partial"
-        else:
-            base["serial_status"] = "complete"
-        # ======================================================
-
+        # ⚠️ IMPORTANT:
+        # DO NOT load address, items, serials here anymore
         out.append(base)
 
     return out
+
 
 
 
@@ -753,3 +742,77 @@ def delete_order(order_id: str, db: Session = Depends(get_db)):
         db.rollback()
         print("Order delete error:", e)
         raise HTTPException(status_code=500, detail="Failed to delete order")
+    
+@router.get("/{order_id:path}/details")
+def get_order_details(order_id: str, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    # ADDRESS
+    address = db.execute(
+        text("""
+            SELECT 
+                a.address_id,
+                a.name,
+                a.mobile,
+                a.pincode,
+                a.address_line,
+                a.city,
+                a.state_id,
+                s.name AS state_name,
+                a.landmark
+            FROM address a
+            LEFT JOIN state s ON s.state_id = a.state_id
+            WHERE a.address_id = :aid
+        """),
+        {"aid": order.address_id}
+    ).first()
+
+    # ITEMS
+    items = db.execute(
+        text("""
+            SELECT oi.item_id, oi.product_id, p.name AS product_name,
+                   oi.quantity, oi.unit_price, oi.total_price
+            FROM order_items oi
+            LEFT JOIN products p ON p.product_id = oi.product_id
+            WHERE oi.order_id = :oid
+        """),
+        {"oid": order_id}
+    ).fetchall()
+
+    items = [dict(row._mapping) for row in items]
+
+    # SERIAL STATUS (reuse your correct logic)
+    serial_rows = db.execute(text("""
+        SELECT 
+            oi.item_id,
+            COUNT(dt.device_srno) AS assigned
+        FROM order_items oi
+        LEFT JOIN products p ON p.product_id = oi.product_id
+        LEFT JOIN device_transaction dt
+            ON dt.order_id = oi.order_id
+            AND dt.sku_id = p.sku_id
+            AND dt.in_out = 2
+        WHERE oi.order_id = :oid
+        GROUP BY oi.item_id
+    """), {"oid": order_id}).fetchall()
+
+    serial_map = {r.item_id: r.assigned for r in serial_rows}
+
+    total_required = sum(it["quantity"] for it in items)
+    total_assigned = sum(serial_map.get(it["item_id"], 0) for it in items)
+
+    if total_assigned == 0:
+        serial_status = "none"
+    elif total_assigned < total_required:
+        serial_status = "partial"
+    else:
+        serial_status = "complete"
+
+    return {
+        "address": dict(address._mapping) if address else None,
+        "items": items,
+        "remarks": order.remarks,
+        "serial_status": serial_status,
+    }

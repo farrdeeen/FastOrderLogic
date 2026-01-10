@@ -157,28 +157,7 @@ export default function NavDrawer({ onNavigate }) {
 
   return (
     <Box sx={{ display: "flex" }}>
-      {/* AppBar */}
-      <AppBar
-        position="fixed"
-        sx={{
-          zIndex: (theme) => theme.zIndex.drawer + 1,
-          backgroundColor: "#010101ff",
-        }}
-      >
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            edge="start"
-            onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { sm: "none" } }}
-          >
-            <MenuIcon />
-          </IconButton>
-          <Typography variant="h6" noWrap color="white">
-            FastOrderLogic Dashboard
-          </Typography>
-        </Toolbar>
-      </AppBar>
+      
 
       {/* Permanent drawer */}
       <Drawer

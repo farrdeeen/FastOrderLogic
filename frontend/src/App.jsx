@@ -1,16 +1,23 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
+import {
+  SignedIn,
+  SignedOut,
+  SignIn,
+  UserButton,
+} from "@clerk/clerk-react";
 
+import { useEffect, useRef, useState } from "react";
+import api from "./api/axiosInstance";
+import { useAuth } from "@clerk/clerk-react";
 import OrdersTable from "./components/OrdersTable";
 import SearchBar from "./components/SearchBar";
 import CreateOrderForm from "./components/CreateOrderForm";
 import NavDrawer from "./components/NavDrawer";
 import ChatPage from "./components/chat/ChatPage";
-import { Dialog, DialogTitle, DialogContent } from "@mui/material";
-
-import CustomerForm from "./components/forms/CustomerForm";
 
 import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
   Autocomplete,
   TextField,
   createFilterOptions,
@@ -20,12 +27,15 @@ import {
   Button,
   Fade,
   Paper,
-  Modal,
 } from "@mui/material";
+
+import CustomerForm from "./components/forms/CustomerForm";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function App() {
+  // ---------------- STATE ----------------
+  const { isLoaded, isSignedIn } = useAuth();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -41,163 +51,263 @@ export default function App() {
 
   const [activePage, setActivePage] = useState("orders");
 
-  // Dropdowns
+  const PAGE_SIZE = 50;
+
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+
+
+  // dropdown data
   const [productList, setProductList] = useState([]);
   const [customerList, setCustomerList] = useState([]);
   const [statesList, setStatesList] = useState([]);
 
+  // selections
   const [selectedProduct, setSelectedProduct] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState("");
+  const [addressList, setAddressList] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
 
-  // Modal state
+  // modals
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
 
-  // Filter for Autocomplete
+  // background refresh
+  const refreshTimer = useRef(null);
+
+  // ---------------- FILTER HELPERS ----------------
   const customerFilter = createFilterOptions({
-    stringify: (option) =>
-      `${option.name} ${option.type} ${option.mobile ?? ""}`.toLowerCase(),
+    stringify: (o) =>
+      `${o.name} ${o.type} ${o.mobile ?? ""}`.toLowerCase(),
   });
 
   const pageTitle = {
-    dashboard: "📊 Dashboard Overview",
     orders: "📦 Orders Management",
-    payments: "💰 Payment Summary",
-    settings: "⚙️ Settings",
     chat: "💬 Chat Support",
     "create-order": "🆕 Create New Order",
   }[activePage];
 
-  // Fetch orders
+  // ---------------- FETCH ORDERS ----------------
   useEffect(() => {
-    if (activePage === "orders") fetchOrders();
-  }, [filters, activePage]);
+  if (!isLoaded || !isSignedIn) return;
+  if (activePage !== "orders") return;
+
+  setOffset(0);
+  setHasMore(true);
+  fetchOrders();
+}, [filters, activePage, isLoaded, isSignedIn]);
+
+
 
   const fetchOrders = async () => {
-    setLoading(true);
+  setLoading(true);
+  try {
+    const res = await api.get("/orders", {
+      params: {
+        ...filters,
+        limit: PAGE_SIZE,
+        offset: 0,
+      },
+    });
+
+    const data = res.data || [];
+    setOrders(data);
+    setOffset(data.length);
+    setHasMore(data.length === PAGE_SIZE);
+  } catch (err) {
+    console.error(err);
+  } finally {
+    setLoading(false);
+  }
+};
+
+const loadMoreOrders = async () => {
+  if (!hasMore || loadingMore) return;
+
+  setLoadingMore(true);
+  try {
+    const res = await api.get("/orders", {
+      params: {
+        ...filters,
+        limit: PAGE_SIZE,
+        offset,
+      },
+    });
+
+    const data = res.data || [];
+    setOrders((prev) => [...prev, ...data]);
+    setOffset((prev) => prev + data.length);
+    setHasMore(data.length === PAGE_SIZE);
+  } catch (err) {
+    console.error(err);
+  } finally {
+    setLoadingMore(false);
+  }
+};
+
+useEffect(() => {
+  if (activePage !== "orders") return;
+  if (!hasMore || loadingMore) return;
+
+  const timer = setTimeout(() => {
+    loadMoreOrders();
+  }, 800); // adjust speed if needed
+
+  return () => clearTimeout(timer);
+}, [hasMore, loadingMore, activePage]);
+
+  // ---------------- BACKGROUND REFRESH ----------------
+  const backgroundRefresh = async () => {
     try {
-      const res = await axios.get(`${API_URL}/orders`, { params: filters });
+      const res = await api.get('/orders', {
+        params: filters,
+      });
       setOrders(res.data || []);
-    } catch (err) {
-      console.error("Fetch orders error:", err);
-      setOrders([]);
-    } finally {
-      setLoading(false);
+    } catch {
+      console.warn("Background refresh failed");
     }
   };
 
-  // Load dropdowns when create-order page opens
+  const scheduleBackgroundRefresh = () => {
+    clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(backgroundRefresh, 1200);
+  };
+
+  // ---------------- DROPDOWNS ----------------
   useEffect(() => {
     if (activePage !== "create-order") return;
 
-    axios
-      .get(`${API_URL}/dropdowns/products/list`)
-      .then((res) => setProductList(res.data || []))
-      .catch(console.error);
+    api.get('/dropdowns/products/list')
+      .then((r) => setProductList(r.data || []));
 
-    axios
-      .get(`${API_URL}/dropdowns/customers/list`)
-      .then((res) => setCustomerList(res.data || []))
-      .catch(console.error);
+    api.get('/dropdowns/customers/list')
+      .then((r) => setCustomerList(r.data || []));
 
-    axios
-      .get(`${API_URL}/states/list`)
-      .then((res) => setStatesList(res.data || []))
-      .catch(console.error);
+    api.get('/states/list')
+      .then((r) => setStatesList(r.data || []));
   }, [activePage]);
 
-  // Sync Wix
+  // ---------------- CUSTOMER → ADDRESS ----------------
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setAddressList([]);
+      setSelectedAddressId(null);
+      return;
+    }
+
+    const [type, id] = selectedCustomer.split(":");
+
+    api
+      .get(`/customers/${type}/${id}/addresses`)
+      .then((res) => {
+        setAddressList(res.data || []);
+        setSelectedAddressId(null);
+      })
+      .catch((err) => {
+        console.error("Failed to load addresses", err);
+        setAddressList([]);
+      });
+  }, [selectedCustomer]);
+
+  // ---------------- SYNC WIX ----------------
   const handleSyncWix = async () => {
     try {
       setSyncing(true);
-      const res = await axios.get(`${API_URL}/sync/wix`);
-      alert(`Wix Sync Completed\nInserted: ${res.data.inserted}\nSkipped: ${res.data.skipped}`);
+      const res = await api.get('/sync/wix');
+      alert(
+        `Wix Sync Completed\nInserted: ${res.data.inserted}\nSkipped: ${res.data.skipped}`
+      );
       fetchOrders();
-    } catch (err) {
-      console.error(err);
+    } catch {
       alert("❌ Wix sync failed");
     } finally {
       setSyncing(false);
     }
   };
 
-  // Create Zoho Invoice
-  const handleCreateInvoice = async (order) => {
-    if (!order) return alert("Order not found");
-
-    try {
-      const res = await axios.post(`${API_URL}/zoho/invoice`, order);
-      console.log(res.data);
-      alert("Invoice created!");
-      fetchOrders();
-    } catch (err) {
-      console.error(err);
-      alert("❌ Invoice creation failed");
-    }
+  // ---------------- LOCAL UPDATE ----------------
+  const updateOrderLocal = (id, updater) => {
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.order_id === id ? { ...o, ...updater(o) } : o
+      )
+    );
   };
 
-  // PUT actions
-  const callSimplePut = async (orderId, actionPath) => {
-    const url = `${API_URL}/orders/${encodeURIComponent(orderId)}/${actionPath}`;
-    return axios.put(url);
-  };
-
+  // ---------------- ACTION HANDLER ----------------
   const handleAction = async (orderId, action, payload) => {
     try {
       if (action === "update-delivery") {
-        await axios.put(`${API_URL}/orders/${encodeURIComponent(orderId)}/update-delivery`, {
-          status: payload,
-        });
-        return fetchOrders();
+        updateOrderLocal(orderId, () => ({
+          delivery_status: payload,
+        }));
+        await api.put(
+          `/orders/${encodeURIComponent(orderId)}/update-delivery`,
+          { status: payload }
+        );
+        scheduleBackgroundRefresh();
+        return;
+      }
+
+      if (action === "toggle-payment") {
+        updateOrderLocal(orderId, (o) => ({
+          payment_status:
+            o.payment_status === "paid" ? "pending" : "paid",
+        }));
+        await api.put(
+          `/orders/${encodeURIComponent(orderId)}/toggle-payment`
+        );
+        scheduleBackgroundRefresh();
+        return;
       }
 
       if (action === "create-invoice") {
-        const order = orders.find((o) => o.order_id === orderId);
-        return handleCreateInvoice(order);
+        await api.post(
+          `/zoho/invoice/${encodeURIComponent(orderId)}`
+        );
+        scheduleBackgroundRefresh();
+        return;
       }
 
       if (action === "download-invoice") {
-        window.open(`${API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`);
+        window.open(
+          `${API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`
+        );
         return;
       }
 
       if (action === "update-remarks") {
-        await axios.put(`${API_URL}/orders}/remarks`, {
+        updateOrderLocal(orderId, () => ({
           remarks: payload,
-        });
-        return fetchOrders();
+        }));
+        await api.put(
+          `/orders/${encodeURIComponent(orderId)}/remarks`,
+          { remarks: payload }
+        );
+        scheduleBackgroundRefresh();
+        return;
       }
 
-      const simpleActions = ["toggle-payment", "mark-paid", "mark-fulfilled", "mark-delhivery", "mark-invoiced"];
-      if (simpleActions.includes(action)) {
-        await callSimplePut(orderId, action);
-        return fetchOrders();
-      }
       if (action === "serial-status-updated") {
-        // Update serial status in the local orders array
-        setOrders(prev =>
-          prev.map(o =>
-            o.order_id === orderId
-              ? { ...o, serial_status: payload }
-              : o
-          )
+        updateOrderLocal(orderId, () => ({
+          serial_status: payload,
+        }));
+        return;
+      }
+
+      if (action === "delete-order") {
+        if (!window.confirm("Delete this order?")) return;
+        await api.delete(
+          `/orders/${encodeURIComponent(orderId)}`
+        );
+        setOrders((prev) =>
+          prev.filter((o) => o.order_id !== orderId)
         );
         return;
       }
-      if (action === "delete-order") {
-        try {
-          await axios.delete(`${API_URL}/orders/${encodeURIComponent(orderId)}`);
-          alert("Order deleted successfully!");
-          fetchOrders();
-        } catch (err) {
-          console.error(err);
-          alert("Failed to delete order");
-        }
-        return;
-      }
-
-      console.warn("Unknown action:", action);
     } catch (err) {
-      console.error("Action error:", err);
+      console.error(err);
       alert("❌ Action failed");
     }
   };
@@ -207,182 +317,253 @@ export default function App() {
     setActivePage(section);
   };
 
-  // After customer is saved → refresh list + auto-select latest
+  // ---------------- CUSTOMER CREATE ----------------
   const refreshCustomersAfterCreate = async () => {
-    try {
-      const res = await axios.get(`${API_URL}/dropdowns/customers/list`);
-      const list = res.data || [];
-      setCustomerList(list);
+    const res = await api.get('/dropdowns/customers/list');
+    const list = res.data || [];
+    setCustomerList(list);
 
-      if (list.length) {
-        const last = list[list.length - 1];
-        setSelectedCustomer(`${last.type}:${last.id}`);
-      }
-
-      setCustomerModalOpen(false);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to refresh customers");
+    if (list.length) {
+      const last = list[list.length - 1];
+      setSelectedCustomer(`${last.type}:${last.id}`);
     }
+
+    setCustomerModalOpen(false);
   };
 
+  // ---------------- UI ----------------
   return (
-    <Box sx={{ display: "flex", fontFamily: "Inter, sans-serif" }}>
-      <NavDrawer onNavigate={handleNavigate} />
-
+  <>
+    {/* ================= SIGNED OUT ================= */}
+    <SignedOut>
       <Box
-        component="main"
         sx={{
-          flexGrow: 1,
-          p: { xs: 2, sm: 4 },
-          backgroundColor: "#f9fafb",
           minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f9fafb",
         }}
       >
-        <Typography variant="h5" sx={{ fontWeight: 600, mb: 3 }}>
-          {pageTitle}
-        </Typography>
+        <SignIn />
+      </Box>
+    </SignedOut>
 
-        {/* ORDERS PAGE */}
-        <Fade in={activePage === "orders"} timeout={300} unmountOnExit>
-          <Box>
-            <Button
-              variant="contained"
-              onClick={handleSyncWix}
-              disabled={syncing}
-              sx={{ backgroundColor: "#020202ff", mb: 2 }}
-            >
-              {syncing ? "Syncing..." : "🔄 Sync Wix Orders"}
-            </Button>
+    {/* ================= SIGNED IN ================= */}
+    <SignedIn>
+      <Box sx={{ display: "flex", fontFamily: "Inter, sans-serif" }}>
+        <NavDrawer onNavigate={handleNavigate} />
 
-            <Button
-              variant="contained"
-              onClick={() => setActivePage("create-order")}
-              sx={{ backgroundColor: "#000", mb: 2, ml: 2 }}
-            >
-              ➕ Create Order
-            </Button>
+        <Box
+          component="main"
+          sx={{ flexGrow: 1, p: 4, background: "#f9fafb" }}
+        >
+          {/* TOP BAR */}
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              mb: 3,
+            }}
+          >
+            <Typography variant="h5" sx={{ fontWeight: 600 }}>
+              {pageTitle}
+            </Typography>
 
-            <SearchBar filters={filters} setFilters={setFilters} />
-
-            {loading ? (
-              <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
-                <CircularProgress />
-              </Box>
-            ) : (
-              <OrdersTable orders={orders} onAction={handleAction} />
-            )}
+            {/* USER MENU */}
+            <UserButton afterSignOutUrl="/" />
           </Box>
-        </Fade>
 
-        {/* CREATE ORDER PAGE */}
-        <Fade in={activePage === "create-order"} timeout={300} unmountOnExit>
-          <Paper sx={{ p: 3, borderRadius: 3 }}>
-            <Button
-              variant="outlined"
-              onClick={() => setActivePage("orders")}
-              sx={{ mb: 3 }}
-            >
-              ⬅ Back to Orders
-            </Button>
-
-            {/* SEARCH DROPDOWNS */}
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-                gap: 2,
-                mb: 3,
-              }}
-            >
-              <Autocomplete
-                freeSolo
-                options={productList.map((p) => ({ id: p.id, label: p.name }))}
-                onChange={(e, v) => v && setSelectedProduct(v.id)}
-                renderInput={(params) => <TextField {...params} label="Search Product…" />}
-              />
-
-              <Autocomplete
-                options={customerList}
-                filterOptions={customerFilter}
-                getOptionLabel={(c) => `${c.name} (${c.type})`}
-                value={
-                  customerList.find((c) => `${c.type}:${c.id}` === selectedCustomer) ||
-                  null
-                }
-                onChange={(e, v) =>
-                  v ? setSelectedCustomer(`${v.type}:${v.id}`) : setSelectedCustomer("")
-                }
-                renderInput={(params) => <TextField {...params} label="Select Customer…" />}
-              />
-            </Box>
-
-            {/* ACTION BUTTONS */}
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: 2,
-                background: "#f8fafc",
-                p: 2,
-                borderRadius: "12px",
-                mb: 3,
-              }}
-            >
-              <Button variant="contained" sx={{ background: "#2563eb" }}>
-                Browse Products
+          {/* ================= ORDERS ================= */}
+          <Fade in={activePage === "orders"} unmountOnExit>
+            <Box>
+              <Button
+                variant="contained"
+                onClick={handleSyncWix}
+                disabled={syncing}
+                sx={{ mb: 2 }}
+              >
+                {syncing ? "Syncing..." : "🔄 Sync Wix Orders"}
               </Button>
 
               <Button
                 variant="contained"
-                sx={{ background: "#22c55e" }}
-                onClick={() => setCustomerModalOpen(true)}
+                sx={{ mb: 2, ml: 2 }}
+                onClick={() => setActivePage("create-order")}
               >
-                Add Customer
+                ➕ Create Order
               </Button>
+
+              <SearchBar
+                filters={filters}
+                setFilters={setFilters}
+              />
+
+              {loading ? (
+                <CircularProgress sx={{ mt: 4 }} />
+              ) : (
+                <OrdersTable
+                    orders={orders}
+                    onAction={handleAction}
+                    onLoadMore={loadMoreOrders}
+                    hasMore={hasMore}
+                    isLoadingMore={loadingMore}
+                  />
+
+              )}
             </Box>
+          </Fade>
 
-            <CreateOrderForm
-              onOrderCreated={() => setActivePage("orders")}
-              selectedCustomer={selectedCustomer}
-              selectedProduct={selectedProduct}
-            />
-          </Paper>
-        </Fade>
+          {/* ================= CREATE ORDER ================= */}
+          <Fade in={activePage === "create-order"} unmountOnExit>
+            <Paper sx={{ p: 3, borderRadius: 3 }}>
+              <Button
+                variant="outlined"
+                onClick={() => setActivePage("orders")}
+                sx={{ mb: 3 }}
+              >
+                ⬅ Back to Orders
+              </Button>
 
-        {/* OTHER PAGES */}
-        <Fade in={activePage === "payments"} timeout={200} unmountOnExit>
-          <Typography>Payment logs will appear here.</Typography>
-        </Fade>
+              {/* PRODUCT + CUSTOMER + ADDRESS */}
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+                  gap: 2,
+                  mb: 3,
+                }}
+              >
+                <Autocomplete
+                  freeSolo
+                  options={productList.map((p) => ({
+                    id: p.id,
+                    label: p.name,
+                  }))}
+                  onChange={(e, v) => v && setSelectedProduct(v.id)}
+                  renderInput={(params) => (
+                    <TextField {...params} label="Search Product…" />
+                  )}
+                />
 
-        <Fade in={activePage === "settings"} timeout={200} unmountOnExit>
-          <Typography>Settings coming soon.</Typography>
-        </Fade>
+                <Autocomplete
+                  options={customerList}
+                  filterOptions={customerFilter}
+                  getOptionLabel={(c) => `${c.name} (${c.type})`}
+                  value={
+                    customerList.find(
+                      (c) =>
+                        `${c.type}:${c.id}` === selectedCustomer
+                    ) || null
+                  }
+                  onChange={(e, v) =>
+                    v
+                      ? setSelectedCustomer(`${v.type}:${v.id}`)
+                      : setSelectedCustomer("")
+                  }
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Select Customer…"
+                    />
+                  )}
+                />
 
-        <Fade in={activePage === "chat"} timeout={200} unmountOnExit>
-          <ChatPage />
-        </Fade>
+                {addressList.length > 0 && (
+                  <Autocomplete
+                    options={addressList}
+                    getOptionLabel={(a) =>
+                      `${a.address_line}, ${a.city} - ${a.pincode}`
+                    }
+                    value={
+                      addressList.find(
+                        (a) =>
+                          a.address_id === selectedAddressId
+                      ) || null
+                    }
+                    onChange={(e, v) =>
+                      setSelectedAddressId(
+                        v ? v.address_id : null
+                      )
+                    }
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Select Address…"
+                      />
+                    )}
+                  />
+                )}
+              </Box>
 
-        {/* CUSTOMER CREATE MODAL */}
-        <Dialog
-          open={customerModalOpen}
-          onClose={() => setCustomerModalOpen(false)}
-          maxWidth="md"
-          fullWidth
-        >
-          <DialogTitle sx={{ fontWeight: 600 }}>Create Customer</DialogTitle>
+              {/* ACTION BUTTONS */}
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 2,
+                  background: "#f8fafc",
+                  p: 2,
+                  borderRadius: "12px",
+                  mb: 3,
+                }}
+              >
+                <Button
+                  variant="contained"
+                  sx={{ background: "#2563eb" }}
+                >
+                  Browse Products
+                </Button>
 
-          <DialogContent sx={{ pb: 3 }}>
-            <CustomerForm
-              states={statesList}
-              onClose={() => setCustomerModalOpen(false)}
-              onSuccess={refreshCustomersAfterCreate}
-            />
-          </DialogContent>
-        </Dialog>
+                <Button
+                  variant="contained"
+                  sx={{ background: "#22c55e" }}
+                  onClick={() => setCustomerModalOpen(true)}
+                >
+                  ➕ Add Customer
+                </Button>
+              </Box>
 
+              <CreateOrderForm
+                onOrderCreated={() => {
+                  setActivePage("orders");
+                  fetchOrders();
+                }}
+                selectedCustomer={selectedCustomer}
+                selectedProduct={selectedProduct}
+                selectedAddressId={selectedAddressId}
+              />
+            </Paper>
+          </Fade>
 
+          {/* ================= CHAT ================= */}
+          <Fade in={activePage === "chat"} unmountOnExit>
+            <ChatPage />
+          </Fade>
+
+          {/* ================= CUSTOMER MODAL ================= */}
+          <Dialog
+            open={customerModalOpen}
+            onClose={() => setCustomerModalOpen(false)}
+            maxWidth="md"
+            fullWidth
+          >
+            <DialogTitle>Create Customer</DialogTitle>
+            <DialogContent>
+              <CustomerForm
+                states={statesList}
+                onClose={() =>
+                  setCustomerModalOpen(false)
+                }
+                onSuccess={refreshCustomersAfterCreate}
+              />
+            </DialogContent>
+          </Dialog>
+        </Box>
       </Box>
-    </Box>
-  );
+    </SignedIn>
+  </>
+);
 }

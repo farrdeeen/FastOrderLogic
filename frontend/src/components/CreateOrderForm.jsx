@@ -1,7 +1,7 @@
 // src/components/CreateOrderForm.jsx
 import React, { useEffect, useState, useMemo } from "react";
 import { useForm } from "react-hook-form";
-import axios from "axios";
+import api from "../api/axiosInstance";
 
 import {
   Box,
@@ -25,8 +25,6 @@ import {
 } from "@mui/material";
 
 import CloseIcon from "@mui/icons-material/Close";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export default function CreateOrderForm({
   onOrderCreated,
@@ -66,14 +64,14 @@ export default function CreateOrderForm({
   // Load products + states
   useEffect(() => {
     setLoadingProducts(true);
-    axios
-      .get(`${API_URL}/dropdowns/products/list`)
+    api
+      .get(`/dropdowns/products/list`)
       .then((res) => setProductList(res.data || []))
       .catch((err) => console.error("Products load error:", err))
       .finally(() => setLoadingProducts(false));
 
-    axios
-      .get(`${API_URL}/states/list`)
+    api
+      .get(`/states/list`)
       .then((res) => setStatesList(res.data || []))
       .catch((err) => {
         console.error("States load error:", err);
@@ -126,8 +124,8 @@ export default function CreateOrderForm({
       setValue("offline_customer_id", Number.isFinite(numericId) ? numericId : null);
     }
 
-    axios
-      .get(`${API_URL}/dropdowns/customers/details`, { params: { type, id } })
+    api
+      .get(`/dropdowns/customers/details`, { params: { type, id } })
       .then((res) => {
         setCustomerDetails(res.data || null);
       })
@@ -136,8 +134,8 @@ export default function CreateOrderForm({
         setCustomerDetails(null);
       });
 
-    axios
-      .get(`${API_URL}/dropdowns/customers/${type}/${id}/addresses`)
+    api
+      .get(`/dropdowns/customers/${type}/${id}/addresses`)
       .then((res) => {
         const list = res.data || [];
         setAddresses(list);
@@ -158,8 +156,8 @@ export default function CreateOrderForm({
             },
           }));
         } else {
-          axios
-            .get(`${API_URL}/dropdowns/customers/details`, { params: { type, id } })
+          api
+            .get(`/dropdowns/customers/details`, { params: { type, id } })
             .then((r2) => {
               const adr = r2.data?.address;
               if (!adr) return;
@@ -188,12 +186,12 @@ export default function CreateOrderForm({
   const addProductById = async (productId) => {
     if (!productId) return;
     try {
-      const res = await axios.get(`${API_URL}/dropdowns/products/details`, {
+      const res = await api.get(`/dropdowns/products/details`, {
         params: { id: productId },
       });
       const product = res.data || {};
 
-      const priceRes = await axios.get(`${API_URL}/dropdowns/products/get_price`, {
+      const priceRes = await api.get(`/dropdowns/products/get_price`, {
         params: { product_id: productId },
       });
 
@@ -366,10 +364,10 @@ export default function CreateOrderForm({
         address_type: newAddr.address_type ?? "home",
       };
 
-      await axios.post(`${API_URL}/customers/address/create`, body);
+      await api.post(`/customers/address/create`, body);
 
-      const res = await axios.get(
-        `${API_URL}/dropdowns/customers/${type}/${id}/addresses`
+      const res = await api.get(
+        `/dropdowns/customers/${type}/${id}/addresses`
       );
       const list = res.data || [];
       setAddresses(list);
@@ -473,7 +471,7 @@ export default function CreateOrderForm({
     console.log("FINAL PAYLOAD →", payload);
 
     try {
-      await axios.post(`${API_URL}/orders/create`, payload);
+      await api.post(`/orders/create`, payload);
       alert("Order created successfully!");
 
       reset();
