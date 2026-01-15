@@ -59,17 +59,29 @@ const OrderRow = memo(function OrderRow({
 
         {/* PAYMENT (badge only — no tick) */}
         <td style={{ padding: 10 }}>
-          <span
-            style={{
-              background: order.payment_status === "paid" ? "#16a34a" : "#dc2626",
-              color: "white",
-              padding: "3px 8px",
-              borderRadius: 6,
-            }}
-          >
-            {order.payment_status === "paid" ? "Paid" : "Pending"}
-          </span>
-        </td>
+  <button
+    disabled={!!order.invoice_number}
+    onClick={() => safeAction(order.order_id, "toggle-payment")}
+    style={{
+      background: order.payment_status === "paid" ? "#16a34a" : "#dc2626",
+      color: "white",
+      padding: "4px 10px",
+      borderRadius: 6,
+      border: "none",
+      cursor: order.invoice_number ? "not-allowed" : "pointer",
+      opacity: order.invoice_number ? 0.6 : 1,
+      fontWeight: 500,
+    }}
+    title={
+      order.invoice_number
+        ? "Payment status locked after invoice generation"
+        : "Click to toggle payment status"
+    }
+  >
+    {order.payment_status === "paid" ? "Paid" : "Pending"}
+  </button>
+</td>
+
 
         {/* SERIALS */}
         <td style={{ padding: 10 }}>
