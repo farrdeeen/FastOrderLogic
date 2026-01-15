@@ -189,12 +189,7 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         new_total_price = round(new_unit_price * it.qty, 2)
 
 
-        print(
-            f"PRODUCT {it.product_id}: original={it.final_unit_price}, "
-            f"unit+delivery={new_unit_price}, qty={it.qty}, total={new_total_price}"
-        )
-
-        db.execute(text("""
+        result=db.execute(text("""
             INSERT INTO order_items
             (order_id, product_id, quantity, unit_price, total_price)
             VALUES (:oid, :pid, :qty, :unit, :line_total)
@@ -205,6 +200,18 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
             "unit": new_unit_price,
             "line_total": new_total_price
         })
+        item_id = result.lastrowid
+        db.execute(text("""
+            INSERT INTO order_details
+                (item_id, order_id, product_id, sr_no)
+            VALUES
+                (:item_id, :order_id, :product_id, NULL)
+        """), {
+            "item_id": item_id,
+            "order_id": order_id,
+            "product_id": it.product_id
+        })
+
 
     db.commit()
 

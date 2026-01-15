@@ -147,6 +147,20 @@ const loadMoreOrders = async () => {
   }
 };
 
+// ================= BACKGROUND PREFETCH =================
+useEffect(() => {
+  if (activePage !== "orders") return;
+  if (!hasMore) return;
+  if (loadingMore) return;
+  if (loading) return; // wait for first page
+
+  const timer = setTimeout(() => {
+    loadMoreOrders();
+  }, 800); // background interval
+
+  return () => clearTimeout(timer);
+}, [activePage, hasMore, loadingMore, loading]);
+
 
   // ---------------- BACKGROUND REFRESH ----------------
   const backgroundRefresh = async () => {
