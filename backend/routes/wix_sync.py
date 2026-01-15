@@ -348,6 +348,26 @@ def create_address(db: Session, payload: Dict):
     return db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
 
 # ---------------------------
+# Order Details helper (LEGACY REQUIRED)
+# ---------------------------
+def insert_order_details(db: Session, order_id: str, item_id: int, product_id: int):
+    """
+    Ensures legacy compatibility.
+    Must be called AFTER inserting into order_items.
+    """
+    db.execute(text("""
+        INSERT INTO order_details
+            (item_id, order_id, product_id, sr_no)
+        VALUES
+            (:item_id, :order_id, :product_id, NULL)
+    """), {
+        "item_id": item_id,
+        "order_id": order_id,
+        "product_id": product_id
+    })
+
+
+# ---------------------------
 # Utilities
 # ---------------------------
 def get_next_order_index(db: Session) -> int:
@@ -831,7 +851,7 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                     subtotal_sum += total_price
 
                     # Insert order_items
-                    db.execute(text("""
+                    result = db.execute(text("""
                         INSERT INTO order_items (order_id, product_id, model_id, color_id,
                                                  quantity, unit_price, total_price)
                         VALUES (:oid, :pid, NULL, NULL, :qty, :unit, :total)
@@ -842,6 +862,16 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         "unit": unit_price,
                         "total": total_price
                     })
+                    item_id = result.lastrowid
+
+                    # 🔴 LEGACY REQUIRED INSERT
+                    insert_order_details(
+                        db=db,
+                        order_id=wix_order_id,
+                        item_id=item_id,
+                        product_id=item["product_id"]
+                    )
+                    
                 except Exception as e:
                     logger.exception("order_item insert failed: %s", e)
                     order_result["reasons"].append(f"order_item_insert_failed:{e}")
