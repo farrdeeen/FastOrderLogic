@@ -106,7 +106,6 @@ export default function OrdersTable({
           <tr style={{ background: "#e5e7eb" }}>
             {[
               "",
-              "Order ID",
               "Customer",
               "Created",
               "Items",
