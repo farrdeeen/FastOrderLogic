@@ -238,6 +238,47 @@ def split_address(address_line: str) -> tuple[str, str]:
     return (s[:split_at].strip(), s[split_at:].strip())
 
 
+
+# --------------------------------------------------
+# SALESPERSONS LIST
+# --------------------------------------------------
+@router.get("/salespersons")
+def get_salespersons():
+    """
+    Returns active salespersons from Zoho for the frontend dropdown.
+    Response shape: {"salespersons": [{"salesperson_id": "...", "name": "..."}]}
+    """
+    r = requests.get(
+        f"{ZOHO_API_BASE}/users",
+        headers=zoho_headers(),
+    ).json()
+
+    if r.get("code") != 0:
+        raise HTTPException(400, r)
+
+    salespersons = [
+        {
+            "salesperson_id": u["user_id"],
+            "name": u["name"],
+        }
+        for u in r.get("users", [])
+        if u.get("is_active", False)
+    ]
+
+    return {"salespersons": salespersons}
+
+
+# --------------------------------------------------
+# CREATE INVOICE — request body schema
+# --------------------------------------------------
+from pydantic import BaseModel
+from typing import Optional
+
+class InvoiceRequest(BaseModel):
+    salesperson_id: Optional[str] = None
+
+
+DEFAULT_SALESPERSON_ID = "657895000001889087"
 # --------------------------------------------------
 # CREATE INVOICE
 # --------------------------------------------------
@@ -367,6 +408,7 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
             "state": addr["state_name"],
             "zip": addr["pincode"],
             "country": "India",
+            "phone": mobile_10,
         },
         "shipping_address": {
             "address": addr_line1,
@@ -375,6 +417,7 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
             "state": addr["state_name"],
             "zip": addr["pincode"],
             "country": "India",
+            "phone": mobile_10,
         },
         # FIX 3: Add contact_persons so a named person is linked in Zoho
         "contact_persons": [
@@ -438,6 +481,7 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
         "reference_number": order_id,
         "place_of_supply": addr["state_code"],
         "line_items": [],
+        "salesperson_id": DEFAULT_SALESPERSON_ID,
     }
 
     for item in items:
