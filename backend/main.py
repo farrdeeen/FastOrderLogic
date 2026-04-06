@@ -7,6 +7,8 @@ from routes.dropdowns import router as dropdowns_router
 from routes import address_routes
 from routes import customers
 from routes import states
+from routes.wix_sync import start_wix_auto_sync
+
 
 app = FastAPI(title="FastOrderLogic Backend")
 
@@ -29,3 +31,7 @@ app.include_router(states.router)
 @app.get("/")
 def home():
     return {"message": "Backend running"}
+
+@app.on_event("startup")
+def on_startup():
+    start_wix_auto_sync()

@@ -107,27 +107,62 @@ def zoho_callback(request: Request):
 # --------------------------------------------------
 # TOKEN REFRESH
 # --------------------------------------------------
+import time
+import requests
+
 def ensure_access_token():
+    print("[DEBUG] Checking existing access token...")
+
     if tokens.get("access_token") and time.time() < tokens["expires_at"]:
+        remaining = int(tokens["expires_at"] - time.time())
+        print(f"[DEBUG] Using cached access token (expires in {remaining}s)")
         return tokens["access_token"]
 
-    r = requests.post(
+    print("[DEBUG] Access token missing or expired. Refreshing...")
+
+    start_time = time.time()
+
+    response = requests.post(
         TOKEN_URL,
         data={
             "grant_type": "refresh_token",
-            "refresh_token": tokens["refresh_token"],
+            "refresh_token": tokens.get("refresh_token"),
             "client_id": ZOHO_CLIENT_ID,
             "client_secret": ZOHO_CLIENT_SECRET,
         },
-    ).json()
+    )
+
+    print(f"[DEBUG] Token API status: {response.status_code}")
+
+    try:
+        r = response.json()
+    except Exception as e:
+        print(f"[ERROR] Failed to parse token response JSON: {e}")
+        print(f"[RAW RESPONSE] {response.text}")
+        raise HTTPException(500, "Invalid token response")
+
+    print(f"[DEBUG] Token API response keys: {list(r.keys())}")
 
     if "access_token" not in r:
+        print(f"[ERROR] No access_token in response: {r}")
         raise HTTPException(401, r)
 
-    tokens["access_token"] = r["access_token"]
-    tokens["expires_at"] = time.time() + r.get("expires_in", 3600)
+    access_token = r["access_token"]
+    expires_in = r.get("expires_in", 3600)
+
+    print(f"[DEBUG] New access token received: {access_token[:10]}...")
+    print(f"[DEBUG] Token expires in: {expires_in}s")
+
+    tokens["access_token"] = access_token
+    tokens["expires_at"] = time.time() + expires_in
+
+    print("[DEBUG] Saving tokens...")
     _save_tokens(tokens)
-    return tokens["access_token"]
+
+    total_time = time.time() - start_time
+    print(f"[DEBUG] Token refresh completed in {total_time:.2f}s")
+
+    return access_token
 
 
 def zoho_headers():
@@ -162,6 +197,45 @@ def get_zoho_item_by_sku(sku: str):
             return item
 
     return None
+
+
+# --------------------------------------------------
+# NORMALIZE MOBILE — returns bare 10-digit number
+# --------------------------------------------------
+def normalize_mobile(mobile: str) -> str:
+    """Strip country code prefix and return a 10-digit mobile number."""
+    m = mobile.strip()
+    if m.startswith("+91"):
+        return m[3:]
+    if m.startswith("91") and len(m) == 12:
+        return m[2:]
+    return m
+
+
+# --------------------------------------------------
+# SPLIT ADDRESS — halve by char count, break at word boundary
+# --------------------------------------------------
+def split_address(address_line: str) -> tuple[str, str]:
+    """
+    Split address_line into two halves at the midpoint,
+    walking back to the nearest space so no word is cut.
+    Returns (line1, line2). line2 is empty if address is short.
+    """
+    s = address_line.strip()
+    if not s:
+        return ("", "")
+
+    mid = len(s) // 2
+    # Walk back from midpoint to find a space
+    split_at = s.rfind(" ", 0, mid + 1)
+    if split_at == -1:
+        # No space found before midpoint — try forward
+        split_at = s.find(" ", mid)
+    if split_at == -1:
+        # No space at all — put everything in line 1
+        return (s, "")
+
+    return (s[:split_at].strip(), s[split_at:].strip())
 
 
 # --------------------------------------------------
@@ -267,58 +341,98 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
         if total_qty else 0
     )
 
-    # CONTACT
+    # --------------------------------------------------
+    # CONTACT PAYLOAD
+    # --------------------------------------------------
     gst_no = cust.get("gst_number")
     gst_treatment = "business_gst" if gst_no else "consumer"
+
+    addr_line1, addr_line2 = split_address(addr["address_line"])
+
+    mobile_raw = cust.get("mobile", "")
+    mobile_10 = normalize_mobile(mobile_raw) if mobile_raw else ""
+    mobile_with_code = f"+91{mobile_10}" if mobile_10 else ""
 
     contact_payload = {
         "contact_name": cust["name"],
         "email": cust.get("email", ""),
-        "phone": cust["mobile"],
+        "phone": mobile_with_code or mobile_10,  # store consistently with +91
         "gst_treatment": gst_treatment,
+        # FIX 2: Always send gst_no at top level when present
+        **({"gst_no": gst_no} if gst_no else {}),
         "billing_address": {
-            "address": addr["address_line"],
+            "address": addr_line1,
+            "street2": addr_line2,
             "city": addr["city"],
             "state": addr["state_name"],
             "zip": addr["pincode"],
             "country": "India",
         },
         "shipping_address": {
-            "address": addr["address_line"],
+            "address": addr_line1,
+            "street2": addr_line2,
             "city": addr["city"],
             "state": addr["state_name"],
             "zip": addr["pincode"],
             "country": "India",
         },
+        # FIX 3: Add contact_persons so a named person is linked in Zoho
+        "contact_persons": [
+            {
+                "first_name": cust["name"],
+                "email": cust.get("email", ""),
+                "phone": mobile_with_code or mobile_10,
+                "is_primary_contact": True,
+            }
+        ],
     }
 
-    if gst_no:
-        contact_payload["gst_no"] = gst_no
-
+    # --------------------------------------------------
+    # FIX 1: CUSTOMER LOOKUP — email, then phone with/without +91
+    # --------------------------------------------------
     contact_id = None
-    for key in ("email", "phone"):
-        if cust.get(key):
+
+    # 1a) Search by email
+    if cust.get("email"):
+        r = requests.get(
+            f"{ZOHO_API_BASE}/contacts",
+            headers=zoho_headers(),
+            params={"email": cust["email"]},
+        ).json()
+        if r.get("contacts"):
+            contact_id = r["contacts"][0]["contact_id"]
+            print(f"[DEBUG] Contact found by email: {contact_id}")
+
+    # 1b) Search by phone — try both 10-digit and +91 variant
+    if not contact_id and mobile_10:
+        for phone_variant in (mobile_10, mobile_with_code):
             r = requests.get(
                 f"{ZOHO_API_BASE}/contacts",
                 headers=zoho_headers(),
-                params={key: cust[key]},
+                params={"phone": phone_variant},
             ).json()
             if r.get("contacts"):
                 contact_id = r["contacts"][0]["contact_id"]
+                print(f"[DEBUG] Contact found by phone ({phone_variant}): {contact_id}")
                 break
 
+    # 1c) Create if still not found
     if not contact_id:
+        print("[DEBUG] No existing contact found. Creating new contact...")
         created = requests.post(
             f"{ZOHO_API_BASE}/contacts",
             headers=zoho_headers(),
             json=contact_payload,
         ).json()
+        print(f"[DEBUG] Contact create response: {created}")
         contact_id = created.get("contact", {}).get("contact_id")
 
     if not contact_id:
         raise HTTPException(400, "Zoho contact creation failed")
 
+    # --------------------------------------------------
     # INVOICE
+    # --------------------------------------------------
     invoice_payload = {
         "customer_id": contact_id,
         "reference_number": order_id,
@@ -358,7 +472,6 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
             f" | Serial Numbers: {', '.join(serials)}"
             if serials else ""
         )
-
 
         rate_ex_gst = round(
             (float(item["unit_price"]) + delivery_per_unit) / 1.18,
@@ -406,25 +519,48 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
 # --------------------------------------------------
 @router.get("/orders/{order_id:path}/invoice/print")
 def print_invoice(order_id: str, db: Session = Depends(get_db)):
+    print(f"[DEBUG] Incoming request for order_id: {order_id}")
+
     order = (
         db.query(Order)
         .filter(Order.order_id == order_id)
         .first()
     )
 
-    if not order or not order.invoice_id:
+    print(f"[DEBUG] DB Query Result: {order}")
+
+    if not order:
+        print("[ERROR] Order not found in DB")
+        raise HTTPException(404, "Order not found")
+
+    if not order.invoice_id:
+        print("[ERROR] Invoice ID missing in order")
         raise HTTPException(404, "Invoice not found")
 
+    print(f"[DEBUG] Found invoice_id: {order.invoice_id}")
+
+    token = ensure_access_token()
+    print(f"[DEBUG] Access token fetched: {token[:10]}...")
+
+    url = f"{ZOHO_API_BASE}/invoices/{order.invoice_id}?accept=pdf"
+    print(f"[DEBUG] Calling Zoho API: {url}")
+
     res = requests.get(
-        f"{ZOHO_API_BASE}/invoices/{order.invoice_id}?accept=pdf",
+        url,
         headers={
-            "Authorization": f"Zoho-oauthtoken {ensure_access_token()}",
+            "Authorization": f"Zoho-oauthtoken {token}",
             "X-com-zoho-books-organizationid": ZOHO_ORG_ID,
         },
     )
 
+    print(f"[DEBUG] Zoho response status: {res.status_code}")
+    print(f"[DEBUG] Zoho response headers: {res.headers}")
+
     if res.status_code != 200:
+        print(f"[ERROR] Failed to fetch invoice. Response: {res.text}")
         raise HTTPException(400, "Failed to fetch invoice PDF")
+
+    print(f"[DEBUG] PDF size: {len(res.content)} bytes")
 
     return StreamingResponse(
         BytesIO(res.content),

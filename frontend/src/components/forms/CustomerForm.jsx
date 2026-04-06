@@ -63,7 +63,6 @@ export default function CustomerForm({ onClose, onSuccess, states }) {
             onChange={(e) => update("name", e.target.value)}
           />
         </Grid>
-
         <Grid item xs={12} sm={4}>
           <TextField
             label="Mobile"
@@ -72,7 +71,6 @@ export default function CustomerForm({ onClose, onSuccess, states }) {
             onChange={(e) => update("mobile", e.target.value)}
           />
         </Grid>
-
         <Grid item xs={12} sm={4}>
           <TextField
             label="Customer Type"
@@ -85,7 +83,6 @@ export default function CustomerForm({ onClose, onSuccess, states }) {
             <MenuItem value="offline">Offline Customer</MenuItem>
           </TextField>
         </Grid>
-
         <Grid item xs={12} sm={4}>
           <TextField
             label="Email"
@@ -94,18 +91,14 @@ export default function CustomerForm({ onClose, onSuccess, states }) {
             onChange={(e) => update("email", e.target.value)}
           />
         </Grid>
-
         <Grid item xs={12} sm={4}>
           <TextField
             label="GST Number (optional)"
             fullWidth
             value={form.gst_number}
-            onChange={(e) =>
-              update("gst_number", e.target.value.toUpperCase())
-            }
+            onChange={(e) => update("gst_number", e.target.value.toUpperCase())}
           />
         </Grid>
-
         <Grid item xs={12} sm={4} /> {/* placeholder to keep alignment */}
       </Grid>
 

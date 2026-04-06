@@ -16,6 +16,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
+import threading
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
@@ -43,6 +44,69 @@ if not logger.handlers:
     h.setFormatter(fmt)
     logger.addHandler(h)
 logger.setLevel(logging.DEBUG)
+
+# ---------------------------
+# FIX 3: Background auto-sync every 5 minutes
+# ---------------------------
+WIX_SYNC_INTERVAL_SECONDS = 300  # 5 minutes
+_sync_timer: Optional[threading.Timer] = None
+_sync_lock = threading.Lock()
+
+def _run_background_sync():
+    """Runs wix sync in a background thread and reschedules itself."""
+    global _sync_timer
+    try:
+        db = SessionLocal()
+        try:
+            logger.info("[AutoSync] Starting scheduled Wix sync...")
+            # Reuse the core sync logic by calling it directly with a real DB session.
+            # We create a minimal Request-like object so we can pass force=False.
+            class _FakeRequest:
+                class query_params:
+                    @staticmethod
+                    def get(k, default=None):
+                        return default
+
+            result = sync_wix_orders(request=_FakeRequest(), db=db)
+            logger.info(
+                "[AutoSync] Done — inserted=%s skipped=%s",
+                result.get("inserted"), result.get("skipped")
+            )
+        except Exception as e:
+            logger.exception("[AutoSync] Sync failed: %s", e)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.exception("[AutoSync] DB session error: %s", e)
+    finally:
+        # Always reschedule, even on failure
+        with _sync_lock:
+            _sync_timer = threading.Timer(WIX_SYNC_INTERVAL_SECONDS, _run_background_sync)
+            _sync_timer.daemon = True
+            _sync_timer.start()
+
+def start_wix_auto_sync():
+    """
+    Call this once from your app startup (e.g. lifespan or startup event) to
+    begin the 5-minute recurring background sync.
+    """
+    global _sync_timer
+    with _sync_lock:
+        if _sync_timer is not None:
+            return  # already running
+        logger.info("[AutoSync] Scheduling first Wix sync in %ds", WIX_SYNC_INTERVAL_SECONDS)
+        _sync_timer = threading.Timer(WIX_SYNC_INTERVAL_SECONDS, _run_background_sync)
+        _sync_timer.daemon = True
+        _sync_timer.start()
+
+def stop_wix_auto_sync():
+    """Cancels the background sync timer (useful for tests/shutdown)."""
+    global _sync_timer
+    with _sync_lock:
+        if _sync_timer:
+            _sync_timer.cancel()
+            _sync_timer = None
+            logger.info("[AutoSync] Background Wix sync stopped.")
 
 # DB dependency
 def get_db():
@@ -776,31 +840,71 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 except Exception as e:
                     logger.exception("Failed delete order_items for %s: %s", wix_order_id, e)
 
+            # FIX 1: Log full line_items payload for debugging SKU/product lookup failures
+            logger.debug("Order %s has %d line_items: %s", wix_order_id, len(line_items), json.dumps(line_items, default=str)[:2000])
+
             # Step 1: gather base unit prices and product mapping
             for li in line_items:
                 try:
                     if not isinstance(li, dict):
+                        logger.warning("Order %s: skipping non-dict line item: %s", wix_order_id, li)
                         continue
-                    sku = safe_str((li.get("physicalProperties") or {}).get("sku") or li.get("sku") or li.get("variantSku") or li.get("skuId") or "")
-                    wix_pid = safe_str((li.get("catalogReference") or {}).get("catalogItemId") if isinstance(li.get("catalogReference"), dict) else li.get("productId") or li.get("product_id") or "")
+
+                    # FIX 1: Broaden SKU extraction - check all common Wix SKU fields
+                    phys = li.get("physicalProperties") or {}
+                    sku_raw = (
+                        phys.get("sku")
+                        or li.get("sku")
+                        or li.get("variantSku")
+                        or li.get("skuId")
+                        or (li.get("catalogReference") or {}).get("catalogItemId")
+                        or ""
+                    )
+                    sku = safe_str(sku_raw).strip()
+
+                    wix_pid = safe_str(
+                        (li.get("catalogReference") or {}).get("catalogItemId")
+                        if isinstance(li.get("catalogReference"), dict)
+                        else li.get("productId") or li.get("product_id") or ""
+                    )
+
                     name_field = li.get("productName") or li.get("name") or li.get("title") or ""
                     title = safe_str(name_field.get("original") if isinstance(name_field, dict) else name_field)
+
                     qty = int(li.get("quantity") or li.get("qty") or 1)
                     base_price = extract_price_value(li)
 
+                    logger.debug(
+                        "Order %s line item: sku=%r wix_pid=%r title=%r qty=%d price=%s",
+                        wix_order_id, sku, wix_pid, title, qty, base_price
+                    )
+
                     product = None
                     mapping = None
+
+                    # Try SKU first
                     if is_valid_sku(sku):
                         product = find_product_by_sku(db, sku)
-                        mapping = f"sku:{sku}" if product else mapping
+                        if product:
+                            mapping = f"sku:{sku}"
+                        else:
+                            logger.debug("Order %s: SKU %r not found in products table", wix_order_id, sku)
 
+                    # Try wix product id
                     if not product and wix_pid:
                         product = find_product_by_wix_pid(db, wix_pid)
-                        mapping = mapping or (f"wixpid:{wix_pid}" if product else None)
+                        if product:
+                            mapping = f"wixpid:{wix_pid}"
+                        else:
+                            logger.debug("Order %s: wix_pid %r not found in products table", wix_order_id, wix_pid)
 
+                    # Try product name
                     if not product and title:
                         product = find_product_by_name(db, title)
-                        mapping = mapping or (f"name:{title}" if product else None)
+                        if product:
+                            mapping = f"name:{title}"
+                        else:
+                            logger.debug("Order %s: title %r not found in products table", wix_order_id, title)
 
                     # Enforce misc product fallback if still unknown
                     if not product:
@@ -810,7 +914,11 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         if not misc_row:
                             raise HTTPException(500, "Misc product (sku='misc') not found. Please create it in products table.")
                         product = dict(misc_row._mapping)
-                        mapping = mapping or "misc_assigned"
+                        mapping = "misc_assigned"
+                        logger.warning(
+                            "Order %s: no product match for sku=%r wix_pid=%r title=%r — assigned misc (product_id=%s)",
+                            wix_order_id, sku, wix_pid, title, product.get("product_id")
+                        )
 
                     pid = product.get("product_id") if product else None
                     items_out.append({
@@ -823,10 +931,10 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         "mapping": mapping or "unknown"
                     })
                 except Exception as e:
-                    logger.exception("Failed to process line item (gather): %s", e)
+                    logger.exception("Failed to process line item (gather) for order %s: %s | line_item=%s", wix_order_id, e, json.dumps(li, default=str)[:500])
                     order_result["reasons"].append(f"line_item_failed:{e}")
 
-            # Step 2: delivery charge distribution AFTER items gathered
+            # Step 2: compute delivery distribution and per-item prices (no DB writes yet)
             try:
                 totals = w.get("totals") or {}
                 delivery_charge = float(
@@ -838,48 +946,17 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
             total_qty = sum(i["quantity"] for i in items_out) or 1
             delivery_per_unit = round(delivery_charge / total_qty, 2) if total_qty else 0.0
 
-            # Insert order_items with distributed delivery
             subtotal_sum = 0.0
             for item in items_out:
-                try:
-                    unit_price = float(item["base_unit_price"]) + delivery_per_unit
-                    total_price = round(unit_price * item["quantity"], 2)
-
-                    item["unit_price"] = unit_price
-                    item["total_price"] = total_price
-
-                    subtotal_sum += total_price
-
-                    # Insert order_items
-                    result = db.execute(text("""
-                        INSERT INTO order_items (order_id, product_id, model_id, color_id,
-                                                 quantity, unit_price, total_price)
-                        VALUES (:oid, :pid, NULL, NULL, :qty, :unit, :total)
-                    """), {
-                        "oid": wix_order_id,
-                        "pid": item["product_id"],
-                        "qty": item["quantity"],
-                        "unit": unit_price,
-                        "total": total_price
-                    })
-                    item_id = result.lastrowid
-
-                    # 🔴 LEGACY REQUIRED INSERT
-                    insert_order_details(
-                        db=db,
-                        order_id=wix_order_id,
-                        item_id=item_id,
-                        product_id=item["product_id"]
-                    )
-                    
-                except Exception as e:
-                    logger.exception("order_item insert failed: %s", e)
-                    order_result["reasons"].append(f"order_item_insert_failed:{e}")
+                unit_price = float(item["base_unit_price"]) + delivery_per_unit
+                total_price = round(unit_price * item["quantity"], 2)
+                item["unit_price"] = unit_price
+                item["total_price"] = total_price
+                subtotal_sum += total_price
 
             # ----------------------
-            #  PAYMENT & ORDER ROW
+            #  PAYMENT & ORDER ROW  (INSERT/UPDATE orders FIRST before any order_items)
             # ----------------------
-            totals = w.get("totals") or {}
             billing = w.get("billingInfo") or {}
 
             # Extract raw status values Wix may send
@@ -936,27 +1013,39 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 "total_amount": float(payment_due),
                 "channel": "wix",
                 "payment_status": payment_status,
-                "delivery_status": "NOT_SHIPPED",
+                "delivery_status": "pending",
                 "created_at": created_at,
                 "updated_at": created_at,
                 "order_index": order_index,
                 "payment_type": "online",
                 "gst": 0.0,
-                "upload_wbn": w.get("wbn") or None
+                "upload_wbn": w.get("wbn") or None,
+                # FIX 2: include all fields previously requiring manual UPDATE
+                "discount_percent": 0.0,
+                "delivery_charge": 90.00,
+                "tax_percent": 18.00,
+                "fulfillment_status": 0,
+                "delivery_method": "standard",
+                "order_status": "PENDING",
             }
 
-            # Insert or update order row
+            # STEP A: Insert/update the orders row and commit BEFORE inserting order_items.
+            # order_items has a FK on orders.order_id — the parent must exist first.
             try:
                 if not existing_order:
                     db.execute(text("""
                         INSERT INTO orders
                         (order_id, customer_id, offline_customer_id, address_id,
                          total_items, subtotal, total_amount, channel, payment_status,
-                         delivery_status, created_at, updated_at, order_index, payment_type, gst, upload_wbn)
+                         delivery_status, created_at, updated_at, order_index, payment_type, gst, upload_wbn,
+                         discount_percent, delivery_charge, tax_percent, fulfillment_status,
+                         delivery_method, order_status)
                         VALUES
                         (:order_id, :customer_id, :offline_customer_id, :address_id,
                          :total_items, :subtotal, :total_amount, :channel, :payment_status,
-                         :delivery_status, :created_at, :updated_at, :order_index, :payment_type, :gst, :upload_wbn)
+                         :delivery_status, :created_at, :updated_at, :order_index, :payment_type, :gst, :upload_wbn,
+                         :discount_percent, :delivery_charge, :tax_percent, :fulfillment_status,
+                         :delivery_method, :order_status)
                     """), order_payload)
                 else:
                     db.execute(text("""
@@ -965,7 +1054,13 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                           subtotal = :subtotal,
                           total_amount = :total_amount,
                           payment_status = :payment_status,
-                          updated_at = :updated_at
+                          updated_at = :updated_at,
+                          discount_percent = :discount_percent,
+                          delivery_charge = :delivery_charge,
+                          tax_percent = :tax_percent,
+                          fulfillment_status = :fulfillment_status,
+                          delivery_method = :delivery_method,
+                          order_status = :order_status
                         WHERE order_id = :order_id
                     """), {
                         "total_items": order_payload["total_items"],
@@ -973,19 +1068,17 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         "total_amount": float(order_payload["total_amount"]),
                         "payment_status": order_payload["payment_status"],
                         "updated_at": order_payload["updated_at"],
-                        "order_id": order_payload["order_id"]
+                        "order_id": order_payload["order_id"],
+                        "discount_percent": 0.0,
+                        "delivery_charge": 90.00,
+                        "tax_percent": 18.00,
+                        "fulfillment_status": 0,
+                        "delivery_method": "standard",
+                        "order_status": "PENDING",
                     })
+                # Commit the orders row so the FK is satisfied before inserting order_items
                 db.commit()
-                if not existing_order:
-                    inserted += 1
-                    order_result["status"] = "inserted"
-                else:
-                    order_result["status"] = "updated"
-                order_result["items"] = items_out
-                order_result["customer_id"] = customer_id
-                order_result["offline_customer_id"] = offline_customer_id
-                order_result["address_id"] = address_id
-                logger.info("Processed order %s (items=%d)", wix_order_id, len(items_out))
+                logger.debug("Committed orders row for %s", wix_order_id)
             except Exception as e:
                 try:
                     db.rollback()
@@ -997,6 +1090,54 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 logger.exception("Order insert/update failed for %s: %s", wix_order_id, e)
                 details.append(order_result)
                 continue
+
+            # STEP B: Now insert order_items (parent orders row is committed above)
+            for item in items_out:
+                try:
+                    result = db.execute(text("""
+                        INSERT INTO order_items (order_id, product_id, model_id, color_id,
+                                                 quantity, unit_price, total_price)
+                        VALUES (:oid, :pid, NULL, NULL, :qty, :unit, :total)
+                    """), {
+                        "oid": wix_order_id,
+                        "pid": item["product_id"],
+                        "qty": item["quantity"],
+                        "unit": item["unit_price"],
+                        "total": item["total_price"],
+                    })
+                    item_id = result.lastrowid
+
+                    # 🔴 LEGACY REQUIRED INSERT
+                    insert_order_details(
+                        db=db,
+                        order_id=wix_order_id,
+                        item_id=item_id,
+                        product_id=item["product_id"]
+                    )
+                except Exception as e:
+                    logger.exception("order_item insert failed for order %s item %s: %s", wix_order_id, item.get("title"), e)
+                    order_result["reasons"].append(f"order_item_insert_failed:{e}")
+
+            try:
+                db.commit()
+            except Exception as e:
+                try:
+                    db.rollback()
+                except Exception:
+                    logger.exception("Rollback failed after order_items commit for %s", wix_order_id)
+                order_result["reasons"].append(f"order_items_commit_failed:{e}")
+                logger.exception("order_items commit failed for %s: %s", wix_order_id, e)
+
+            if not existing_order:
+                inserted += 1
+                order_result["status"] = "inserted"
+            else:
+                order_result["status"] = "updated"
+            order_result["items"] = items_out
+            order_result["customer_id"] = customer_id
+            order_result["offline_customer_id"] = offline_customer_id
+            order_result["address_id"] = address_id
+            logger.info("Processed order %s (items=%d)", wix_order_id, len(items_out))
 
             details.append(order_result)
 

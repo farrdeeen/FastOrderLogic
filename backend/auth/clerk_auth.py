@@ -5,9 +5,10 @@ import requests
 from fastapi import Request, HTTPException
 from jose import jwt, JWTError
 
+
 CLERK_ISSUER = os.getenv(
     "CLERK_ISSUER",
-    "https://divine-lobster-20.clerk.accounts.dev",
+    "https://prompt-piranha-26.clerk.accounts.dev",
 )
 
 JWKS_URL = f"{CLERK_ISSUER}/.well-known/jwks.json"
