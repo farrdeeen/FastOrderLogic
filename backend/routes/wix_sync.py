@@ -1022,7 +1022,7 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                 "upload_wbn": w.get("wbn") or None,
                 # FIX 2: include all fields previously requiring manual UPDATE
                 "discount_percent": 0.0,
-                "delivery_charge": 90.00,
+                "delivery_charge": delivery_charge,
                 "tax_percent": 18.00,
                 "fulfillment_status": 0,
                 "delivery_method": "standard",
@@ -1070,7 +1070,7 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
                         "updated_at": order_payload["updated_at"],
                         "order_id": order_payload["order_id"],
                         "discount_percent": 0.0,
-                        "delivery_charge": 90.00,
+                        "delivery_charge": delivery_charge,
                         "tax_percent": 18.00,
                         "fulfillment_status": 0,
                         "delivery_method": "standard",

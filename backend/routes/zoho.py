@@ -213,6 +213,26 @@ def normalize_mobile(mobile: str) -> str:
 
 
 # --------------------------------------------------
+# SPLIT NAME — first two words → first_name, rest → last_name
+# --------------------------------------------------
+def split_name(full_name: str) -> tuple[str, str]:
+    """
+    Split a full name into first_name and last_name.
+    - 1 word  → first_name=word, last_name=""
+    - 2 words → first_name=word1, last_name=word2
+    - 3+ words → first_name="word1 word2", last_name=rest
+    """
+    parts = full_name.strip().split()
+    if len(parts) == 0:
+        return ("", "")
+    if len(parts) == 1:
+        return (parts[0], "")
+    if len(parts) == 2:
+        return (parts[0], parts[1])
+    return (" ".join(parts[:2]), " ".join(parts[2:]))
+
+
+# --------------------------------------------------
 # SPLIT ADDRESS — halve by char count, break at word boundary
 # --------------------------------------------------
 def split_address(address_line: str) -> tuple[str, str]:
@@ -226,17 +246,13 @@ def split_address(address_line: str) -> tuple[str, str]:
         return ("", "")
 
     mid = len(s) // 2
-    # Walk back from midpoint to find a space
     split_at = s.rfind(" ", 0, mid + 1)
     if split_at == -1:
-        # No space found before midpoint — try forward
         split_at = s.find(" ", mid)
     if split_at == -1:
-        # No space at all — put everything in line 1
         return (s, "")
 
     return (s[:split_at].strip(), s[split_at:].strip())
-
 
 
 # --------------------------------------------------
@@ -277,8 +293,8 @@ from typing import Optional
 class InvoiceRequest(BaseModel):
     salesperson_id: Optional[str] = None
 
-
 DEFAULT_SALESPERSON_ID = "657895000001889087"
+
 # --------------------------------------------------
 # CREATE INVOICE
 # --------------------------------------------------
@@ -394,12 +410,17 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
     mobile_10 = normalize_mobile(mobile_raw) if mobile_raw else ""
     mobile_with_code = f"+91{mobile_10}" if mobile_10 else ""
 
+    cust_first_name, cust_last_name = split_name(cust["name"])
+
     contact_payload = {
         "contact_name": cust["name"],
+        "first_name": cust_first_name,
+        "last_name": cust_last_name,
         "email": cust.get("email", ""),
-        "phone": mobile_with_code or mobile_10,  # store consistently with +91
+        # phone and mobile both carry the +91 prefixed number
+        "phone": mobile_with_code,
+        "mobile": mobile_with_code,
         "gst_treatment": gst_treatment,
-        # FIX 2: Always send gst_no at top level when present
         **({"gst_no": gst_no} if gst_no else {}),
         "billing_address": {
             "address": addr_line1,
@@ -408,7 +429,7 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
             "state": addr["state_name"],
             "zip": addr["pincode"],
             "country": "India",
-            "phone": mobile_10,
+            "phone": mobile_with_code,
         },
         "shipping_address": {
             "address": addr_line1,
@@ -417,21 +438,22 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
             "state": addr["state_name"],
             "zip": addr["pincode"],
             "country": "India",
-            "phone": mobile_10,
+            "phone": mobile_with_code,
         },
-        # FIX 3: Add contact_persons so a named person is linked in Zoho
         "contact_persons": [
             {
-                "first_name": cust["name"],
+                "first_name": cust_first_name,
+                "last_name": cust_last_name,
                 "email": cust.get("email", ""),
-                "phone": mobile_with_code or mobile_10,
+                "phone": mobile_with_code,
+                "mobile": mobile_with_code,
                 "is_primary_contact": True,
             }
         ],
     }
 
     # --------------------------------------------------
-    # FIX 1: CUSTOMER LOOKUP — email, then phone with/without +91
+    # CUSTOMER LOOKUP — email, then phone with/without +91
     # --------------------------------------------------
     contact_id = None
 
