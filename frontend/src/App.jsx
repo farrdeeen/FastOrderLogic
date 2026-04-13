@@ -8,6 +8,7 @@ import SearchBar from "./components/SearchBar";
 import CreateOrderForm from "./components/CreateOrderForm";
 import NavDrawer from "./components/NavDrawer";
 import ChatPage from "./chat/ChatPage";
+import DeviceTransactionForm from "./components/DeviceTransactionForm";
 
 import {
   Dialog,
@@ -80,6 +81,7 @@ export default function App() {
     orders: "📦 Orders Management",
     chat: "💬 Chat Support",
     "create-order": "🆕 Create New Order",
+    "device-entry": "Bulk Device In/Out",
   }[activePage];
 
   // ---------------- FETCH ORDERS ----------------
@@ -388,6 +390,13 @@ export default function App() {
                 >
                   ➕ Create Order
                 </Button>
+                <Button
+                  variant="contained"
+                  sx={{ mb: 2, ml: 4 }}
+                  onClick={() => setActivePage("device-entry")}
+                >
+                  Bulk in Out
+                </Button>
 
                 <SearchBar filters={filters} setFilters={setFilters} />
 
@@ -518,6 +527,20 @@ export default function App() {
             {/* ================= CHAT ================= */}
             <Fade in={activePage === "chat"} unmountOnExit>
               <ChatPage />
+            </Fade>
+            {/* ================= DEVICE ENTRY ================= */}
+            <Fade in={activePage === "device-entry"} unmountOnExit>
+              <Paper sx={{ p: 3, borderRadius: 3 }}>
+                <Button
+                  variant="outlined"
+                  onClick={() => setActivePage("orders")}
+                  sx={{ mb: 3 }}
+                >
+                  ⬅ Back to Orders
+                </Button>
+
+                <DeviceTransactionForm />
+              </Paper>
             </Fade>
 
             {/* ================= CUSTOMER MODAL ================= */}

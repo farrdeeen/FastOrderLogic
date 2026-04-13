@@ -4,7 +4,9 @@ from sqlalchemy import (
     String,
     DECIMAL,
     DateTime,
-    ForeignKey,
+    Integer,
+    Date,
+    func,
     CheckConstraint,
     SmallInteger
 )
@@ -43,3 +45,16 @@ class Order(Base):
     __table_args__ = (
         CheckConstraint('(customer_id IS NOT NULL) OR (offline_customer_id IS NOT NULL)', name='check_customer_type'),
     )
+
+class DeviceTransaction(Base):
+    __tablename__ = "device_transaction"
+
+    auto_id = Column(Integer, primary_key=True, index=True)
+    device_srno = Column(String(100), nullable=False)
+    model_name = Column(String(100), nullable=False)
+    sku_id = Column(String(100))
+    order_id = Column(String(50))
+    in_out = Column(Integer, nullable=False)
+    create_date = Column(Date, nullable=False) # ✅
+    price = Column(Integer)
+    remarks = Column(String(255))
