@@ -101,7 +101,8 @@ class OrderCreate(BaseModel):
     channel: str = "offline"
     items: List[OrderItemIn]
 
-
+class UTRPayload(BaseModel):
+    utr_number: str
 
 # ================================
 # CREATE ORDER (Fixed)
@@ -353,6 +354,40 @@ def mark_as_paid(order_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Marked as paid"}
 
+@router.put("/{order_id:path}/mark-paid-utr")
+def mark_paid_with_utr(order_id: str, payload: UTRPayload, db: Session = Depends(get_db)):
+    """
+    Mark an order as paid and record the UTR / transaction reference number.
+    Requires `utr_number` (VARCHAR) column to exist on the `orders` table.
+    """
+    utr = payload.utr_number.strip()
+    if not utr:
+        raise HTTPException(status_code=400, detail="utr_number cannot be empty")
+ 
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+ 
+    if order.payment_status == "paid":
+        # Allow updating UTR even if already paid (idempotent)
+        pass
+ 
+    order.payment_status = "paid"
+    order.order_status = "APPR"
+    order.utr_number = utr      # ← new column
+    order.updated_at = datetime.now()
+ 
+    db.commit()
+    db.refresh(order)
+ 
+    return {
+        "message": f"Order {order_id} marked as paid",
+        "payment_status": order.payment_status,
+        "utr_number": order.utr_number,
+        "order_status": order.order_status,
+        
+    
+    }
 
 @router.put("/{order_id:path}/mark-fulfilled")
 def mark_as_fulfilled(order_id: str, db: Session = Depends(get_db)):
@@ -822,4 +857,5 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
         "items": items,
         "remarks": order.remarks,
         "serial_status": serial_status,
+        "utr_number": order.utr_number,
     }

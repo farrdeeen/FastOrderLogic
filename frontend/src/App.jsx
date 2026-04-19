@@ -156,14 +156,14 @@ export default function App() {
 
   // ---------------- BACKGROUND REFRESH ----------------
   const backgroundRefresh = async () => {
-    try {
-      const res = await api.get("/orders", {
-        params: filters,
-      });
-      setOrders(res.data || []);
-    } catch {
-      console.warn("Background refresh failed");
-    }
+    const res = await api.get("/orders", {
+      params: {
+        limit: PAGE_SIZE,
+        offset: 0,
+      },
+    });
+
+    setOrders(res.data || []);
   };
 
   const scheduleBackgroundRefresh = () => {
@@ -234,6 +234,19 @@ export default function App() {
   // ---------------- ACTION HANDLER ----------------
   const handleAction = async (orderId, action, payload) => {
     try {
+      if (action === "mark-paid-utr") {
+        updateOrderLocal(orderId, () => ({
+          payment_status: "paid",
+          utr_number: payload,
+        }));
+
+        await api.put(`/orders/${encodeURIComponent(orderId)}/mark-paid-utr`, {
+          utr_number: payload,
+        });
+
+        scheduleBackgroundRefresh();
+        return;
+      }
       if (action === "update-delivery") {
         updateOrderLocal(orderId, () => ({
           delivery_status: payload,
