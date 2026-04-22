@@ -30,46 +30,30 @@ const STYLES = `
     --shadow-sm: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1);
     --shadow-md: 0 4px 8px -2px rgba(16,24,40,.1), 0 2px 4px -2px rgba(16,24,40,.06);
     --shadow-xl: 0 20px 24px -4px rgba(16,24,40,.08), 0 8px 8px -4px rgba(16,24,40,.03);
-    --radius: 8px;
-    --radius-lg: 12px;
-    --radius-xl: 16px;
+    --radius: 8px; --radius-lg: 12px; --radius-xl: 16px;
     font-family: 'DM Sans', sans-serif;
   }
 
   .ot-wrap { font-family: 'DM Sans', sans-serif; color: var(--text); }
 
-  /* ── TABLE SHELL ── */
   .ot-table-wrap {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius-lg); overflow: hidden;
-    box-shadow: var(--shadow-sm);
+    border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm);
   }
   .ot-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-
-  .ot-table thead tr {
-    background: var(--surface2); border-bottom: 1px solid var(--border);
-  }
+  .ot-table thead tr { background: var(--surface2); border-bottom: 1px solid var(--border); }
   .ot-table th {
     padding: 11px 14px; text-align: left; font-weight: 600;
-    font-size: 12px; color: var(--text2); letter-spacing: .3px;
-    white-space: nowrap; user-select: none;
+    font-size: 12px; color: var(--text2); letter-spacing: .3px; white-space: nowrap; user-select: none;
   }
-  .ot-table td {
-    padding: 12px 14px; border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-  }
+  .ot-table td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   .ot-table tbody tr:last-child td { border-bottom: none; }
-  .ot-table tbody tr {
-    transition: background .1s; cursor: pointer;
-  }
+  .ot-table tbody tr { transition: background .1s; cursor: pointer; }
   .ot-table tbody tr:hover td { background: #fafbff; }
 
-  /* ── BADGES ── */
   .badge {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 9px; border-radius: 20px;
-    font-size: 11.5px; font-weight: 600; letter-spacing: .2px;
-    white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px;
+    border-radius: 20px; font-size: 11.5px; font-weight: 600; letter-spacing: .2px; white-space: nowrap;
   }
   .badge-green  { background: var(--green-bg); color: #027a48; }
   .badge-red    { background: var(--red-bg);   color: #b42318; }
@@ -77,159 +61,90 @@ const STYLES = `
   .badge-purple { background: var(--purple-bg);color: #6941c6; }
   .badge-gray   { background: var(--bg);       color: var(--text2); }
   .badge-blue   { background: var(--accent-light); color: var(--accent-dark); }
+  .badge-orange { background: #fff7ed; color: #c2410c; }
   .badge::before {
     content: ''; display: inline-block; width: 5px; height: 5px;
     border-radius: 50%; background: currentColor; opacity: .8;
   }
 
-  /* ── ORDER ID mono ── */
-  .order-id {
-    font-family: 'DM Mono', monospace; font-size: 12.5px;
-    color: var(--accent); font-weight: 500;
-  }
+  .order-id { font-family: 'DM Mono', monospace; font-size: 12.5px; color: var(--accent); font-weight: 500; }
+  .invoice-num { font-family: 'DM Mono', monospace; font-size: 11.5px; color: #027a48; font-weight: 500; }
+  .ot-load-more { padding: 14px; text-align: center; color: var(--text3); font-size: 13px; }
 
-  /* ── INVOICE NUMBER mono ── */
-  .invoice-num {
-    font-family: 'DM Mono', monospace; font-size: 11.5px;
-    color: #027a48; font-weight: 500;
-  }
-
-  /* ── LOAD MORE ── */
-  .ot-load-more {
-    padding: 14px; text-align: center; color: var(--text3);
-    font-size: 13px;
-  }
-
-  /* ══════════════════════════════════════
-     LIGHTBOX / MODAL - HORIZONTAL LAYOUT
-  ══════════════════════════════════════ */
+  /* ── LIGHTBOX ── */
   .lb-overlay {
     position: fixed; inset: 0; background: rgba(16,24,40,.6);
     backdrop-filter: blur(3px); display: flex; justify-content: center;
-    align-items: flex-start; padding: 20px 16px;
-    z-index: 1000; overflow-y: auto;
+    align-items: flex-start; padding: 20px 16px; z-index: 1000; overflow-y: auto;
     animation: fadeIn .15s ease;
   }
   @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-
   .lb-panel {
     background: var(--surface); border-radius: var(--radius-xl);
     width: 100%; max-width: 1200px; box-shadow: var(--shadow-xl);
-    animation: slideUp .2s ease;
-    overflow: hidden; flex-shrink: 0;
-    display: flex; flex-direction: column;
-    max-height: calc(100vh - 40px);
+    animation: slideUp .2s ease; overflow: hidden; flex-shrink: 0;
+    display: flex; flex-direction: column; max-height: calc(100vh - 40px);
   }
   @keyframes slideUp { from { transform: translateY(20px); opacity: 0 } to { transform: none; opacity: 1 } }
-
   .lb-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 20px 14px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface2);
-    flex-shrink: 0;
+    padding: 16px 20px 14px; border-bottom: 1px solid var(--border);
+    background: var(--surface2); flex-shrink: 0;
   }
   .lb-title { font-size: 15px; font-weight: 600; color: var(--text); }
   .lb-subtitle { font-size: 12px; color: var(--text3); margin-top: 2px; font-family: 'DM Mono', monospace; }
-
   .lb-close {
     width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--border2);
-    background: transparent; cursor: pointer; display: flex;
-    align-items: center; justify-content: center; color: var(--text2);
-    transition: all .15s;
+    background: transparent; cursor: pointer; display: flex; align-items: center;
+    justify-content: center; color: var(--text2); transition: all .15s;
   }
   .lb-close:hover { background: var(--red-bg); color: var(--red); border-color: var(--red); }
-
   .lb-body {
-    padding: 20px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    overflow-y: auto;
-    flex: 1;
+    padding: 20px; display: grid; grid-template-columns: 1fr 1fr;
+    gap: 20px; overflow-y: auto; flex: 1;
   }
-
-  .lb-section {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
+  .lb-section { display: flex; flex-direction: column; gap: 14px; }
   .lb-section-title {
     font-size: 10.5px; font-weight: 600; color: var(--text3);
     letter-spacing: .7px; text-transform: uppercase; margin-bottom: 8px;
   }
-
-  .lb-info-grid {
-    display: grid; grid-template-columns: repeat(2,1fr); gap: 10px;
-  }
-  .lb-info-card {
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 9px 12px;
-  }
+  .lb-info-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; }
+  .lb-info-card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 12px; }
   .lb-info-label { font-size: 10.5px; color: var(--text3); font-weight: 500; margin-bottom: 2px; }
-  .lb-info-value {
-    font-size: 13px; color: var(--text); font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
+  .lb-info-value { font-size: 13px; color: var(--text); font-weight: 500; display: flex; align-items: center; gap: 6px; }
 
-  .edit-icon {
-    cursor: pointer;
-    color: var(--text3);
-    transition: color 0.15s;
-    font-size: 13px;
-  }
+  .edit-icon { cursor: pointer; color: var(--text3); transition: color 0.15s; font-size: 13px; }
   .edit-icon:hover { color: var(--accent); }
 
   .inline-edit-input {
-    padding: 5px 9px;
-    border: 1px solid var(--accent);
-    border-radius: 5px;
-    font-family: inherit;
-    font-size: 13px;
-    outline: none;
-    width: 100%;
+    padding: 5px 9px; border: 1px solid var(--accent); border-radius: 5px;
+    font-family: inherit; font-size: 13px; outline: none; width: 100%;
     box-shadow: 0 0 0 3px rgba(21,112,239,.12);
   }
-
   .inline-edit-select {
-    padding: 5px 9px;
-    border: 1px solid var(--accent);
-    border-radius: 5px;
-    font-family: inherit;
-    font-size: 12.5px;
-    outline: none;
-    width: 100%;
-    box-shadow: 0 0 0 3px rgba(21,112,239,.12);
-    background: var(--surface);
-    cursor: pointer;
+    padding: 5px 9px; border: 1px solid var(--accent); border-radius: 5px;
+    font-family: inherit; font-size: 12.5px; outline: none; width: 100%;
+    box-shadow: 0 0 0 3px rgba(21,112,239,.12); background: var(--surface); cursor: pointer;
   }
 
+  /* ── ITEMS TABLE — overflow visible so dropdown escapes ── */
+  .lb-items-table-wrap { border: 1px solid var(--border); border-radius: var(--radius); overflow: visible; }
   .lb-items-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .lb-items-table th {
     padding: 7px 9px; background: var(--surface2); text-align: left;
-    font-size: 11px; color: var(--text3); font-weight: 600;
-    border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--text3); font-weight: 600; border-bottom: 1px solid var(--border);
   }
-  .lb-items-table td {
-    padding: 9px; border-bottom: 1px solid var(--border);
-    color: var(--text);
-  }
+  .lb-items-table td { padding: 9px; border-bottom: 1px solid var(--border); color: var(--text); overflow: visible; }
   .lb-items-table tr:last-child td { border-bottom: none; }
 
-  /* ── ACTIONS BAR ── */
   .lb-actions {
     display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
     padding: 14px 20px; border-top: 1px solid var(--border);
-    background: var(--surface2);
-    flex-shrink: 0;
+    background: var(--surface2); flex-shrink: 0;
   }
   .lb-btn {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 7px 14px; border-radius: var(--radius);
-    font-family: inherit; font-size: 12.5px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px;
+    border-radius: var(--radius); font-family: inherit; font-size: 12.5px; font-weight: 500;
     cursor: pointer; border: 1px solid transparent; transition: all .15s;
   }
   .lb-btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -245,7 +160,7 @@ const STYLES = `
   .lb-btn-sm { padding: 4px 9px; font-size: 11.5px; }
   .lb-btn:disabled { opacity: .5; pointer-events: none; }
 
-  /* ── UTR MODAL ── */
+  /* ── UTR BOX ── */
   .utr-box {
     background: var(--surface2); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 14px; margin-top: 6px;
@@ -259,49 +174,38 @@ const STYLES = `
   }
   .utr-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
 
-  /* ── SERIAL MODAL ── */
-  .serial-item {
-    border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 12px; margin-bottom: 10px; background: var(--surface2);
-  }
+  /* ── SERIAL ── */
+  .serial-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; background: var(--surface2); }
   .serial-item h4 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--text); }
   .serial-input {
-    width: 100%; padding: 7px 10px; margin: 3px 0;
-    border: 1px solid var(--border2); border-radius: 5px;
-    font-family: 'DM Mono', monospace; font-size: 12.5px; outline: none;
+    width: 100%; padding: 7px 10px; margin: 3px 0; border: 1px solid var(--border2);
+    border-radius: 5px; font-family: 'DM Mono', monospace; font-size: 12.5px; outline: none;
     transition: border .15s; box-sizing: border-box;
   }
   .serial-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
 
-  /* ── REMARKS ── */
+  /* ── REMARKS / UTR SIDE BY SIDE ── */
+  .remarks-utr-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .remarks-input {
     width: 100%; padding: 8px 11px; border: 1px solid var(--border2);
     border-radius: var(--radius); font-family: inherit; font-size: 12.5px;
-    resize: vertical; min-height: 58px; outline: none; transition: border .15s;
-    box-sizing: border-box;
+    resize: vertical; min-height: 54px; outline: none; transition: border .15s; box-sizing: border-box;
   }
   .remarks-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
 
   /* ── FORM FIELDS ── */
-  .form-field {
-    display: flex; flex-direction: column; gap: 4px;
-  }
-  .form-label {
-    font-size: 11px; font-weight: 600; color: var(--text2);
-    text-transform: uppercase; letter-spacing: .4px;
-  }
+  .form-field { display: flex; flex-direction: column; gap: 4px; }
+  .form-label { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .4px; }
   .form-input {
-    padding: 8px 11px; border: 1px solid var(--border2);
-    border-radius: var(--radius); font-family: inherit; font-size: 13px;
-    outline: none; transition: border .15s; background: var(--surface);
-    width: 100%; box-sizing: border-box;
+    padding: 8px 11px; border: 1px solid var(--border2); border-radius: var(--radius);
+    font-family: inherit; font-size: 13px; outline: none; transition: border .15s;
+    background: var(--surface); width: 100%; box-sizing: border-box;
   }
   .form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
   .form-select {
-    padding: 8px 11px; border: 1px solid var(--border2);
-    border-radius: var(--radius); font-family: inherit; font-size: 13px;
-    outline: none; transition: border .15s; background: var(--surface);
-    width: 100%; box-sizing: border-box; cursor: pointer;
+    padding: 8px 11px; border: 1px solid var(--border2); border-radius: var(--radius);
+    font-family: inherit; font-size: 13px; outline: none; transition: border .15s;
+    background: var(--surface); width: 100%; box-sizing: border-box; cursor: pointer;
   }
   .form-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
   .form-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -312,10 +216,7 @@ const STYLES = `
     border: 1px solid var(--accent-light); border-radius: var(--radius);
     background: var(--accent-light); padding: 14px; margin-top: 8px;
   }
-  .add-product-panel h4 {
-    font-size: 12px; font-weight: 600; color: var(--accent-dark);
-    margin: 0 0 10px; text-transform: uppercase; letter-spacing: .4px;
-  }
+  .add-product-panel h4 { font-size: 12px; font-weight: 600; color: var(--accent-dark); margin: 0 0 10px; text-transform: uppercase; letter-spacing: .4px; }
 
   /* ── PRODUCT SEARCH ── */
   .product-search-wrap { position: relative; }
@@ -323,37 +224,49 @@ const STYLES = `
     position: absolute; top: calc(100% + 4px); left: 0; right: 0;
     background: var(--surface); border: 1px solid var(--border2);
     border-radius: var(--radius); box-shadow: var(--shadow-md);
-    z-index: 50; max-height: 200px; overflow-y: auto;
+    z-index: 9999; max-height: 200px; overflow-y: auto;
   }
-  .product-option {
-    padding: 8px 12px; cursor: pointer; font-size: 12.5px;
-    transition: background .1s; border-bottom: 1px solid var(--border);
-  }
+  .product-option { padding: 8px 12px; cursor: pointer; font-size: 12.5px; transition: background .1s; border-bottom: 1px solid var(--border); }
   .product-option:last-child { border-bottom: none; }
   .product-option:hover { background: var(--accent-light); }
   .product-option-sku { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; }
 
-  /* ── EMPTY ── */
-  .ot-empty {
-    text-align: center; padding: 60px 20px; color: var(--text3); font-size: 14px;
-  }
-
-  /* ── DELETE ROW ICON ── */
-  .del-icon {
-    cursor: pointer; color: var(--text3); font-size: 13px;
-    transition: color .15s; padding: 2px;
-  }
+  /* ── DELETE ICON ── */
+  .del-icon { cursor: pointer; color: var(--text3); font-size: 13px; transition: color .15s; padding: 2px; }
   .del-icon:hover { color: var(--red); }
 
-  /* ── RESPONSIVE ── */
-  @media (max-width: 1100px) {
-    .lb-body { grid-template-columns: 1fr; }
-    .lb-panel { max-width: 800px; }
+  /* ── TOAST SYSTEM ── */
+  .toast-container {
+    position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+    display: flex; flex-direction: column; gap: 8px; pointer-events: none;
   }
+  .toast {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-radius: var(--radius-lg);
+    font-family: 'DM Sans', sans-serif; font-size: 13.5px; font-weight: 500;
+    min-width: 260px; max-width: 380px; pointer-events: all;
+    box-shadow: var(--shadow-xl); animation: toastIn .2s ease;
+    border: 1px solid transparent;
+  }
+  @keyframes toastIn { from { transform: translateX(40px); opacity: 0 } to { transform: none; opacity: 1 } }
+  @keyframes toastOut { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(40px) } }
+  .toast-exit { animation: toastOut .2s ease forwards; }
+  .toast-success { background: var(--green-bg); color: #027a48; border-color: #a9efc5; }
+  .toast-error   { background: var(--red-bg);   color: #b42318; border-color: #fda29b; }
+  .toast-info    { background: var(--accent-light); color: var(--accent-dark); border-color: #b2ccff; }
+  .toast-warn    { background: var(--amber-bg); color: #b54708; border-color: #fedf89; }
+  .toast-close { margin-left: auto; cursor: pointer; opacity: .6; font-size: 14px; background: none; border: none; color: inherit; padding: 0 2px; }
+  .toast-close:hover { opacity: 1; }
+
+  /* ── EMPTY ── */
+  .ot-empty { text-align: center; padding: 60px 20px; color: var(--text3); font-size: 14px; }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 1100px) { .lb-body { grid-template-columns: 1fr; } .lb-panel { max-width: 800px; } }
   @media (max-width: 700px) {
     .lb-info-grid { grid-template-columns: 1fr; }
     .ot-table th:nth-child(n+5), .ot-table td:nth-child(n+5) { display: none; }
-    .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }
+    .form-grid-2, .form-grid-3, .remarks-utr-row { grid-template-columns: 1fr; }
   }
 `;
 
@@ -364,6 +277,56 @@ function injectStyles() {
   s.textContent = STYLES;
   document.head.appendChild(s);
 }
+
+/* ─────────────────────────────────────────────
+   TOAST SYSTEM
+───────────────────────────────────────────── */
+let _toastDispatch = null;
+
+export function ToastContainer() {
+  const [toasts, setToasts] = useState([]);
+  const timerRef = useRef({});
+
+  _toastDispatch = useCallback((msg, type = "info", duration = 3500) => {
+    const id = Date.now() + Math.random();
+    setToasts((p) => [...p, { id, msg, type }]);
+    timerRef.current[id] = setTimeout(() => removeToast(id), duration);
+    return id;
+  }, []);
+
+  const removeToast = (id) => {
+    clearTimeout(timerRef.current[id]);
+    setToasts((p) => p.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
+    setTimeout(() => setToasts((p) => p.filter((t) => t.id !== id)), 220);
+  };
+
+  const iconMap = { success: "✓", error: "✕", warn: "⚠", info: "ℹ" };
+
+  return (
+    <div className="toast-container">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`toast toast-${t.type} ${t.exiting ? "toast-exit" : ""}`}
+        >
+          <span>{iconMap[t.type] || "ℹ"}</span>
+          <span style={{ flex: 1 }}>{t.msg}</span>
+          <button className="toast-close" onClick={() => removeToast(t.id)}>
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function toast(msg, type = "info", duration = 3500) {
+  if (_toastDispatch) _toastDispatch(msg, type, duration);
+}
+toast.success = (m, d) => toast(m, "success", d);
+toast.error = (m, d) => toast(m, "error", d);
+toast.warn = (m, d) => toast(m, "warn", d);
+toast.info = (m, d) => toast(m, "info", d);
 
 /* ─────────────────────────────────────────────
    HELPERS
@@ -408,6 +371,22 @@ function DeliveryBadge({ status }) {
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
+function FulfillmentBadge({ status }) {
+  // fulfillment_status is a SmallInteger in the model
+  const map = {
+    0: ["badge-gray", "Pending"],
+    1: ["badge-amber", "Processing"],
+    2: ["badge-blue", "Packed"],
+    3: ["badge-purple", "Ready"],
+    4: ["badge-green", "Fulfilled"],
+    5: ["badge-red", "Cancelled"],
+  };
+  const s = status != null ? status : null;
+  if (s === null) return <span className="badge badge-gray">—</span>;
+  const [cls, label] = map[s] || ["badge-gray", `${s}`];
+  return <span className={`badge ${cls}`}>{label}</span>;
+}
+
 function SerialBadge({ status }) {
   const map = {
     complete: ["badge-green", "✓ Complete"],
@@ -418,10 +397,13 @@ function SerialBadge({ status }) {
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
-function InvoiceCell({ invoiceNumber }) {
-  if (invoiceNumber) {
+function InvoiceCell({ invoiceNumber, orderStatus }) {
+  if (orderStatus === "REJECTED")
+    return <span className="badge badge-red">NA</span>;
+  if (invoiceNumber === "NA")
+    return <span className="badge badge-red">NA</span>;
+  if (invoiceNumber)
     return <span className="invoice-num">🧾 {invoiceNumber}</span>;
-  }
   return <span className="badge badge-gray">Pending</span>;
 }
 
@@ -431,9 +413,16 @@ function InvoiceButton({
   detailsInvoice,
   onGenerate,
   loading,
+  orderStatus,
 }) {
   const existingInvoice = detailsInvoice || invoiceNumber;
-
+  if (orderStatus === "REJECTED" || existingInvoice === "NA") {
+    return (
+      <span className="badge badge-red" style={{ fontSize: 11.5 }}>
+        Invoice N/A
+      </span>
+    );
+  }
   if (existingInvoice) {
     const printUrl = `${import.meta.env.VITE_API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`;
     return (
@@ -458,7 +447,6 @@ function InvoiceButton({
       </a>
     );
   }
-
   return (
     <button
       className="lb-btn lb-btn-primary"
@@ -494,7 +482,7 @@ function AddAddressForm({ order, onSaved, onCancel }) {
   useEffect(() => {
     api
       .get("/orders/states/list")
-      .then((res) => setStates(res.data || []))
+      .then((r) => setStates(r.data || []))
       .catch(() => setStates([]));
   }, []);
 
@@ -509,24 +497,24 @@ function AddAddressForm({ order, onSaved, onCancel }) {
       !form.city ||
       !form.state_id
     ) {
-      alert(
+      toast.warn(
         "Please fill in all required fields (Name, Mobile, Pincode, Address, City, State)",
       );
       return;
     }
     setSaving(true);
     try {
-      const payload = {
+      const res = await api.post("/orders/addresses/create", {
         ...form,
         state_id: parseInt(form.state_id),
         customer_id: order.customer_id || null,
         offline_customer_id: order.offline_customer_id || null,
-      };
-      const res = await api.post("/orders/addresses/create", payload);
+      });
+      toast.success("Address saved and applied to order");
       onSaved(res.data);
     } catch (err) {
-      console.error(err);
-      alert("Failed to create address. Please check all fields.");
+      console.error("Add product error:", err);
+      toast.error("Failed to create address. Please check all fields.");
     } finally {
       setSaving(false);
     }
@@ -547,7 +535,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
       <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>
         ➕ New Address
       </div>
-
       <div className="form-grid-2">
         <div className="form-field">
           <label className="form-label">Full Name *</label>
@@ -569,7 +556,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
           />
         </div>
       </div>
-
       <div className="form-field">
         <label className="form-label">Address Line *</label>
         <input
@@ -579,7 +565,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
           placeholder="House / Flat / Street"
         />
       </div>
-
       <div className="form-field">
         <label className="form-label">Locality *</label>
         <input
@@ -589,7 +574,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
           placeholder="Area / Locality"
         />
       </div>
-
       <div className="form-grid-3">
         <div className="form-field">
           <label className="form-label">City *</label>
@@ -626,7 +610,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
           </select>
         </div>
       </div>
-
       <div className="form-grid-2">
         <div className="form-field">
           <label className="form-label">Landmark</label>
@@ -648,7 +631,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
           />
         </div>
       </div>
-
       <div className="form-grid-2">
         <div className="form-field">
           <label className="form-label">Email</label>
@@ -673,7 +655,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
           </select>
         </div>
       </div>
-
       <div className="form-field">
         <label className="form-label">GST Number</label>
         <input
@@ -683,7 +664,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
           placeholder="Optional"
         />
       </div>
-
       <div
         style={{
           display: "flex",
@@ -713,6 +693,7 @@ function AddAddressForm({ order, onSaved, onCancel }) {
 
 /* ─────────────────────────────────────────────
    PRODUCT SEARCH DROPDOWN
+   FIX #1: z-index:9999, overflow:visible on parent, portal-like positioning
 ───────────────────────────────────────────── */
 function ProductSearchInput({
   products,
@@ -736,7 +717,6 @@ function ProductSearchInput({
       .slice(0, 50);
   }, [products, query]);
 
-  // Close on outside click
   useEffect(() => {
     const handler = (e) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target))
@@ -749,7 +729,11 @@ function ProductSearchInput({
   const selectedProduct = products.find((p) => p.id === value);
 
   return (
-    <div className="product-search-wrap" ref={wrapRef}>
+    <div
+      className="product-search-wrap"
+      ref={wrapRef}
+      style={{ position: "relative" }}
+    >
       <input
         className="form-input"
         placeholder={placeholder}
@@ -765,32 +749,42 @@ function ProductSearchInput({
         }}
         style={{ fontSize: 12.5 }}
       />
-      {open && filtered.length > 0 && (
-        <div className="product-dropdown">
-          {filtered.map((p) => (
+      {open && (
+        <div
+          className="product-dropdown"
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+          }}
+        >
+          {filtered.length > 0 ? (
+            filtered.map((p) => (
+              <div
+                key={p.id}
+                className="product-option"
+                onMouseDown={() => {
+                  onChange(p);
+                  setQuery("");
+                  setOpen(false);
+                }}
+              >
+                <div>{p.name}</div>
+                {p.sku_id && (
+                  <div className="product-option-sku">{p.sku_id}</div>
+                )}
+              </div>
+            ))
+          ) : query.length > 0 ? (
             <div
-              key={p.id}
               className="product-option"
-              onMouseDown={() => {
-                onChange(p);
-                setQuery("");
-                setOpen(false);
-              }}
+              style={{ color: "var(--text3)", cursor: "default" }}
             >
-              <div>{p.name}</div>
-              {p.sku_id && <div className="product-option-sku">{p.sku_id}</div>}
+              No products found
             </div>
-          ))}
-        </div>
-      )}
-      {open && filtered.length === 0 && query.length > 0 && (
-        <div className="product-dropdown">
-          <div
-            className="product-option"
-            style={{ color: "var(--text3)", cursor: "default" }}
-          >
-            No products found
-          </div>
+          ) : null}
         </div>
       )}
     </div>
@@ -807,12 +801,19 @@ function AddProductPanel({ orderId, products, onAdded, onCancel }) {
   const [saving, setSaving] = useState(false);
 
   const handleAdd = async () => {
-    if (!selectedProduct) return alert("Please select a product");
+    if (!selectedProduct) {
+      toast.warn("Please select a product");
+      return;
+    }
     const unitPrice = parseFloat(price);
-    if (!unitPrice || unitPrice <= 0)
-      return alert("Please enter a valid price");
-    if (qty < 1) return alert("Quantity must be at least 1");
-
+    if (!unitPrice || unitPrice <= 0) {
+      toast.warn("Please enter a valid price");
+      return;
+    }
+    if (qty < 1) {
+      toast.warn("Quantity must be at least 1");
+      return;
+    }
     setSaving(true);
     try {
       const res = await api.post(
@@ -823,10 +824,11 @@ function AddProductPanel({ orderId, products, onAdded, onCancel }) {
           unit_price: unitPrice,
         },
       );
+      toast.success(`Added ${selectedProduct.name} to order`);
       onAdded(res.data);
     } catch (err) {
-      console.error(err);
-      alert("Failed to add product. Please try again.");
+      console.error("Add product error:", err);
+      toast.error("Failed to add product. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -917,10 +919,18 @@ function OrderLightbox({
   const [serialLoading, setSerialLoading] = useState(false);
   const [remarksVal, setRemarksVal] = useState(details?.remarks || "");
   const [remarksEditing, setRemarksEditing] = useState(false);
+  // Inline UTR field state
+  const [utrFieldVal, setUtrFieldVal] = useState(
+    details?.utr_number || order.utr_number || "",
+  );
+  const [utrFieldEditing, setUtrFieldEditing] = useState(false);
   const [deliveryStatus, setDeliveryStatus] = useState(
     order.delivery_status || "NOT_SHIPPED",
   );
   const [localPayStatus, setLocalPayStatus] = useState(order.payment_status);
+  const [localOrderStatus, setLocalOrderStatus] = useState(
+    order.order_status || "",
+  );
   const [confirmReject, setConfirmReject] = useState(false);
   const [emailEditing, setEmailEditing] = useState(false);
   const [emailValue, setEmailValue] = useState("");
@@ -929,26 +939,27 @@ function OrderLightbox({
   const [editingItemId, setEditingItemId] = useState(null);
   const [editingPrice, setEditingPrice] = useState("");
 
-  // Address states
-  const [addressMode, setAddressMode] = useState("view"); // "view" | "select" | "add"
+  // Address
+  const [addressMode, setAddressMode] = useState("view");
   const [selectedAddressId, setSelectedAddressId] = useState(null);
   const [availableAddresses, setAvailableAddresses] = useState([]);
   const [loadingAddresses, setLoadingAddresses] = useState(false);
 
-  // Product editing states
+  // Products
   const [editingProductItemId, setEditingProductItemId] = useState(null);
   const [availableProducts, setAvailableProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
-  const [selectedProductId, setSelectedProductId] = useState(null);
+  const [selectedProductForEdit, setSelectedProductForEdit] = useState(null);
 
-  // Add product panel state
+  // Add product
   const [showAddProduct, setShowAddProduct] = useState(false);
 
-  // Confirm delete item
+  // Delete item confirm
   const [confirmDeleteItemId, setConfirmDeleteItemId] = useState(null);
 
   useEffect(() => {
     if (details?.remarks != null) setRemarksVal(details.remarks);
+    if (details?.utr_number != null) setUtrFieldVal(details.utr_number || "");
   }, [details]);
 
   useEffect(() => {
@@ -959,7 +970,6 @@ function OrderLightbox({
     }
   }, [order]);
 
-  // Load products on mount — using the correct endpoint
   useEffect(() => {
     loadProducts();
   }, []);
@@ -969,15 +979,13 @@ function OrderLightbox({
     try {
       const res = await api.get("/orders/products/list");
       setAvailableProducts(res.data || []);
-    } catch (error) {
-      console.error("Failed to load products:", error);
+    } catch {
       setAvailableProducts([]);
     } finally {
       setProductsLoading(false);
     }
   };
 
-  // Load available addresses when switching to select mode
   const loadAddresses = async () => {
     setLoadingAddresses(true);
     try {
@@ -989,9 +997,8 @@ function OrderLightbox({
       setAvailableAddresses(res.data || []);
       setSelectedAddressId(order.address_id);
       setAddressMode("select");
-    } catch (error) {
-      console.error("Failed to load addresses:", error);
-      alert("Failed to load addresses");
+    } catch {
+      toast.error("Failed to load addresses");
     } finally {
       setLoadingAddresses(false);
     }
@@ -1001,34 +1008,27 @@ function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-address`,
-        {
-          address_id: selectedAddressId,
-        },
+        { address_id: selectedAddressId },
       );
       setAddressMode("view");
+      toast.success("Delivery address updated");
       onAction && onAction(order.order_id, "refresh");
-    } catch (error) {
-      console.error("Failed to update address:", error);
-      alert("Failed to update address");
+    } catch {
+      toast.error("Failed to update address");
     }
   };
 
-  // Called when a new address is successfully created
   const handleAddressCreated = async (newAddress) => {
-    // Auto-select and apply the new address to the order
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-address`,
-        {
-          address_id: newAddress.address_id,
-        },
+        { address_id: newAddress.address_id },
       );
       setAddressMode("view");
       onAction && onAction(order.order_id, "refresh");
-    } catch (error) {
-      console.error("Failed to set new address on order:", error);
-      alert(
-        "Address created but could not be applied to order. Please select it manually.",
+    } catch {
+      toast.warn(
+        "Address created but could not be applied. Please select it manually.",
       );
       setAddressMode("view");
       onAction && onAction(order.order_id, "refresh");
@@ -1036,21 +1036,21 @@ function OrderLightbox({
   };
 
   const saveProduct = async (itemId) => {
-    if (!selectedProductId) return;
+    if (!selectedProductForEdit) return;
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-item-product`,
         {
           item_id: itemId,
-          product_id: selectedProductId,
+          product_id: selectedProductForEdit.id,
         },
       );
+      toast.success(`Product updated to ${selectedProductForEdit.name}`);
       setEditingProductItemId(null);
-      setSelectedProductId(null);
+      setSelectedProductForEdit(null);
       onAction && onAction(order.order_id, "refresh");
-    } catch (error) {
-      console.error("Failed to update product:", error);
-      alert("Failed to update product");
+    } catch {
+      toast.error("Failed to update product");
     }
   };
 
@@ -1059,16 +1059,16 @@ function OrderLightbox({
       await api.delete(
         `/orders/${encodeURIComponent(order.order_id)}/items/${itemId}`,
       );
+      toast.success("Item removed from order");
       setConfirmDeleteItemId(null);
       onAction && onAction(order.order_id, "refresh");
     } catch (err) {
-      const msg = err?.response?.data?.detail || "Failed to remove item";
-      alert(msg);
+      toast.error(err?.response?.data?.detail || "Failed to remove item");
       setConfirmDeleteItemId(null);
     }
   };
 
-  const handleItemAdded = (data) => {
+  const handleItemAdded = () => {
     setShowAddProduct(false);
     onAction && onAction(order.order_id, "refresh");
   };
@@ -1086,30 +1086,51 @@ function OrderLightbox({
       setSerialItems(normalized);
       setSerialOpen(true);
     } catch {
-      alert("Failed to load serial numbers");
+      toast.error("Failed to load serial numbers");
     } finally {
       setSerialLoading(false);
     }
   };
 
   const saveSerials = async () => {
-    await api.post(
-      `/orders/${encodeURIComponent(order.order_id)}/serial_numbers/save`,
-      {
-        entries: serialItems,
-      },
-    );
-    setSerialOpen(false);
-    onAction && onAction(order.order_id, "refresh");
+    try {
+      await api.post(
+        `/orders/${encodeURIComponent(order.order_id)}/serial_numbers/save`,
+        { entries: serialItems },
+      );
+      toast.success("Serial numbers saved");
+      setSerialOpen(false);
+      onAction && onAction(order.order_id, "refresh");
+    } catch {
+      toast.error("Failed to save serial numbers");
+    }
   };
 
   const submitUTR = async () => {
-    if (!utrValue.trim()) return alert("Enter UTR number");
+    if (!utrValue.trim()) {
+      toast.warn("Enter UTR number");
+      return;
+    }
     await onAction(order.order_id, "mark-paid-utr", utrValue.trim());
     setLocalPayStatus("paid");
     setUtrOpen(false);
     setUtrValue("");
     onAction && onAction(order.order_id, "refresh");
+  };
+
+  // Inline UTR update (without changing payment status)
+  const saveUtrField = async () => {
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-utr`,
+        { utr_number: utrFieldVal },
+      );
+      toast.success("UTR number updated");
+      setUtrFieldEditing(false);
+      onAction && onAction(order.order_id, "refresh");
+    } catch {
+      toast.error("Failed to update UTR number");
+    }
   };
 
   const cycleDelivery = async (status) => {
@@ -1121,22 +1142,26 @@ function OrderLightbox({
     onAction && onAction(order.order_id, "create-invoice");
 
   const saveRemarks = async () => {
-    await onAction(order.order_id, "update-remarks", remarksVal);
-    setRemarksEditing(false);
+    try {
+      await onAction(order.order_id, "update-remarks", remarksVal);
+      toast.success("Remarks saved");
+      setRemarksEditing(false);
+    } catch {
+      toast.error("Failed to save remarks");
+    }
   };
 
   const saveEmail = async () => {
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-email`,
-        {
-          email: emailValue.trim(),
-        },
+        { email: emailValue.trim() },
       );
+      toast.success("Email updated");
       setEmailEditing(false);
       onAction && onAction(order.order_id, "refresh");
     } catch {
-      alert("Failed to update email");
+      toast.error("Failed to update email");
     }
   };
 
@@ -1144,47 +1169,52 @@ function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-mobile`,
-        {
-          mobile: mobileValue.trim(),
-        },
+        { mobile: mobileValue.trim() },
       );
+      toast.success("Mobile updated");
       setMobileEditing(false);
       onAction && onAction(order.order_id, "refresh");
     } catch {
-      alert("Failed to update mobile");
+      toast.error("Failed to update mobile");
     }
   };
 
   const saveItemPrice = async (itemId) => {
     try {
       const newPrice = parseFloat(editingPrice);
-      if (isNaN(newPrice) || newPrice < 0) return alert("Invalid price");
+      if (isNaN(newPrice) || newPrice < 0) {
+        toast.warn("Invalid price");
+        return;
+      }
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-item-price`,
-        {
-          item_id: itemId,
-          unit_price: newPrice,
-        },
+        { item_id: itemId, unit_price: newPrice },
       );
+      toast.success("Price updated");
       setEditingItemId(null);
       setEditingPrice("");
       onAction && onAction(order.order_id, "refresh");
     } catch {
-      alert("Failed to update item price");
+      toast.error("Failed to update item price");
     }
   };
 
   const handleReject = async () => {
     try {
       await api.put(`/orders/${encodeURIComponent(order.order_id)}/reject`);
-      alert("Order rejected successfully");
+      toast.success("Order rejected");
+      setLocalOrderStatus("REJECTED");
+      setConfirmReject(false);
+      onAction && onAction(order.order_id, "refresh");
       onClose();
     } catch {
-      alert("Failed to reject order");
+      toast.error("Failed to reject order");
     }
   };
 
   const cust = details?.customer || order.customer;
+  const currentInvoice = details?.invoice_number ?? order.invoice_number;
+  const currentOrderStatus = details?.order_status ?? localOrderStatus;
 
   return (
     <div
@@ -1201,6 +1231,9 @@ function OrderLightbox({
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <PaymentBadge status={localPayStatus} />
             <DeliveryBadge status={deliveryStatus} />
+            {currentOrderStatus === "REJECTED" && (
+              <span className="badge badge-red">Rejected</span>
+            )}
             <button className="lb-close" onClick={onClose}>
               ✕
             </button>
@@ -1210,7 +1243,6 @@ function OrderLightbox({
         <div className="lb-body">
           {/* ── LEFT COLUMN ── */}
           <div className="lb-section">
-            {/* Customer & Order Info */}
             <div>
               <div className="lb-section-title">Customer & Order</div>
               <div className="lb-info-grid">
@@ -1307,17 +1339,11 @@ function OrderLightbox({
                     {order.payment_type || "—"}
                   </div>
                 </div>
-                {details?.utr_number && (
-                  <div
-                    className="lb-info-card"
-                    style={{ gridColumn: "span 2" }}
-                  >
-                    <div className="lb-info-label">UTR Number</div>
-                    <div
-                      className="lb-info-value"
-                      style={{ fontFamily: "'DM Mono',monospace" }}
-                    >
-                      {details.utr_number}
+                {details?.fulfillment_status != null && (
+                  <div className="lb-info-card">
+                    <div className="lb-info-label">Fulfillment</div>
+                    <div className="lb-info-value">
+                      <FulfillmentBadge status={details.fulfillment_status} />
                     </div>
                   </div>
                 )}
@@ -1358,8 +1384,6 @@ function OrderLightbox({
                     </div>
                   )}
                 </div>
-
-                {/* VIEW MODE */}
                 {addressMode === "view" && details?.address && (
                   <div
                     className="lb-info-card"
@@ -1375,8 +1399,6 @@ function OrderLightbox({
                     )}
                   </div>
                 )}
-
-                {/* SELECT EXISTING ADDRESS */}
                 {addressMode === "select" && (
                   <div
                     style={{ display: "flex", flexDirection: "column", gap: 8 }}
@@ -1429,8 +1451,6 @@ function OrderLightbox({
                     )}
                   </div>
                 )}
-
-                {/* ADD NEW ADDRESS FORM */}
                 {addressMode === "add" && (
                   <AddAddressForm
                     order={order}
@@ -1441,52 +1461,113 @@ function OrderLightbox({
               </div>
             )}
 
-            {/* Remarks */}
+            {/* ── REMARKS + UTR SIDE BY SIDE ── */}
             <div>
-              <div className="lb-section-title">Remarks</div>
-              {remarksEditing ? (
-                <>
-                  <textarea
-                    className="remarks-input"
-                    value={remarksVal}
-                    onChange={(e) => setRemarksVal(e.target.value)}
-                    placeholder="Add a remark…"
-                  />
-                  <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
-                    <button
-                      className="lb-btn lb-btn-primary lb-btn-sm"
-                      onClick={saveRemarks}
+              <div className="lb-section-title">Notes</div>
+              <div className="remarks-utr-row">
+                {/* Remarks */}
+                <div className="form-field">
+                  <label className="form-label">Remarks</label>
+                  {remarksEditing ? (
+                    <>
+                      <textarea
+                        className="remarks-input"
+                        value={remarksVal}
+                        onChange={(e) => setRemarksVal(e.target.value)}
+                        placeholder="Add a remark…"
+                      />
+                      <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
+                        <button
+                          className="lb-btn lb-btn-primary lb-btn-sm"
+                          onClick={saveRemarks}
+                        >
+                          Save
+                        </button>
+                        <button
+                          className="lb-btn lb-btn-secondary lb-btn-sm"
+                          onClick={() => setRemarksEditing(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div
+                      onClick={() => setRemarksEditing(true)}
+                      style={{
+                        padding: "9px 11px",
+                        background: "var(--surface2)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius)",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        color: remarksVal ? "var(--text)" : "var(--text3)",
+                        minHeight: 54,
+                      }}
                     >
-                      Save
-                    </button>
-                    <button
-                      className="lb-btn lb-btn-secondary lb-btn-sm"
-                      onClick={() => setRemarksEditing(false)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div
-                  onClick={() => setRemarksEditing(true)}
-                  style={{
-                    padding: "9px 11px",
-                    background: "var(--surface2)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius)",
-                    fontSize: 13,
-                    cursor: "pointer",
-                    color: remarksVal ? "var(--text)" : "var(--text3)",
-                    minHeight: 36,
-                  }}
-                >
-                  {remarksVal || "Click to add a remark…"}
+                      {remarksVal || "Click to add a remark…"}
+                    </div>
+                  )}
                 </div>
-              )}
+
+                {/* UTR Number inline field */}
+                <div className="form-field">
+                  <label className="form-label">UTR / Ref No.</label>
+                  {utrFieldEditing ? (
+                    <>
+                      <input
+                        className="form-input"
+                        style={{
+                          fontFamily: "'DM Mono',monospace",
+                          fontSize: 12.5,
+                        }}
+                        value={utrFieldVal}
+                        onChange={(e) => setUtrFieldVal(e.target.value)}
+                        placeholder="Transaction reference…"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveUtrField();
+                          if (e.key === "Escape") setUtrFieldEditing(false);
+                        }}
+                        autoFocus
+                      />
+                      <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
+                        <button
+                          className="lb-btn lb-btn-primary lb-btn-sm"
+                          onClick={saveUtrField}
+                        >
+                          Save
+                        </button>
+                        <button
+                          className="lb-btn lb-btn-secondary lb-btn-sm"
+                          onClick={() => setUtrFieldEditing(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div
+                      onClick={() => setUtrFieldEditing(true)}
+                      style={{
+                        padding: "9px 11px",
+                        background: "var(--surface2)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius)",
+                        fontSize: 12.5,
+                        cursor: "pointer",
+                        fontFamily: "'DM Mono',monospace",
+                        color: utrFieldVal ? "var(--green)" : "var(--text3)",
+                        minHeight: 54,
+                      }}
+                    >
+                      {utrFieldVal || "Click to add UTR…"}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* UTR box */}
+            {/* UTR mark-paid box */}
             {localPayStatus !== "paid" && utrOpen && (
               <div className="utr-box">
                 <label>Enter UTR / Transaction Reference Number</label>
@@ -1514,7 +1595,7 @@ function OrderLightbox({
 
           {/* ── RIGHT COLUMN ── */}
           <div className="lb-section">
-            {/* Items table */}
+            {/* Items */}
             {details?.items?.length > 0 && (
               <div>
                 <div
@@ -1535,13 +1616,8 @@ function OrderLightbox({
                   </button>
                 </div>
 
-                <div
-                  style={{
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius)",
-                    overflow: "hidden",
-                  }}
-                >
+                {/* FIX #1: wrapper must NOT have overflow:hidden */}
+                <div className="lb-items-table-wrap">
                   <table className="lb-items-table">
                     <thead>
                       <tr>
@@ -1554,22 +1630,34 @@ function OrderLightbox({
                     </thead>
                     <tbody>
                       {details.items.map((it) => (
-                        <tr key={it.item_id}>
-                          <td>
+                        <tr key={it.item_id} style={{ overflow: "visible" }}>
+                          <td
+                            style={{
+                              overflow: "visible",
+                              position: "relative",
+                            }}
+                          >
                             {editingProductItemId === it.item_id ? (
                               <div
                                 style={{
                                   display: "flex",
                                   gap: 6,
                                   alignItems: "center",
+                                  overflow: "visible",
                                 }}
                               >
-                                <div style={{ flex: 1 }}>
+                                <div
+                                  style={{
+                                    flex: 1,
+                                    position: "relative",
+                                    overflow: "visible",
+                                  }}
+                                >
                                   <ProductSearchInput
                                     products={availableProducts}
-                                    value={selectedProductId}
+                                    value={selectedProductForEdit?.id}
                                     onChange={(p) =>
-                                      setSelectedProductId(p?.id || null)
+                                      setSelectedProductForEdit(p)
                                     }
                                     placeholder="Search product…"
                                   />
@@ -1577,7 +1665,7 @@ function OrderLightbox({
                                 <button
                                   className="lb-btn lb-btn-primary lb-btn-sm"
                                   onClick={() => saveProduct(it.item_id)}
-                                  disabled={!selectedProductId}
+                                  disabled={!selectedProductForEdit}
                                 >
                                   ✓
                                 </button>
@@ -1585,7 +1673,7 @@ function OrderLightbox({
                                   className="lb-btn lb-btn-secondary lb-btn-sm"
                                   onClick={() => {
                                     setEditingProductItemId(null);
-                                    setSelectedProductId(null);
+                                    setSelectedProductForEdit(null);
                                   }}
                                 >
                                   ✕
@@ -1604,7 +1692,7 @@ function OrderLightbox({
                                   className="edit-icon"
                                   onClick={() => {
                                     setEditingProductItemId(it.item_id);
-                                    setSelectedProductId(it.product_id);
+                                    setSelectedProductForEdit(null);
                                   }}
                                   title="Edit product"
                                 >
@@ -1695,7 +1783,6 @@ function OrderLightbox({
                   </table>
                 </div>
 
-                {/* Add Product Panel */}
                 {showAddProduct && (
                   <AddProductPanel
                     orderId={order.order_id}
@@ -1704,7 +1791,6 @@ function OrderLightbox({
                     onCancel={() => setShowAddProduct(false)}
                   />
                 )}
-
                 {productsLoading && (
                   <div
                     style={{
@@ -1719,7 +1805,6 @@ function OrderLightbox({
               </div>
             )}
 
-            {/* If no items yet, still show add product */}
             {!loading &&
               details &&
               (!details.items || details.items.length === 0) && (
@@ -1883,9 +1968,10 @@ function OrderLightbox({
           <InvoiceButton
             orderId={order.order_id}
             invoiceNumber={order.invoice_number}
-            detailsInvoice={details?.invoice_number}
+            detailsInvoice={currentInvoice}
             onGenerate={handleInvoice}
             loading={invoiceLoading}
+            orderStatus={currentOrderStatus}
           />
 
           <div style={{ flex: 1 }} />
@@ -1906,12 +1992,14 @@ function OrderLightbox({
               </button>
             </>
           ) : (
-            <button
-              className="lb-btn lb-btn-danger"
-              onClick={() => setConfirmReject(true)}
-            >
-              ⛔ Reject
-            </button>
+            currentOrderStatus !== "REJECTED" && (
+              <button
+                className="lb-btn lb-btn-danger"
+                onClick={() => setConfirmReject(true)}
+              >
+                ⛔ Reject
+              </button>
+            )
           )}
         </div>
       </div>
@@ -1938,7 +2026,6 @@ export default function OrdersTable({
   const [loadingDetails, setLoadingDetails] = useState({});
   const loadMoreRef = useRef(null);
 
-  /* ── INFINITE SCROLL ── */
   useEffect(() => {
     if (!hasMore || !onLoadMore) return;
     const obs = new IntersectionObserver(
@@ -1951,7 +2038,6 @@ export default function OrdersTable({
     return () => obs.disconnect();
   }, [hasMore, isLoadingMore, onLoadMore]);
 
-  /* ── OPEN LIGHTBOX & LAZY LOAD DETAILS ── */
   const openOrder = useCallback(
     async (order) => {
       setActiveOrder(order);
@@ -1961,8 +2047,8 @@ export default function OrdersTable({
       try {
         const res = await api.get(`/orders/${encodeURIComponent(id)}/details`);
         setDetailsCache((p) => ({ ...p, [id]: res.data }));
-      } catch (error) {
-        console.error(error);
+      } catch (e) {
+        console.error(e);
       } finally {
         setLoadingDetails((p) => ({ ...p, [id]: false }));
       }
@@ -1970,7 +2056,6 @@ export default function OrdersTable({
     [detailsCache],
   );
 
-  /* ── CLIENT-SIDE FILTER ── */
   const filtered = useMemo(() => {
     const {
       search = "",
@@ -1981,13 +2066,11 @@ export default function OrdersTable({
       date_to = "",
       pending_invoice = false,
     } = filters;
-
     return orders.filter((o) => {
       const cust = o.customer || {};
-
       const q = search.toLowerCase().trim();
       if (q) {
-        const haystack = [
+        const hay = [
           o.order_id,
           cust.name,
           cust.mobile,
@@ -1997,9 +2080,8 @@ export default function OrdersTable({
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
-        if (!haystack.includes(q)) return false;
+        if (!hay.includes(q)) return false;
       }
-
       if (
         payment_status &&
         o.payment_status?.toLowerCase() !== payment_status.toLowerCase()
@@ -2010,7 +2092,6 @@ export default function OrdersTable({
         o.delivery_status?.toUpperCase() !== delivery_status.toUpperCase()
       )
         return false;
-
       if (channel) {
         const ch = (o.channel || "").trim().toLowerCase();
         const target = channel.toLowerCase();
@@ -2020,30 +2101,35 @@ export default function OrdersTable({
           if (ch !== target) return false;
         }
       }
-
       if (date_from || date_to) {
-        const orderDate = new Date(o.created_at);
-        if (date_from && orderDate < new Date(date_from)) return false;
+        const d = new Date(o.created_at);
+        if (date_from && d < new Date(date_from)) return false;
         if (date_to) {
           const end = new Date(date_to);
           end.setHours(23, 59, 59, 999);
-          if (orderDate > end) return false;
+          if (d > end) return false;
         }
       }
+      if (pending_invoice) {
+        const inv = (o.invoice_number || "").trim();
 
-      if (pending_invoice && o.invoice_number) return false;
-
+        // EXCLUDE if invoice exists OR is NA
+        if (inv && inv !== "") return false;
+      }
       return true;
     });
   }, [orders, filters]);
 
   return (
     <div className="ot-wrap">
+      {/* Toast container lives here so it's always mounted */}
+      <ToastContainer />
+
       <div className="ot-table-wrap">
         {filtered.length === 0 ? (
           <div className="ot-empty">
-            <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
-            No orders match your filters.
+            <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>No orders
+            match your filters.
           </div>
         ) : (
           <table className="ot-table">
@@ -2058,6 +2144,7 @@ export default function OrdersTable({
                 <th>Channel</th>
                 <th>Payment</th>
                 <th>Delivery</th>
+                <th>Fulfillment</th>
                 <th>Invoice</th>
               </tr>
             </thead>
@@ -2109,7 +2196,7 @@ export default function OrdersTable({
                             <span
                               style={{
                                 fontFamily: "'DM Mono', monospace",
-                                fontSize: 11.5,
+                                fontSize: 11,
                                 color: "var(--green)",
                                 lineHeight: 1.2,
                               }}
@@ -2123,7 +2210,13 @@ export default function OrdersTable({
                       <DeliveryBadge status={order.delivery_status} />
                     </td>
                     <td>
-                      <InvoiceCell invoiceNumber={order.invoice_number} />
+                      <FulfillmentBadge status={order.fulfillment_status} />
+                    </td>
+                    <td>
+                      <InvoiceCell
+                        invoiceNumber={order.invoice_number}
+                        orderStatus={order.order_status}
+                      />
                     </td>
                   </tr>
                 );
@@ -2131,7 +2224,6 @@ export default function OrdersTable({
             </tbody>
           </table>
         )}
-
         {hasMore && (
           <div ref={loadMoreRef} className="ot-load-more">
             {isLoadingMore ? "Loading more orders…" : " "}
@@ -2143,7 +2235,6 @@ export default function OrdersTable({
         Showing {filtered.length} of {orders.length} orders
       </div>
 
-      {/* LIGHTBOX */}
       {activeOrder && (
         <OrderLightbox
           order={activeOrder}
@@ -2161,17 +2252,17 @@ export default function OrdersTable({
             }
             if (action === "refresh") {
               setDetailsCache((p) => {
-                const copy = { ...p };
-                delete copy[id];
-                return copy;
+                const c = { ...p };
+                delete c[id];
+                return c;
               });
               try {
                 const res = await api.get(
                   `/orders/${encodeURIComponent(id)}/details`,
                 );
                 setDetailsCache((p) => ({ ...p, [id]: res.data }));
-              } catch (error) {
-                console.error(error);
+              } catch (e) {
+                console.error(e);
               }
             }
           }}
