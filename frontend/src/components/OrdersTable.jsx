@@ -38,49 +38,6 @@ const STYLES = `
 
   .ot-wrap { font-family: 'DM Sans', sans-serif; color: var(--text); }
 
-  /* ── TOOLBAR ── */
-  .ot-toolbar {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin-bottom: 16px;
-  }
-  .ot-search-wrap {
-    position: relative;
-    flex: 0 1 280px;   /* controlled width */
-    min-width: 200px;
-    max-width: 320px;
-  }
-  .ot-search-wrap svg {
-    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-    color: var(--text3); pointer-events: none;
-  }
-  .ot-search {
-    width: 100%; padding: 9px 12px 9px 38px;
-    border: 1px solid var(--border2); border-radius: var(--radius);
-    font-family: inherit; font-size: 14px; color: var(--text);
-    background: var(--surface); outline: none; transition: border .15s;
-  }
-  .ot-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
-
-  .ot-filter-btn {
-    display: flex; align-items: center; gap: 6px;
-    padding: 8px 14px; border: 1px solid var(--border2);
-    border-radius: var(--radius); background: var(--surface);
-    font-family: inherit; font-size: 13px; font-weight: 500; color: var(--text2);
-    cursor: pointer; transition: all .15s; white-space: nowrap;
-  }
-  .ot-filter-btn select,
-  select.ot-filter-btn {
-    appearance: none;
-  }
-  .ot-filter-btn:hover { background: var(--bg); border-color: var(--border2); }
-  .ot-filter-btn.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
-  .ot-filter-btn .dot {
-    width: 7px; height: 7px; border-radius: 50%; background: currentColor;
-  }
-
   /* ── TABLE SHELL ── */
   .ot-table-wrap {
     background: var(--surface); border: 1px solid var(--border);
@@ -131,17 +88,10 @@ const STYLES = `
     color: var(--accent); font-weight: 500;
   }
 
-  /* ── ACTION DOTS ── */
-  .ot-open-btn {
-    padding: 5px 12px; border: 1px solid var(--border2);
-    border-radius: 6px; background: var(--surface);
-    font-family: inherit; font-size: 12px; font-weight: 500;
-    color: var(--text2); cursor: pointer; transition: all .15s;
-    white-space: nowrap;
-  }
-  .ot-open-btn:hover {
-    background: var(--accent-light); border-color: var(--accent);
-    color: var(--accent);
+  /* ── INVOICE NUMBER mono ── */
+  .invoice-num {
+    font-family: 'DM Mono', monospace; font-size: 11.5px;
+    color: #027a48; font-weight: 500;
   }
 
   /* ── LOAD MORE ── */
@@ -151,12 +101,12 @@ const STYLES = `
   }
 
   /* ══════════════════════════════════════
-     LIGHTBOX / MODAL
+     LIGHTBOX / MODAL - HORIZONTAL LAYOUT
   ══════════════════════════════════════ */
   .lb-overlay {
     position: fixed; inset: 0; background: rgba(16,24,40,.6);
     backdrop-filter: blur(3px); display: flex; justify-content: center;
-    align-items: flex-start; padding: 40px 20px;
+    align-items: flex-start; padding: 20px 16px;
     z-index: 1000; overflow-y: auto;
     animation: fadeIn .15s ease;
   }
@@ -164,68 +114,109 @@ const STYLES = `
 
   .lb-panel {
     background: var(--surface); border-radius: var(--radius-xl);
-    width: 100%; max-width: 780px; box-shadow: var(--shadow-xl);
+    width: 100%; max-width: 1200px; box-shadow: var(--shadow-xl);
     animation: slideUp .2s ease;
     overflow: hidden; flex-shrink: 0;
+    display: flex; flex-direction: column;
+    max-height: calc(100vh - 40px);
   }
   @keyframes slideUp { from { transform: translateY(20px); opacity: 0 } to { transform: none; opacity: 1 } }
 
   .lb-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 20px 24px 18px;
+    padding: 16px 20px 14px;
     border-bottom: 1px solid var(--border);
     background: var(--surface2);
+    flex-shrink: 0;
   }
-  .lb-title { font-size: 16px; font-weight: 600; color: var(--text); }
-  .lb-subtitle { font-size: 12.5px; color: var(--text3); margin-top: 2px; font-family: 'DM Mono', monospace; }
+  .lb-title { font-size: 15px; font-weight: 600; color: var(--text); }
+  .lb-subtitle { font-size: 12px; color: var(--text3); margin-top: 2px; font-family: 'DM Mono', monospace; }
 
   .lb-close {
-    width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border2);
+    width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--border2);
     background: transparent; cursor: pointer; display: flex;
     align-items: center; justify-content: center; color: var(--text2);
     transition: all .15s;
   }
   .lb-close:hover { background: var(--red-bg); color: var(--red); border-color: var(--red); }
 
-  .lb-body { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+  .lb-body {
+    padding: 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .lb-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
 
   .lb-section-title {
-    font-size: 11px; font-weight: 600; color: var(--text3);
-    letter-spacing: .8px; text-transform: uppercase; margin-bottom: 10px;
+    font-size: 10.5px; font-weight: 600; color: var(--text3);
+    letter-spacing: .7px; text-transform: uppercase; margin-bottom: 8px;
   }
 
   .lb-info-grid {
-    display: grid; grid-template-columns: repeat(3,1fr); gap: 12px;
+    display: grid; grid-template-columns: repeat(2,1fr); gap: 10px;
   }
   .lb-info-card {
     background: var(--surface2); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 10px 14px;
+    border-radius: var(--radius); padding: 9px 12px;
   }
-  .lb-info-label { font-size: 11px; color: var(--text3); font-weight: 500; margin-bottom: 3px; }
-  .lb-info-value { font-size: 13.5px; color: var(--text); font-weight: 500; }
+  .lb-info-label { font-size: 10.5px; color: var(--text3); font-weight: 500; margin-bottom: 2px; }
+  .lb-info-value {
+    font-size: 13px; color: var(--text); font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 
-  .lb-items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .edit-icon {
+    cursor: pointer;
+    color: var(--text3);
+    transition: color 0.15s;
+    font-size: 13px;
+  }
+  .edit-icon:hover { color: var(--accent); }
+
+  .inline-edit-input {
+    padding: 5px 9px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+    width: 100%;
+    box-shadow: 0 0 0 3px rgba(21,112,239,.12);
+  }
+
+  .lb-items-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .lb-items-table th {
-    padding: 8px 10px; background: var(--surface2); text-align: left;
-    font-size: 11.5px; color: var(--text3); font-weight: 600;
+    padding: 7px 9px; background: var(--surface2); text-align: left;
+    font-size: 11px; color: var(--text3); font-weight: 600;
     border-bottom: 1px solid var(--border);
   }
   .lb-items-table td {
-    padding: 10px; border-bottom: 1px solid var(--border);
+    padding: 9px; border-bottom: 1px solid var(--border);
     color: var(--text);
   }
   .lb-items-table tr:last-child td { border-bottom: none; }
 
   /* ── ACTIONS BAR ── */
   .lb-actions {
-    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-    padding: 16px 24px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    padding: 14px 20px; border-top: 1px solid var(--border);
     background: var(--surface2);
+    flex-shrink: 0;
   }
   .lb-btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 16px; border-radius: var(--radius);
-    font-family: inherit; font-size: 13px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 7px 14px; border-radius: var(--radius);
+    font-family: inherit; font-size: 12.5px; font-weight: 500;
     cursor: pointer; border: 1px solid transparent; transition: all .15s;
   }
   .lb-btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -236,41 +227,43 @@ const STYLES = `
   .lb-btn-danger:hover { background: var(--red-bg); }
   .lb-btn-success { background: var(--green-bg); color: #027a48; border-color: #a9efc5; }
   .lb-btn-success:hover { background: #d1fadf; }
+  .lb-btn-teal { background: #f0fdfa; color: #0d9488; border-color: #99f6e4; }
+  .lb-btn-teal:hover { background: #ccfbf1; }
   .lb-btn:disabled { opacity: .5; pointer-events: none; }
 
   /* ── UTR MODAL ── */
   .utr-box {
     background: var(--surface2); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 16px; margin-top: 8px;
+    border-radius: var(--radius); padding: 14px; margin-top: 6px;
   }
-  .utr-box label { font-size: 12px; font-weight: 600; color: var(--text2); display: block; margin-bottom: 6px; }
-  .utr-input-row { display: flex; gap: 8px; }
+  .utr-box label { font-size: 11.5px; font-weight: 600; color: var(--text2); display: block; margin-bottom: 5px; }
+  .utr-input-row { display: flex; gap: 7px; }
   .utr-input {
-    flex: 1; padding: 9px 12px; border: 1px solid var(--border2);
+    flex: 1; padding: 8px 11px; border: 1px solid var(--border2);
     border-radius: var(--radius); font-family: 'DM Mono', monospace;
-    font-size: 13px; outline: none; transition: border .15s;
+    font-size: 12.5px; outline: none; transition: border .15s;
   }
   .utr-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
 
   /* ── SERIAL MODAL ── */
   .serial-item {
     border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 14px; margin-bottom: 12px; background: var(--surface2);
+    padding: 12px; margin-bottom: 10px; background: var(--surface2);
   }
-  .serial-item h4 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; color: var(--text); }
+  .serial-item h4 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--text); }
   .serial-input {
-    width: 100%; padding: 8px 11px; margin: 4px 0;
-    border: 1px solid var(--border2); border-radius: 6px;
-    font-family: 'DM Mono', monospace; font-size: 13px; outline: none;
+    width: 100%; padding: 7px 10px; margin: 3px 0;
+    border: 1px solid var(--border2); border-radius: 5px;
+    font-family: 'DM Mono', monospace; font-size: 12.5px; outline: none;
     transition: border .15s; box-sizing: border-box;
   }
   .serial-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
 
   /* ── REMARKS ── */
   .remarks-input {
-    width: 100%; padding: 9px 12px; border: 1px solid var(--border2);
-    border-radius: var(--radius); font-family: inherit; font-size: 13px;
-    resize: vertical; min-height: 64px; outline: none; transition: border .15s;
+    width: 100%; padding: 8px 11px; border: 1px solid var(--border2);
+    border-radius: var(--radius); font-family: inherit; font-size: 12.5px;
+    resize: vertical; min-height: 58px; outline: none; transition: border .15s;
     box-sizing: border-box;
   }
   .remarks-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
@@ -280,9 +273,13 @@ const STYLES = `
     text-align: center; padding: 60px 20px; color: var(--text3); font-size: 14px;
   }
 
-  /* ── MOBILE ── */
+  /* ── RESPONSIVE ── */
+  @media (max-width: 1100px) {
+    .lb-body { grid-template-columns: 1fr; }
+    .lb-panel { max-width: 800px; }
+  }
   @media (max-width: 700px) {
-    .lb-info-grid { grid-template-columns: 1fr 1fr; }
+    .lb-info-grid { grid-template-columns: 1fr; }
     .ot-table th:nth-child(n+5), .ot-table td:nth-child(n+5) { display: none; }
   }
 `;
@@ -348,6 +345,68 @@ function SerialBadge({ status }) {
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
+/* Invoice cell — shows invoice number or a muted "Pending" badge */
+function InvoiceCell({ invoiceNumber }) {
+  if (invoiceNumber) {
+    return <span className="invoice-num">🧾 {invoiceNumber}</span>;
+  }
+  return <span className="badge badge-gray">Pending</span>;
+}
+
+/* ─────────────────────────────────────────────
+   INVOICE BUTTON — smart: print vs generate
+   • invoiceNumber  = existing invoice_number on the order (from table row)
+   • detailsInvoice = invoice_number returned by /details (after generation)
+   Priority: detailsInvoice > invoiceNumber (details is always fresher)
+───────────────────────────────────────────── */
+function InvoiceButton({
+  orderId,
+  invoiceNumber,
+  detailsInvoice,
+  onGenerate,
+  loading,
+}) {
+  // Use the freshest invoice number available
+  const existingInvoice = detailsInvoice || invoiceNumber;
+
+  if (existingInvoice) {
+    // Invoice already exists → open the download/print URL in a new tab
+    const printUrl = `${import.meta.env.VITE_API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`;
+    return (
+      <a
+        href={printUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="lb-btn lb-btn-teal"
+        style={{ textDecoration: "none" }}
+      >
+        🖨️ Print Invoice
+        <span
+          style={{
+            fontFamily: "'DM Mono', monospace",
+            fontSize: 10.5,
+            opacity: 0.75,
+            marginLeft: 4,
+          }}
+        >
+          {existingInvoice}
+        </span>
+      </a>
+    );
+  }
+
+  // No invoice yet → generate
+  return (
+    <button
+      className="lb-btn lb-btn-primary"
+      onClick={onGenerate}
+      disabled={loading}
+    >
+      {loading ? "Generating…" : "🧾 Invoice"}
+    </button>
+  );
+}
+
 /* ─────────────────────────────────────────────
    ORDER DETAIL LIGHTBOX
 ───────────────────────────────────────────── */
@@ -371,13 +430,25 @@ function OrderLightbox({
   );
   const [localPayStatus, setLocalPayStatus] = useState(order.payment_status);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [emailEditing, setEmailEditing] = useState(false);
+  const [emailValue, setEmailValue] = useState("");
+  const [mobileEditing, setMobileEditing] = useState(false);
+  const [mobileValue, setMobileValue] = useState("");
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [editingPrice, setEditingPrice] = useState("");
 
-  // sync remarks from details once loaded
   useEffect(() => {
     if (details?.remarks != null) setRemarksVal(details.remarks);
   }, [details]);
 
-  // ── SERIAL ──
+  useEffect(() => {
+    const cust = order.customer;
+    if (cust) {
+      setEmailValue(cust.email || "");
+      setMobileValue(cust.mobile || "");
+    }
+  }, [order]);
+
   const openSerials = async () => {
     setSerialLoading(true);
     try {
@@ -406,7 +477,6 @@ function OrderLightbox({
     onAction && onAction(order.order_id, "refresh");
   };
 
-  // ── UTR SUBMIT ──
   const submitUTR = async () => {
     if (!utrValue.trim()) return alert("Enter UTR number");
     await onAction(order.order_id, "mark-paid-utr", utrValue.trim());
@@ -416,29 +486,70 @@ function OrderLightbox({
     onAction && onAction(order.order_id, "refresh");
   };
 
-  // ── DELIVERY ──
   const cycleDelivery = async (status) => {
     await onAction(order.order_id, "update-delivery", status);
     setDeliveryStatus(status);
   };
 
-  // ── INVOICE ──
   const handleInvoice = () =>
     onAction && onAction(order.order_id, "create-invoice");
 
-  // ── REMARKS ──
   const saveRemarks = async () => {
     await onAction(order.order_id, "update-remarks", remarksVal);
     setRemarksEditing(false);
   };
 
-  // ── DELETE ──
+  const saveEmail = async () => {
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-email`,
+        { email: emailValue.trim() },
+      );
+      setEmailEditing(false);
+      onAction && onAction(order.order_id, "refresh");
+    } catch (error) {
+      console.error("Failed to update email:", error);
+      alert("Failed to update email");
+    }
+  };
+
+  const saveMobile = async () => {
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-mobile`,
+        { mobile: mobileValue.trim() },
+      );
+      setMobileEditing(false);
+      onAction && onAction(order.order_id, "refresh");
+    } catch (error) {
+      console.error("Failed to update mobile:", error);
+      alert("Failed to update mobile");
+    }
+  };
+
+  const saveItemPrice = async (itemId) => {
+    try {
+      const newPrice = parseFloat(editingPrice);
+      if (isNaN(newPrice) || newPrice < 0) return alert("Invalid price");
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-item-price`,
+        { item_id: itemId, unit_price: newPrice },
+      );
+      setEditingItemId(null);
+      setEditingPrice("");
+      onAction && onAction(order.order_id, "refresh");
+    } catch (error) {
+      console.error("Failed to update item price:", error);
+      alert("Failed to update item price");
+    }
+  };
+
   const handleDelete = async () => {
     await onAction(order.order_id, "delete");
     onClose();
   };
 
-  const cust = order.customer;
+  const cust = details?.customer || order.customer;
 
   return (
     <div
@@ -462,84 +573,304 @@ function OrderLightbox({
         </div>
 
         <div className="lb-body">
-          {/* ── CUSTOMER & ORDER INFO ── */}
-          <div>
-            <div className="lb-section-title">Customer & Order</div>
-            <div className="lb-info-grid">
-              <div className="lb-info-card">
-                <div className="lb-info-label">Customer</div>
-                <div className="lb-info-value">{cust?.name || "—"}</div>
-              </div>
-              <div className="lb-info-card">
-                <div className="lb-info-label">Mobile</div>
-                <div
-                  className="lb-info-value"
-                  style={{ fontFamily: "'DM Mono',monospace" }}
-                >
-                  {cust?.mobile || "—"}
+          {/* LEFT COLUMN */}
+          <div className="lb-section">
+            <div>
+              <div className="lb-section-title">Customer & Order</div>
+              <div className="lb-info-grid">
+                <div className="lb-info-card">
+                  <div className="lb-info-label">Customer</div>
+                  <div className="lb-info-value">{cust?.name || "—"}</div>
                 </div>
-              </div>
-              <div className="lb-info-card">
-                <div className="lb-info-label">Channel</div>
-                <div className="lb-info-value">{order.channel || "—"}</div>
-              </div>
-              <div className="lb-info-card">
-                <div className="lb-info-label">Created</div>
-                <div className="lb-info-value">{fmtDate(order.created_at)}</div>
-              </div>
-              <div className="lb-info-card">
-                <div className="lb-info-label">Amount</div>
-                <div className="lb-info-value">
-                  {fmtCurrency(order.total_amount)}
-                </div>
-              </div>
-              <div className="lb-info-card">
-                <div className="lb-info-label">Payment Type</div>
-                <div className="lb-info-value">{order.payment_type || "—"}</div>
-              </div>
-              {details?.utr_number && (
-                <div className="lb-info-card" style={{ gridColumn: "span 3" }}>
-                  <div className="lb-info-label">UTR Number</div>
-                  <div
-                    className="lb-info-value"
-                    style={{ fontFamily: "'DM Mono',monospace" }}
-                  >
-                    {details.utr_number}
+                <div className="lb-info-card">
+                  <div className="lb-info-label">Mobile</div>
+                  <div className="lb-info-value">
+                    {mobileEditing ? (
+                      <input
+                        className="inline-edit-input"
+                        value={mobileValue}
+                        onChange={(e) => setMobileValue(e.target.value)}
+                        onBlur={saveMobile}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveMobile();
+                          if (e.key === "Escape") {
+                            setMobileEditing(false);
+                            setMobileValue(cust?.mobile || "");
+                          }
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <>
+                        <span style={{ fontFamily: "'DM Mono',monospace" }}>
+                          {cust?.mobile || "—"}
+                        </span>
+                        <span
+                          className="edit-icon"
+                          onClick={() => setMobileEditing(true)}
+                          title="Edit mobile"
+                        >
+                          ✏️
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── ADDRESS ── */}
-          {loading && (
-            <div style={{ color: "var(--text3)", fontSize: 13 }}>
-              Loading details…
-            </div>
-          )}
-          {details?.address && (
-            <div>
-              <div className="lb-section-title">Delivery Address</div>
-              <div
-                className="lb-info-card"
-                style={{ lineHeight: 1.7, fontSize: 13.5 }}
-              >
-                <strong>{details.address.name}</strong> ·{" "}
-                {details.address.mobile}
-                <br />
-                {details.address.address_line}, {details.address.city},{" "}
-                {details.address.state_name} — {details.address.pincode}
-                {details.address.landmark && (
-                  <span> ({details.address.landmark})</span>
+                <div className="lb-info-card">
+                  <div className="lb-info-label">Email</div>
+                  <div className="lb-info-value">
+                    {emailEditing ? (
+                      <input
+                        className="inline-edit-input"
+                        type="email"
+                        value={emailValue}
+                        onChange={(e) => setEmailValue(e.target.value)}
+                        onBlur={saveEmail}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveEmail();
+                          if (e.key === "Escape") {
+                            setEmailEditing(false);
+                            setEmailValue(cust?.email || "");
+                          }
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <>
+                        <span>{cust?.email || "—"}</span>
+                        <span
+                          className="edit-icon"
+                          onClick={() => setEmailEditing(true)}
+                          title="Edit email"
+                        >
+                          ✏️
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="lb-info-card">
+                  <div className="lb-info-label">Channel</div>
+                  <div className="lb-info-value">{order.channel || "—"}</div>
+                </div>
+                <div className="lb-info-card">
+                  <div className="lb-info-label">Created</div>
+                  <div className="lb-info-value">
+                    {fmtDate(order.created_at)}
+                  </div>
+                </div>
+                <div className="lb-info-card">
+                  <div className="lb-info-label">Amount</div>
+                  <div className="lb-info-value">
+                    {fmtCurrency(order.total_amount)}
+                  </div>
+                </div>
+                <div className="lb-info-card">
+                  <div className="lb-info-label">Payment Type</div>
+                  <div className="lb-info-value">
+                    {order.payment_type || "—"}
+                  </div>
+                </div>
+                {details?.utr_number && (
+                  <div
+                    className="lb-info-card"
+                    style={{ gridColumn: "span 2" }}
+                  >
+                    <div className="lb-info-label">UTR Number</div>
+                    <div
+                      className="lb-info-value"
+                      style={{ fontFamily: "'DM Mono',monospace" }}
+                    >
+                      {details.utr_number}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
-          )}
 
-          {/* ── ITEMS ── */}
-          {details?.items?.length > 0 && (
+            {loading && (
+              <div style={{ color: "var(--text3)", fontSize: 12.5 }}>
+                Loading details…
+              </div>
+            )}
+
+            {details?.address && (
+              <div>
+                <div className="lb-section-title">Delivery Address</div>
+                <div
+                  className="lb-info-card"
+                  style={{ lineHeight: 1.6, fontSize: 13 }}
+                >
+                  <strong>{details.address.name}</strong> ·{" "}
+                  {details.address.mobile}
+                  <br />
+                  {details.address.address_line}, {details.address.city},{" "}
+                  {details.address.state_name} — {details.address.pincode}
+                  {details.address.landmark && (
+                    <span> ({details.address.landmark})</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div>
-              <div className="lb-section-title">Items</div>
+              <div className="lb-section-title">Remarks</div>
+              {remarksEditing ? (
+                <>
+                  <textarea
+                    className="remarks-input"
+                    value={remarksVal}
+                    onChange={(e) => setRemarksVal(e.target.value)}
+                    placeholder="Add a remark…"
+                  />
+                  <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
+                    <button
+                      className="lb-btn lb-btn-primary"
+                      onClick={saveRemarks}
+                    >
+                      Save
+                    </button>
+                    <button
+                      className="lb-btn lb-btn-secondary"
+                      onClick={() => setRemarksEditing(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div
+                  onClick={() => setRemarksEditing(true)}
+                  style={{
+                    padding: "9px 11px",
+                    background: "var(--surface2)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    fontSize: 13,
+                    cursor: "pointer",
+                    color: remarksVal ? "var(--text)" : "var(--text3)",
+                    minHeight: 36,
+                  }}
+                >
+                  {remarksVal || "Click to add a remark…"}
+                </div>
+              )}
+            </div>
+
+            {localPayStatus !== "paid" && utrOpen && (
+              <div className="utr-box">
+                <label>Enter UTR / Transaction Reference Number</label>
+                <div className="utr-input-row">
+                  <input
+                    className="utr-input"
+                    placeholder="e.g. UTR123456789012"
+                    value={utrValue}
+                    onChange={(e) => setUtrValue(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && submitUTR()}
+                  />
+                  <button className="lb-btn lb-btn-success" onClick={submitUTR}>
+                    Mark Paid
+                  </button>
+                  <button
+                    className="lb-btn lb-btn-secondary"
+                    onClick={() => setUtrOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT COLUMN */}
+          <div className="lb-section">
+            {details?.items?.length > 0 && (
+              <div>
+                <div className="lb-section-title">Items</div>
+                <div
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <table className="lb-items-table">
+                    <thead>
+                      <tr>
+                        <th>Product</th>
+                        <th>Qty</th>
+                        <th>Unit Price</th>
+                        <th>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {details.items.map((it) => (
+                        <tr key={it.item_id}>
+                          <td>{it.product_name}</td>
+                          <td>{it.quantity}</td>
+                          <td>
+                            {editingItemId === it.item_id ? (
+                              <input
+                                className="inline-edit-input"
+                                type="number"
+                                step="0.01"
+                                value={editingPrice}
+                                onChange={(e) =>
+                                  setEditingPrice(e.target.value)
+                                }
+                                onBlur={() => saveItemPrice(it.item_id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter")
+                                    saveItemPrice(it.item_id);
+                                  if (e.key === "Escape") {
+                                    setEditingItemId(null);
+                                    setEditingPrice("");
+                                  }
+                                }}
+                                autoFocus
+                                style={{ width: "110px" }}
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                }}
+                              >
+                                <span>{fmtCurrency(it.unit_price)}</span>
+                                <span
+                                  className="edit-icon"
+                                  onClick={() => {
+                                    setEditingItemId(it.item_id);
+                                    setEditingPrice(it.unit_price);
+                                  }}
+                                  title="Edit price"
+                                >
+                                  ✏️
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                          <td>{fmtCurrency(it.total_price)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {details?.serial_status && (
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <div className="lb-section-title" style={{ marginBottom: 0 }}>
+                  Serial Status:
+                </div>
+                <SerialBadge status={details.serial_status} />
+              </div>
+            )}
+
+            {serialOpen && (
               <div
                 style={{
                   border: "1px solid var(--border)",
@@ -547,197 +878,77 @@ function OrderLightbox({
                   overflow: "hidden",
                 }}
               >
-                <table className="lb-items-table">
-                  <thead>
-                    <tr>
-                      <th>Product</th>
-                      <th>Qty</th>
-                      <th>Unit Price</th>
-                      <th>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {details.items.map((it) => (
-                      <tr key={it.item_id}>
-                        <td>{it.product_name}</td>
-                        <td>{it.quantity}</td>
-                        <td>{fmtCurrency(it.unit_price)}</td>
-                        <td>{fmtCurrency(it.total_price)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* ── SERIAL STATUS ── */}
-          {details?.serial_status && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div className="lb-section-title" style={{ marginBottom: 0 }}>
-                Serial Status:
-              </div>
-              <SerialBadge status={details.serial_status} />
-            </div>
-          )}
-
-          {/* ── REMARKS ── */}
-          <div>
-            <div className="lb-section-title">Remarks</div>
-            {remarksEditing ? (
-              <>
-                <textarea
-                  className="remarks-input"
-                  value={remarksVal}
-                  onChange={(e) => setRemarksVal(e.target.value)}
-                  placeholder="Add a remark…"
-                />
-                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                  <button
-                    className="lb-btn lb-btn-primary"
-                    onClick={saveRemarks}
-                  >
-                    Save
-                  </button>
-                  <button
-                    className="lb-btn lb-btn-secondary"
-                    onClick={() => setRemarksEditing(false)}
-                  >
-                    Cancel
-                  </button>
+                <div
+                  style={{
+                    padding: "11px 14px",
+                    background: "var(--surface2)",
+                    borderBottom: "1px solid var(--border)",
+                    fontWeight: 600,
+                    fontSize: 13,
+                  }}
+                >
+                  Assign Serial Numbers
                 </div>
-              </>
-            ) : (
-              <div
-                onClick={() => setRemarksEditing(true)}
-                style={{
-                  padding: "10px 12px",
-                  background: "var(--surface2)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius)",
-                  fontSize: 13.5,
-                  cursor: "pointer",
-                  color: remarksVal ? "var(--text)" : "var(--text3)",
-                  minHeight: 40,
-                }}
-              >
-                {remarksVal || "Click to add a remark…"}
-              </div>
-            )}
-          </div>
-
-          {/* ── UTR ENTRY ── */}
-          {localPayStatus !== "paid" && (
-            <div>
-              {utrOpen ? (
-                <div className="utr-box">
-                  <label>Enter UTR / Transaction Reference Number</label>
-                  <div className="utr-input-row">
-                    <input
-                      className="utr-input"
-                      placeholder="e.g. UTR123456789012"
-                      value={utrValue}
-                      onChange={(e) => setUtrValue(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && submitUTR()}
-                    />
-                    <button
-                      className="lb-btn lb-btn-success"
-                      onClick={submitUTR}
-                    >
-                      Mark Paid
-                    </button>
+                <div style={{ padding: 14 }}>
+                  {serialItems.map((item) => (
+                    <div className="serial-item" key={item.item_id}>
+                      <h4>
+                        {item.product_name} — Qty {item.quantity}
+                      </h4>
+                      {item.serials.map((sn, i) => (
+                        <input
+                          key={`${item.item_id}-${i}`}
+                          className="serial-input"
+                          type="text"
+                          value={sn}
+                          placeholder={`Serial ${i + 1}`}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSerialItems((prev) =>
+                              prev.map((it) =>
+                                it.item_id === item.item_id
+                                  ? {
+                                      ...it,
+                                      serials: it.serials.map((s, idx) =>
+                                        idx === i ? val : s,
+                                      ),
+                                    }
+                                  : it,
+                              ),
+                            );
+                          }}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 7,
+                      justifyContent: "flex-end",
+                    }}
+                  >
                     <button
                       className="lb-btn lb-btn-secondary"
-                      onClick={() => setUtrOpen(false)}
+                      onClick={() => setSerialOpen(false)}
                     >
                       Cancel
                     </button>
+                    <button
+                      className="lb-btn lb-btn-primary"
+                      onClick={saveSerials}
+                    >
+                      Save Serials
+                    </button>
                   </div>
                 </div>
-              ) : null}
-            </div>
-          )}
-
-          {/* ── SERIAL MODAL (inline in lightbox) ── */}
-          {serialOpen && (
-            <div
-              style={{
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  padding: "12px 16px",
-                  background: "var(--surface2)",
-                  borderBottom: "1px solid var(--border)",
-                  fontWeight: 600,
-                  fontSize: 13.5,
-                }}
-              >
-                Assign Serial Numbers
               </div>
-              <div style={{ padding: 16 }}>
-                {serialItems.map((item) => (
-                  <div className="serial-item" key={item.item_id}>
-                    <h4>
-                      {item.product_name} — Qty {item.quantity}
-                    </h4>
-                    {item.serials.map((sn, i) => (
-                      <input
-                        key={`${item.item_id}-${i}`}
-                        className="serial-input"
-                        type="text"
-                        value={sn}
-                        placeholder={`Serial ${i + 1}`}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setSerialItems((prev) =>
-                            prev.map((it) =>
-                              it.item_id === item.item_id
-                                ? {
-                                    ...it,
-                                    serials: it.serials.map((s, idx) =>
-                                      idx === i ? val : s,
-                                    ),
-                                  }
-                                : it,
-                            ),
-                          );
-                        }}
-                      />
-                    ))}
-                  </div>
-                ))}
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    justifyContent: "flex-end",
-                  }}
-                >
-                  <button
-                    className="lb-btn lb-btn-secondary"
-                    onClick={() => setSerialOpen(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="lb-btn lb-btn-primary"
-                    onClick={saveSerials}
-                  >
-                    Save Serials
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
-        {/* ── ACTION BAR ── */}
+        {/* ACTION BAR */}
         <div className="lb-actions">
-          {/* Payment */}
           {localPayStatus !== "paid" ? (
             <button
               className="lb-btn lb-btn-success"
@@ -746,21 +957,20 @@ function OrderLightbox({
               💳 Mark as Paid
             </button>
           ) : (
-            <span className="badge badge-green" style={{ fontSize: 12 }}>
+            <span className="badge badge-green" style={{ fontSize: 11.5 }}>
               ✓ Payment Received
             </span>
           )}
 
-          {/* Delivery cycle */}
           <select
             value={deliveryStatus}
             onChange={(e) => cycleDelivery(e.target.value)}
             style={{
-              padding: "8px 12px",
+              padding: "7px 11px",
               border: "1px solid var(--border2)",
               borderRadius: "var(--radius)",
               fontFamily: "inherit",
-              fontSize: 13,
+              fontSize: 12.5,
               background: "var(--surface)",
               cursor: "pointer",
             }}
@@ -771,7 +981,6 @@ function OrderLightbox({
             <option value="COMPLETED">Completed</option>
           </select>
 
-          {/* Serial */}
           <button
             className="lb-btn lb-btn-secondary"
             onClick={serialOpen ? () => setSerialOpen(false) : openSerials}
@@ -780,22 +989,20 @@ function OrderLightbox({
             {serialLoading ? "…" : "🔢 Serials"}
           </button>
 
-          {/* Invoice */}
-          <button
-            className="lb-btn lb-btn-primary"
-            onClick={handleInvoice}
-            disabled={invoiceLoading}
-          >
-            {invoiceLoading ? "Generating…" : "🧾 Invoice"}
-          </button>
+          {/* ── SMART INVOICE BUTTON ── */}
+          <InvoiceButton
+            orderId={order.order_id}
+            invoiceNumber={order.invoice_number}
+            detailsInvoice={details?.invoice_number}
+            onGenerate={handleInvoice}
+            loading={invoiceLoading}
+          />
 
-          {/* Spacer */}
           <div style={{ flex: 1 }} />
 
-          {/* Delete */}
           {confirmDelete ? (
             <>
-              <span style={{ fontSize: 12.5, color: "var(--red)" }}>Sure?</span>
+              <span style={{ fontSize: 12, color: "var(--red)" }}>Sure?</span>
               <button className="lb-btn lb-btn-danger" onClick={handleDelete}>
                 Yes, Delete
               </button>
@@ -825,6 +1032,7 @@ function OrderLightbox({
 ───────────────────────────────────────────── */
 export default function OrdersTable({
   orders = [],
+  filters = {},
   onAction,
   onLoadMore,
   hasMore = true,
@@ -833,18 +1041,9 @@ export default function OrdersTable({
 }) {
   injectStyles();
 
-  // SEARCH & FILTER
-  const [search, setSearch] = useState("");
-  const [filterPay, setFilterPay] = useState(null); // null | 'paid' | 'pending'
-  const [filterDel, setFilterDel] = useState(null); // null | 'NOT_SHIPPED' | 'SHIPPED' | 'COMPLETED'
-  const [filterCh, setFilterCh] = useState(null); // null | 'offline' | 'online'
-  const [filterInvoice, setFilterInvoice] = useState(false); // pending invoice
-
-  // LIGHTBOX
   const [activeOrder, setActiveOrder] = useState(null);
   const [detailsCache, setDetailsCache] = useState({});
   const [loadingDetails, setLoadingDetails] = useState({});
-
   const loadMoreRef = useRef(null);
 
   /* ── INFINITE SCROLL ── */
@@ -870,8 +1069,8 @@ export default function OrdersTable({
       try {
         const res = await api.get(`/orders/${encodeURIComponent(id)}/details`);
         setDetailsCache((p) => ({ ...p, [id]: res.data }));
-      } catch (err) {
-        console.error(err);
+      } catch (error) {
+        console.error(error);
       } finally {
         setLoadingDetails((p) => ({ ...p, [id]: false }));
       }
@@ -879,12 +1078,23 @@ export default function OrdersTable({
     [detailsCache],
   );
 
-  /* ── CLIENT-SIDE FILTER (search + badges) ── */
+  /* ── CLIENT-SIDE FILTER ── */
   const filtered = useMemo(() => {
+    const {
+      search = "",
+      payment_status = "",
+      delivery_status = "",
+      channel = "",
+      date_from = "",
+      date_to = "",
+      pending_invoice = false,
+    } = filters;
+
     return orders.filter((o) => {
       const cust = o.customer || {};
-      const q = search.toLowerCase().trim();
 
+      // Search
+      const q = search.toLowerCase().trim();
       if (q) {
         const haystack = [
           o.order_id,
@@ -896,124 +1106,54 @@ export default function OrdersTable({
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
-
         if (!haystack.includes(q)) return false;
       }
 
-      if (filterPay && o.payment_status?.toLowerCase() !== filterPay)
+      // Payment status
+      if (
+        payment_status &&
+        o.payment_status?.toLowerCase() !== payment_status.toLowerCase()
+      )
         return false;
 
-      if (filterDel && o.delivery_status?.toUpperCase() !== filterDel)
+      // Delivery status
+      if (
+        delivery_status &&
+        o.delivery_status?.toUpperCase() !== delivery_status.toUpperCase()
+      )
         return false;
 
-      if (filterCh) {
+      // Channel
+      if (channel) {
         const ch = (o.channel || "").trim().toLowerCase();
-
-        if (filterCh === "online") {
-          if (!["online", "wix"].includes(ch)) return false;
-        } else if (filterCh === "offline") {
-          if (ch !== "offline") return false;
-        } else if (filterCh === "wix") {
-          if (ch !== "wix") return false;
+        const target = channel.toLowerCase();
+        if (target === "online") {
+          if (!["online", "wix", "website"].includes(ch)) return false;
+        } else {
+          if (ch !== target) return false;
         }
       }
 
-      if (filterInvoice && o.invoice_number) return false;
+      // Date range
+      if (date_from || date_to) {
+        const orderDate = new Date(o.created_at);
+        if (date_from && orderDate < new Date(date_from)) return false;
+        if (date_to) {
+          const end = new Date(date_to);
+          end.setHours(23, 59, 59, 999);
+          if (orderDate > end) return false;
+        }
+      }
+
+      // Pending invoice — keep only orders WITHOUT an invoice number
+      if (pending_invoice && o.invoice_number) return false;
 
       return true;
     });
-  }, [orders, search, filterPay, filterDel, filterCh, filterInvoice]);
-
-  const togglePay = (v) => setFilterPay((p) => (p === v ? null : v));
-  const toggleDel = (v) => setFilterDel((p) => (p === v ? null : v));
+  }, [orders, filters]);
 
   return (
     <div className="ot-wrap">
-      {/* ── TOOLBAR ── */}
-      <div className="ot-toolbar">
-        <div className="ot-search-wrap">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.35-4.35" />
-          </svg>
-          <input
-            className="ot-search"
-            placeholder="Search order ID, customer, mobile…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-
-        <button
-          className={`ot-filter-btn ${filterPay === "pending" ? "active" : ""}`}
-          onClick={() => togglePay("pending")}
-        >
-          <span className="dot" /> Pending Payment
-        </button>
-        <button
-          className={`ot-filter-btn ${filterPay === "paid" ? "active" : ""}`}
-          onClick={() => togglePay("paid")}
-        >
-          <span className="dot" /> Paid
-        </button>
-        <button
-          className={`ot-filter-btn ${filterDel === "NOT_SHIPPED" ? "active" : ""}`}
-          onClick={() => toggleDel("NOT_SHIPPED")}
-        >
-          Not Shipped
-        </button>
-        <button
-          className={`ot-filter-btn ${filterDel === "SHIPPED" ? "active" : ""}`}
-          onClick={() => toggleDel("SHIPPED")}
-        >
-          Shipped
-        </button>
-        <button
-          className={`ot-filter-btn ${filterInvoice ? "active" : ""}`}
-          onClick={() => setFilterInvoice((v) => !v)}
-        >
-          🧾 Pending Invoice
-        </button>
-        <select
-          value={filterCh || ""}
-          onChange={(e) => setFilterCh(e.target.value || null)}
-          className="ot-filter-btn"
-          style={{
-            cursor: "pointer",
-            paddingRight: 28,
-          }}
-        >
-          <option value="">All Channels</option>
-          <option value="offline">Offline</option>
-          <option value="online">Online</option>
-          <option value="wix">Wix</option>
-        </select>
-        {(filterPay || filterDel || filterCh || filterInvoice || search) && (
-          <button
-            className="ot-filter-btn"
-            onClick={() => {
-              setFilterPay(null);
-              setFilterDel(null);
-              setFilterCh(null);
-              setFilterInvoice(false);
-              setSearch("");
-              if (onLoadMore) onLoadMore(true);
-            }}
-            style={{ color: "var(--red)" }}
-          >
-            ✕ Clear
-          </button>
-        )}
-      </div>
-
-      {/* ── TABLE ── */}
       <div className="ot-table-wrap">
         {filtered.length === 0 ? (
           <div className="ot-empty">
@@ -1033,7 +1173,7 @@ export default function OrdersTable({
                 <th>Channel</th>
                 <th>Payment</th>
                 <th>Delivery</th>
-                <th></th>
+                <th>Invoice</th>
               </tr>
             </thead>
             <tbody>
@@ -1079,7 +1219,6 @@ export default function OrdersTable({
                         }}
                       >
                         <PaymentBadge status={order.payment_status} />
-
                         {order.payment_status?.toLowerCase() === "paid" &&
                           order.utr_number && (
                             <span
@@ -1099,15 +1238,7 @@ export default function OrdersTable({
                       <DeliveryBadge status={order.delivery_status} />
                     </td>
                     <td>
-                      <button
-                        className="ot-open-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openOrder(order);
-                        }}
-                      >
-                        View →
-                      </button>
+                      <InvoiceCell invoiceNumber={order.invoice_number} />
                     </td>
                   </tr>
                 );
@@ -1137,7 +1268,6 @@ export default function OrdersTable({
           onClose={() => setActiveOrder(null)}
           onAction={async (id, action, payload) => {
             if (onAction) await onAction(id, action, payload);
-            // Refresh details cache after action
             if (action === "update-remarks") {
               setDetailsCache((p) => ({
                 ...p,
@@ -1150,14 +1280,13 @@ export default function OrdersTable({
                 delete copy[id];
                 return copy;
               });
-              // re-fetch
               try {
                 const res = await api.get(
                   `/orders/${encodeURIComponent(id)}/details`,
                 );
                 setDetailsCache((p) => ({ ...p, [id]: res.data }));
-              } catch (err) {
-                console.error(err);
+              } catch (error) {
+                console.error(error);
               }
             }
           }}

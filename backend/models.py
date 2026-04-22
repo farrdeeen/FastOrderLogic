@@ -59,3 +59,5 @@ class DeviceTransaction(Base):
     create_date = Column(Date, nullable=False) # ✅
     price = Column(Integer)
     remarks = Column(String(255))
+
+    

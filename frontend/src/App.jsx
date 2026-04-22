@@ -1,6 +1,6 @@
 import { SignedIn, SignedOut, SignIn, UserButton } from "@clerk/clerk-react";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import api from "./api/axiosInstance";
 import { useAuth } from "@clerk/clerk-react";
 import OrdersTable from "./components/OrdersTable";
@@ -85,16 +85,7 @@ export default function App() {
   }[activePage];
 
   // ---------------- FETCH ORDERS ----------------
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn) return;
-    if (activePage !== "orders") return;
-
-    setOffset(0);
-    setHasMore(true);
-    fetchOrders();
-  }, [filters, activePage, isLoaded, isSignedIn]);
-
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.get("/orders", {
@@ -104,7 +95,6 @@ export default function App() {
           offset: 0,
         },
       });
-
       const data = res.data || [];
       setOrders(data);
       setOffset(data.length);
@@ -114,11 +104,10 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filters]);
 
-  const loadMoreOrders = async () => {
+  const loadMoreOrders = useCallback(async () => {
     if (!hasMore || loadingMore) return;
-
     setLoadingMore(true);
     try {
       const res = await api.get("/orders", {
@@ -128,7 +117,6 @@ export default function App() {
           offset,
         },
       });
-
       const data = res.data || [];
       setOrders((prev) => [...prev, ...data]);
       setOffset((prev) => prev + data.length);
@@ -138,51 +126,52 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  };
+  }, [filters, hasMore, loadingMore, offset]);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    if (activePage !== "orders") return;
+    setOffset(0);
+    setHasMore(true);
+    fetchOrders();
+  }, [filters, activePage, isLoaded, isSignedIn]); // fetchOrders intentionally excluded — it would cause a loop since it depends on filters too
 
   // ================= BACKGROUND PREFETCH =================
   useEffect(() => {
     if (activePage !== "orders") return;
     if (!hasMore) return;
     if (loadingMore) return;
-    if (loading) return; // wait for first page
+    if (loading) return;
 
     const timer = setTimeout(() => {
       loadMoreOrders();
-    }, 800); // background interval
+    }, 800);
 
     return () => clearTimeout(timer);
-  }, [activePage, hasMore, loadingMore, loading]);
+  }, [activePage, hasMore, loadingMore, loading, loadMoreOrders]);
 
   // ---------------- BACKGROUND REFRESH ----------------
-  const backgroundRefresh = async () => {
+  const backgroundRefresh = useCallback(async () => {
     const res = await api.get("/orders", {
-      params: {
-        limit: PAGE_SIZE,
-        offset: 0,
-      },
+      params: { limit: PAGE_SIZE, offset: 0 },
     });
-
     setOrders(res.data || []);
-  };
+  }, []);
 
-  const scheduleBackgroundRefresh = () => {
+  const scheduleBackgroundRefresh = useCallback(() => {
     clearTimeout(refreshTimer.current);
     refreshTimer.current = setTimeout(backgroundRefresh, 1200);
-  };
+  }, [backgroundRefresh]);
 
   // ---------------- DROPDOWNS ----------------
   useEffect(() => {
     if (activePage !== "create-order") return;
-
     api
       .get("/dropdowns/products/list")
       .then((r) => setProductList(r.data || []));
-
     api
       .get("/dropdowns/customers/list")
       .then((r) => setCustomerList(r.data || []));
-
     api.get("/states/list").then((r) => setStatesList(r.data || []));
   }, [activePage]);
 
@@ -193,9 +182,7 @@ export default function App() {
       setSelectedAddressId(null);
       return;
     }
-
     const [type, id] = selectedCustomer.split(":");
-
     api
       .get(`/customers/${type}/${id}/addresses`)
       .then((res) => {
@@ -239,21 +226,20 @@ export default function App() {
           payment_status: "paid",
           utr_number: payload,
         }));
-
         await api.put(`/orders/${encodeURIComponent(orderId)}/mark-paid-utr`, {
           utr_number: payload,
         });
-
         scheduleBackgroundRefresh();
         return;
       }
+
       if (action === "update-delivery") {
-        updateOrderLocal(orderId, () => ({
-          delivery_status: payload,
-        }));
+        updateOrderLocal(orderId, () => ({ delivery_status: payload }));
         await api.put(
           `/orders/${encodeURIComponent(orderId)}/update-delivery`,
-          { status: payload },
+          {
+            status: payload,
+          },
         );
         scheduleBackgroundRefresh();
         return;
@@ -270,10 +256,9 @@ export default function App() {
 
       if (action === "create-invoice") {
         setInvoiceLoading((prev) => ({ ...prev, [orderId]: true }));
-
         try {
           await api.post(`/zoho/invoice/${encodeURIComponent(orderId)}`);
-          alert("✅ Invoice created successfully"); // ⭐ INSTANT FEEDBACK
+          alert("✅ Invoice created successfully");
           scheduleBackgroundRefresh();
         } catch (err) {
           console.error(err);
@@ -292,9 +277,7 @@ export default function App() {
       }
 
       if (action === "update-remarks") {
-        updateOrderLocal(orderId, () => ({
-          remarks: payload,
-        }));
+        updateOrderLocal(orderId, () => ({ remarks: payload }));
         await api.put(`/orders/${encodeURIComponent(orderId)}/remarks`, {
           remarks: payload,
         });
@@ -303,9 +286,7 @@ export default function App() {
       }
 
       if (action === "serial-status-updated") {
-        updateOrderLocal(orderId, () => ({
-          serial_status: payload,
-        }));
+        updateOrderLocal(orderId, () => ({ serial_status: payload }));
         return;
       }
 
@@ -331,12 +312,10 @@ export default function App() {
     const res = await api.get("/dropdowns/customers/list");
     const list = res.data || [];
     setCustomerList(list);
-
     if (list.length) {
       const last = list[list.length - 1];
       setSelectedCustomer(`${last.type}:${last.id}`);
     }
-
     setCustomerModalOpen(false);
   };
 
@@ -379,8 +358,6 @@ export default function App() {
               <Typography variant="h5" sx={{ fontWeight: 600 }}>
                 {pageTitle}
               </Typography>
-
-              {/* USER MENU */}
               <UserButton afterSignOutUrl="/" />
             </Box>
 
@@ -403,6 +380,7 @@ export default function App() {
                 >
                   ➕ Create Order
                 </Button>
+
                 <Button
                   variant="contained"
                   sx={{ mb: 2, ml: 4 }}
@@ -411,6 +389,7 @@ export default function App() {
                   Bulk in Out
                 </Button>
 
+                {/* SearchBar owns the toolbar UI; filters flow down to OrdersTable */}
                 <SearchBar filters={filters} setFilters={setFilters} />
 
                 {loading ? (
@@ -418,11 +397,12 @@ export default function App() {
                 ) : (
                   <OrdersTable
                     orders={orders}
+                    filters={filters}
                     onAction={handleAction}
                     onLoadMore={loadMoreOrders}
                     hasMore={hasMore}
                     isLoadingMore={loadingMore}
-                    invoiceLoading={invoiceLoading} // ✅ ADD
+                    invoiceLoading={invoiceLoading}
                   />
                 )}
               </Box>
@@ -439,7 +419,6 @@ export default function App() {
                   ⬅ Back to Orders
                 </Button>
 
-                {/* PRODUCT + CUSTOMER + ADDRESS */}
                 <Box
                   sx={{
                     display: "grid",
@@ -500,7 +479,6 @@ export default function App() {
                   )}
                 </Box>
 
-                {/* ACTION BUTTONS */}
                 <Box
                   sx={{
                     display: "grid",
@@ -515,7 +493,6 @@ export default function App() {
                   <Button variant="contained" sx={{ background: "#2563eb" }}>
                     Browse Products
                   </Button>
-
                   <Button
                     variant="contained"
                     sx={{ background: "#22c55e" }}
@@ -541,6 +518,7 @@ export default function App() {
             <Fade in={activePage === "chat"} unmountOnExit>
               <ChatPage />
             </Fade>
+
             {/* ================= DEVICE ENTRY ================= */}
             <Fade in={activePage === "device-entry"} unmountOnExit>
               <Paper sx={{ p: 3, borderRadius: 3 }}>
@@ -551,7 +529,6 @@ export default function App() {
                 >
                   ⬅ Back to Orders
                 </Button>
-
                 <DeviceTransactionForm />
               </Paper>
             </Fade>

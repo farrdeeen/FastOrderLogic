@@ -104,6 +104,16 @@ class OrderCreate(BaseModel):
 class UTRPayload(BaseModel):
     utr_number: str
 
+class EmailUpdate(BaseModel):
+    email: str
+
+class MobileUpdate(BaseModel):
+    mobile: str
+
+class ItemPriceUpdate(BaseModel):
+    item_id: int
+    unit_price: float
+
 # ================================
 # CREATE ORDER (Fixed)
 # ================================
@@ -790,6 +800,21 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order:
         raise HTTPException(404, "Order not found")
+    customer = None
+    if order.customer_id:
+        row = db.execute(
+            text("SELECT name, mobile, email FROM customer WHERE customer_id=:cid"),
+            {"cid": order.customer_id}
+        ).first()
+    elif order.offline_customer_id:
+        row = db.execute(
+            text("SELECT name, mobile, email FROM offline_customer WHERE customer_id=:cid"),
+            {"cid": order.offline_customer_id}
+        ).first()
+
+    if row:
+        customer = dict(row._mapping)
+
 
     # ADDRESS
     address = db.execute(
@@ -858,4 +883,162 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
         "remarks": order.remarks,
         "serial_status": serial_status,
         "utr_number": order.utr_number,
+        "customer": customer,
+        "invoice_number": order.invoice_number
     }
+
+# ================================
+# NEW ENDPOINTS - EMAIL, MOBILE, ITEM PRICE UPDATE
+# ================================
+
+@router.put("/{order_id}/update-email")
+def update_customer_email(order_id: str, payload: EmailUpdate, db: Session = Depends(get_db)):
+    """
+    Update customer email for the order.
+    Updates the appropriate customer table (online/offline).
+    """
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    email = payload.email.strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email cannot be empty")
+
+    try:
+        if order.customer_id:
+            # Update online customer
+            db.execute(
+                text("UPDATE customer SET email = :email WHERE customer_id = :cid"),
+                {"email": email, "cid": order.customer_id}
+            )
+        elif order.offline_customer_id:
+            # Update offline customer
+            db.execute(
+                text("UPDATE offline_customer SET email = :email WHERE customer_id = :cid"),
+                {"email": email, "cid": order.offline_customer_id}
+            )
+        else:
+            raise HTTPException(status_code=400, detail="No customer associated with order")
+
+        db.commit()
+        return {"success": True, "message": "Email updated successfully", "email": email}
+
+    except Exception as e:
+        db.rollback()
+        print("Email update error:", e)
+        raise HTTPException(status_code=500, detail="Failed to update email")
+
+
+@router.put("/{order_id}/update-mobile")
+def update_customer_mobile(order_id: str, payload: MobileUpdate, db: Session = Depends(get_db)):
+    """
+    Update customer mobile for the order.
+    Updates the appropriate customer table (online/offline).
+    """
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    mobile = payload.mobile.strip()
+    if not mobile:
+        raise HTTPException(status_code=400, detail="Mobile cannot be empty")
+
+    try:
+        if order.customer_id:
+            # Update online customer
+            db.execute(
+                text("UPDATE customer SET mobile = :mobile WHERE customer_id = :cid"),
+                {"mobile": mobile, "cid": order.customer_id}
+            )
+        elif order.offline_customer_id:
+            # Update offline customer
+            db.execute(
+                text("UPDATE offline_customer SET mobile = :mobile WHERE customer_id = :cid"),
+                {"mobile": mobile, "cid": order.offline_customer_id}
+            )
+        else:
+            raise HTTPException(status_code=400, detail="No customer associated with order")
+
+        db.commit()
+        return {"success": True, "message": "Mobile updated successfully", "mobile": mobile}
+
+    except Exception as e:
+        db.rollback()
+        print("Mobile update error:", e)
+        raise HTTPException(status_code=500, detail="Failed to update mobile")
+
+
+@router.put("/{order_id}/update-item-price")
+def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Depends(get_db)):
+    """
+    Update unit price for a specific order item.
+    Recalculates total_price based on quantity.
+    """
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    item_id = payload.item_id
+    new_unit_price = payload.unit_price
+
+    if new_unit_price < 0:
+        raise HTTPException(status_code=400, detail="Unit price cannot be negative")
+
+    try:
+        # Get current item details
+        item = db.execute(
+            text("SELECT quantity FROM order_items WHERE item_id = :iid AND order_id = :oid"),
+            {"iid": item_id, "oid": order_id}
+        ).first()
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found in order")
+
+        quantity = item.quantity
+        new_total_price = round(new_unit_price * quantity, 2)
+
+        # Update item prices
+        db.execute(
+            text("""
+                UPDATE order_items 
+                SET unit_price = :unit_price, total_price = :total_price
+                WHERE item_id = :iid AND order_id = :oid
+            """),
+            {
+                "unit_price": new_unit_price,
+                "total_price": new_total_price,
+                "iid": item_id,
+                "oid": order_id
+            }
+        )
+
+        # Recalculate order total
+        totals = db.execute(
+            text("SELECT SUM(total_price) as sum FROM order_items WHERE order_id = :oid"),
+            {"oid": order_id}
+        ).first()
+
+        new_order_total = totals.sum if totals.sum else 0
+
+        # Update order total
+        db.execute(
+            text("UPDATE orders SET total_amount = :total WHERE order_id = :oid"),
+            {"total": new_order_total, "oid": order_id}
+        )
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "Item price updated successfully",
+            "item_id": item_id,
+            "unit_price": new_unit_price,
+            "total_price": new_total_price,
+            "order_total": new_order_total
+        }
+
+    except Exception as e:
+        db.rollback()
+        print("Item price update error:", e)
+        raise HTTPException(status_code=500, detail="Failed to update item price")
