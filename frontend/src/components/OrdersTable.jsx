@@ -194,6 +194,19 @@ const STYLES = `
     box-shadow: 0 0 0 3px rgba(21,112,239,.12);
   }
 
+  .inline-edit-select {
+    padding: 5px 9px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 12.5px;
+    outline: none;
+    width: 100%;
+    box-shadow: 0 0 0 3px rgba(21,112,239,.12);
+    background: var(--surface);
+    cursor: pointer;
+  }
+
   .lb-items-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .lb-items-table th {
     padding: 7px 9px; background: var(--surface2); text-align: left;
@@ -229,6 +242,7 @@ const STYLES = `
   .lb-btn-success:hover { background: #d1fadf; }
   .lb-btn-teal { background: #f0fdfa; color: #0d9488; border-color: #99f6e4; }
   .lb-btn-teal:hover { background: #ccfbf1; }
+  .lb-btn-sm { padding: 4px 9px; font-size: 11.5px; }
   .lb-btn:disabled { opacity: .5; pointer-events: none; }
 
   /* ── UTR MODAL ── */
@@ -268,10 +282,68 @@ const STYLES = `
   }
   .remarks-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
 
+  /* ── FORM FIELDS ── */
+  .form-field {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .form-label {
+    font-size: 11px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: .4px;
+  }
+  .form-input {
+    padding: 8px 11px; border: 1px solid var(--border2);
+    border-radius: var(--radius); font-family: inherit; font-size: 13px;
+    outline: none; transition: border .15s; background: var(--surface);
+    width: 100%; box-sizing: border-box;
+  }
+  .form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
+  .form-select {
+    padding: 8px 11px; border: 1px solid var(--border2);
+    border-radius: var(--radius); font-family: inherit; font-size: 13px;
+    outline: none; transition: border .15s; background: var(--surface);
+    width: 100%; box-sizing: border-box; cursor: pointer;
+  }
+  .form-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
+  .form-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .form-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+  /* ── ADD PRODUCT PANEL ── */
+  .add-product-panel {
+    border: 1px solid var(--accent-light); border-radius: var(--radius);
+    background: var(--accent-light); padding: 14px; margin-top: 8px;
+  }
+  .add-product-panel h4 {
+    font-size: 12px; font-weight: 600; color: var(--accent-dark);
+    margin: 0 0 10px; text-transform: uppercase; letter-spacing: .4px;
+  }
+
+  /* ── PRODUCT SEARCH ── */
+  .product-search-wrap { position: relative; }
+  .product-dropdown {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: var(--surface); border: 1px solid var(--border2);
+    border-radius: var(--radius); box-shadow: var(--shadow-md);
+    z-index: 50; max-height: 200px; overflow-y: auto;
+  }
+  .product-option {
+    padding: 8px 12px; cursor: pointer; font-size: 12.5px;
+    transition: background .1s; border-bottom: 1px solid var(--border);
+  }
+  .product-option:last-child { border-bottom: none; }
+  .product-option:hover { background: var(--accent-light); }
+  .product-option-sku { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; }
+
   /* ── EMPTY ── */
   .ot-empty {
     text-align: center; padding: 60px 20px; color: var(--text3); font-size: 14px;
   }
+
+  /* ── DELETE ROW ICON ── */
+  .del-icon {
+    cursor: pointer; color: var(--text3); font-size: 13px;
+    transition: color .15s; padding: 2px;
+  }
+  .del-icon:hover { color: var(--red); }
 
   /* ── RESPONSIVE ── */
   @media (max-width: 1100px) {
@@ -281,6 +353,7 @@ const STYLES = `
   @media (max-width: 700px) {
     .lb-info-grid { grid-template-columns: 1fr; }
     .ot-table th:nth-child(n+5), .ot-table td:nth-child(n+5) { display: none; }
+    .form-grid-2, .form-grid-3 { grid-template-columns: 1fr; }
   }
 `;
 
@@ -345,7 +418,6 @@ function SerialBadge({ status }) {
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
-/* Invoice cell — shows invoice number or a muted "Pending" badge */
 function InvoiceCell({ invoiceNumber }) {
   if (invoiceNumber) {
     return <span className="invoice-num">🧾 {invoiceNumber}</span>;
@@ -353,12 +425,6 @@ function InvoiceCell({ invoiceNumber }) {
   return <span className="badge badge-gray">Pending</span>;
 }
 
-/* ─────────────────────────────────────────────
-   INVOICE BUTTON — smart: print vs generate
-   • invoiceNumber  = existing invoice_number on the order (from table row)
-   • detailsInvoice = invoice_number returned by /details (after generation)
-   Priority: detailsInvoice > invoiceNumber (details is always fresher)
-───────────────────────────────────────────── */
 function InvoiceButton({
   orderId,
   invoiceNumber,
@@ -366,11 +432,9 @@ function InvoiceButton({
   onGenerate,
   loading,
 }) {
-  // Use the freshest invoice number available
   const existingInvoice = detailsInvoice || invoiceNumber;
 
   if (existingInvoice) {
-    // Invoice already exists → open the download/print URL in a new tab
     const printUrl = `${import.meta.env.VITE_API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`;
     return (
       <a
@@ -395,7 +459,6 @@ function InvoiceButton({
     );
   }
 
-  // No invoice yet → generate
   return (
     <button
       className="lb-btn lb-btn-primary"
@@ -404,6 +467,435 @@ function InvoiceButton({
     >
       {loading ? "Generating…" : "🧾 Invoice"}
     </button>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   ADD ADDRESS FORM
+───────────────────────────────────────────── */
+function AddAddressForm({ order, onSaved, onCancel }) {
+  const [states, setStates] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    mobile: "",
+    pincode: "",
+    locality: "",
+    address_line: "",
+    city: "",
+    state_id: "",
+    landmark: "",
+    alternate_phone: "",
+    address_type: "HOME",
+    email: "",
+    gst: "",
+  });
+
+  useEffect(() => {
+    api
+      .get("/orders/states/list")
+      .then((res) => setStates(res.data || []))
+      .catch(() => setStates([]));
+  }, []);
+
+  const set = (field, val) => setForm((p) => ({ ...p, [field]: val }));
+
+  const handleSave = async () => {
+    if (
+      !form.name ||
+      !form.mobile ||
+      !form.pincode ||
+      !form.address_line ||
+      !form.city ||
+      !form.state_id
+    ) {
+      alert(
+        "Please fill in all required fields (Name, Mobile, Pincode, Address, City, State)",
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        ...form,
+        state_id: parseInt(form.state_id),
+        customer_id: order.customer_id || null,
+        offline_customer_id: order.offline_customer_id || null,
+      };
+      const res = await api.post("/orders/addresses/create", payload);
+      onSaved(res.data);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to create address. Please check all fields.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        padding: 16,
+        background: "var(--surface2)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+    >
+      <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>
+        ➕ New Address
+      </div>
+
+      <div className="form-grid-2">
+        <div className="form-field">
+          <label className="form-label">Full Name *</label>
+          <input
+            className="form-input"
+            value={form.name}
+            onChange={(e) => set("name", e.target.value)}
+            placeholder="Recipient name"
+          />
+        </div>
+        <div className="form-field">
+          <label className="form-label">Mobile *</label>
+          <input
+            className="form-input"
+            value={form.mobile}
+            onChange={(e) => set("mobile", e.target.value)}
+            placeholder="10-digit mobile"
+            maxLength={15}
+          />
+        </div>
+      </div>
+
+      <div className="form-field">
+        <label className="form-label">Address Line *</label>
+        <input
+          className="form-input"
+          value={form.address_line}
+          onChange={(e) => set("address_line", e.target.value)}
+          placeholder="House / Flat / Street"
+        />
+      </div>
+
+      <div className="form-field">
+        <label className="form-label">Locality *</label>
+        <input
+          className="form-input"
+          value={form.locality}
+          onChange={(e) => set("locality", e.target.value)}
+          placeholder="Area / Locality"
+        />
+      </div>
+
+      <div className="form-grid-3">
+        <div className="form-field">
+          <label className="form-label">City *</label>
+          <input
+            className="form-input"
+            value={form.city}
+            onChange={(e) => set("city", e.target.value)}
+            placeholder="City"
+          />
+        </div>
+        <div className="form-field">
+          <label className="form-label">Pincode *</label>
+          <input
+            className="form-input"
+            value={form.pincode}
+            onChange={(e) => set("pincode", e.target.value)}
+            placeholder="6-digit"
+            maxLength={10}
+          />
+        </div>
+        <div className="form-field">
+          <label className="form-label">State *</label>
+          <select
+            className="form-select"
+            value={form.state_id}
+            onChange={(e) => set("state_id", e.target.value)}
+          >
+            <option value="">Select state</option>
+            {states.map((s) => (
+              <option key={s.state_id} value={s.state_id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="form-grid-2">
+        <div className="form-field">
+          <label className="form-label">Landmark</label>
+          <input
+            className="form-input"
+            value={form.landmark}
+            onChange={(e) => set("landmark", e.target.value)}
+            placeholder="Near / Opposite…"
+          />
+        </div>
+        <div className="form-field">
+          <label className="form-label">Alternate Phone</label>
+          <input
+            className="form-input"
+            value={form.alternate_phone}
+            onChange={(e) => set("alternate_phone", e.target.value)}
+            placeholder="Optional"
+            maxLength={15}
+          />
+        </div>
+      </div>
+
+      <div className="form-grid-2">
+        <div className="form-field">
+          <label className="form-label">Email</label>
+          <input
+            className="form-input"
+            type="email"
+            value={form.email}
+            onChange={(e) => set("email", e.target.value)}
+            placeholder="Optional"
+          />
+        </div>
+        <div className="form-field">
+          <label className="form-label">Address Type</label>
+          <select
+            className="form-select"
+            value={form.address_type}
+            onChange={(e) => set("address_type", e.target.value)}
+          >
+            <option value="HOME">Home</option>
+            <option value="WORK">Work</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="form-field">
+        <label className="form-label">GST Number</label>
+        <input
+          className="form-input"
+          value={form.gst}
+          onChange={(e) => set("gst", e.target.value)}
+          placeholder="Optional"
+        />
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          justifyContent: "flex-end",
+          marginTop: 4,
+        }}
+      >
+        <button
+          className="lb-btn lb-btn-secondary"
+          onClick={onCancel}
+          disabled={saving}
+        >
+          Cancel
+        </button>
+        <button
+          className="lb-btn lb-btn-primary"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? "Saving…" : "Save Address"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   PRODUCT SEARCH DROPDOWN
+───────────────────────────────────────────── */
+function ProductSearchInput({
+  products,
+  value,
+  onChange,
+  placeholder = "Search product…",
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return products.slice(0, 50);
+    const q = query.toLowerCase();
+    return products
+      .filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.sku_id && p.sku_id.toLowerCase().includes(q)),
+      )
+      .slice(0, 50);
+  }, [products, query]);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target))
+        setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const selectedProduct = products.find((p) => p.id === value);
+
+  return (
+    <div className="product-search-wrap" ref={wrapRef}>
+      <input
+        className="form-input"
+        placeholder={placeholder}
+        value={open ? query : selectedProduct ? selectedProduct.name : query}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          onChange(null);
+        }}
+        onFocus={() => {
+          setQuery("");
+          setOpen(true);
+        }}
+        style={{ fontSize: 12.5 }}
+      />
+      {open && filtered.length > 0 && (
+        <div className="product-dropdown">
+          {filtered.map((p) => (
+            <div
+              key={p.id}
+              className="product-option"
+              onMouseDown={() => {
+                onChange(p);
+                setQuery("");
+                setOpen(false);
+              }}
+            >
+              <div>{p.name}</div>
+              {p.sku_id && <div className="product-option-sku">{p.sku_id}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && filtered.length === 0 && query.length > 0 && (
+        <div className="product-dropdown">
+          <div
+            className="product-option"
+            style={{ color: "var(--text3)", cursor: "default" }}
+          >
+            No products found
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   ADD PRODUCT PANEL
+───────────────────────────────────────────── */
+function AddProductPanel({ orderId, products, onAdded, onCancel }) {
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [qty, setQty] = useState(1);
+  const [price, setPrice] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleAdd = async () => {
+    if (!selectedProduct) return alert("Please select a product");
+    const unitPrice = parseFloat(price);
+    if (!unitPrice || unitPrice <= 0)
+      return alert("Please enter a valid price");
+    if (qty < 1) return alert("Quantity must be at least 1");
+
+    setSaving(true);
+    try {
+      const res = await api.post(
+        `/orders/${encodeURIComponent(orderId)}/add-item`,
+        {
+          product_id: selectedProduct.id,
+          quantity: qty,
+          unit_price: unitPrice,
+        },
+      );
+      onAdded(res.data);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to add product. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="add-product-panel">
+      <h4>➕ Add Product to Order</h4>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="form-field">
+          <label className="form-label">Product *</label>
+          <ProductSearchInput
+            products={products}
+            value={selectedProduct?.id}
+            onChange={(p) => setSelectedProduct(p)}
+            placeholder="Search by name or SKU…"
+          />
+        </div>
+        <div className="form-grid-2">
+          <div className="form-field">
+            <label className="form-label">Quantity *</label>
+            <input
+              className="form-input"
+              type="number"
+              min="1"
+              value={qty}
+              onChange={(e) => setQty(parseInt(e.target.value) || 1)}
+              style={{ fontSize: 12.5 }}
+            />
+          </div>
+          <div className="form-field">
+            <label className="form-label">Unit Price (₹) *</label>
+            <input
+              className="form-input"
+              type="number"
+              min="0"
+              step="0.01"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              placeholder="0.00"
+              style={{ fontSize: 12.5 }}
+            />
+          </div>
+        </div>
+        {selectedProduct && price > 0 && (
+          <div
+            style={{ fontSize: 12, color: "var(--text2)", padding: "4px 0" }}
+          >
+            Line total: <strong>{fmtCurrency(parseFloat(price) * qty)}</strong>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            className="lb-btn lb-btn-secondary lb-btn-sm"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            Cancel
+          </button>
+          <button
+            className="lb-btn lb-btn-primary lb-btn-sm"
+            onClick={handleAdd}
+            disabled={saving || !selectedProduct}
+          >
+            {saving ? "Adding…" : "Add Item"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -429,13 +921,31 @@ function OrderLightbox({
     order.delivery_status || "NOT_SHIPPED",
   );
   const [localPayStatus, setLocalPayStatus] = useState(order.payment_status);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmReject, setConfirmReject] = useState(false);
   const [emailEditing, setEmailEditing] = useState(false);
   const [emailValue, setEmailValue] = useState("");
   const [mobileEditing, setMobileEditing] = useState(false);
   const [mobileValue, setMobileValue] = useState("");
   const [editingItemId, setEditingItemId] = useState(null);
   const [editingPrice, setEditingPrice] = useState("");
+
+  // Address states
+  const [addressMode, setAddressMode] = useState("view"); // "view" | "select" | "add"
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
+  const [availableAddresses, setAvailableAddresses] = useState([]);
+  const [loadingAddresses, setLoadingAddresses] = useState(false);
+
+  // Product editing states
+  const [editingProductItemId, setEditingProductItemId] = useState(null);
+  const [availableProducts, setAvailableProducts] = useState([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedProductId, setSelectedProductId] = useState(null);
+
+  // Add product panel state
+  const [showAddProduct, setShowAddProduct] = useState(false);
+
+  // Confirm delete item
+  const [confirmDeleteItemId, setConfirmDeleteItemId] = useState(null);
 
   useEffect(() => {
     if (details?.remarks != null) setRemarksVal(details.remarks);
@@ -448,6 +958,120 @@ function OrderLightbox({
       setMobileValue(cust.mobile || "");
     }
   }, [order]);
+
+  // Load products on mount — using the correct endpoint
+  useEffect(() => {
+    loadProducts();
+  }, []);
+
+  const loadProducts = async () => {
+    setProductsLoading(true);
+    try {
+      const res = await api.get("/orders/products/list");
+      setAvailableProducts(res.data || []);
+    } catch (error) {
+      console.error("Failed to load products:", error);
+      setAvailableProducts([]);
+    } finally {
+      setProductsLoading(false);
+    }
+  };
+
+  // Load available addresses when switching to select mode
+  const loadAddresses = async () => {
+    setLoadingAddresses(true);
+    try {
+      const custType = order.customer_id ? "online" : "offline";
+      const custId = order.customer_id || order.offline_customer_id;
+      const res = await api.get(
+        `/dropdowns/customers/${custType}/${custId}/addresses`,
+      );
+      setAvailableAddresses(res.data || []);
+      setSelectedAddressId(order.address_id);
+      setAddressMode("select");
+    } catch (error) {
+      console.error("Failed to load addresses:", error);
+      alert("Failed to load addresses");
+    } finally {
+      setLoadingAddresses(false);
+    }
+  };
+
+  const saveAddress = async () => {
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-address`,
+        {
+          address_id: selectedAddressId,
+        },
+      );
+      setAddressMode("view");
+      onAction && onAction(order.order_id, "refresh");
+    } catch (error) {
+      console.error("Failed to update address:", error);
+      alert("Failed to update address");
+    }
+  };
+
+  // Called when a new address is successfully created
+  const handleAddressCreated = async (newAddress) => {
+    // Auto-select and apply the new address to the order
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-address`,
+        {
+          address_id: newAddress.address_id,
+        },
+      );
+      setAddressMode("view");
+      onAction && onAction(order.order_id, "refresh");
+    } catch (error) {
+      console.error("Failed to set new address on order:", error);
+      alert(
+        "Address created but could not be applied to order. Please select it manually.",
+      );
+      setAddressMode("view");
+      onAction && onAction(order.order_id, "refresh");
+    }
+  };
+
+  const saveProduct = async (itemId) => {
+    if (!selectedProductId) return;
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-item-product`,
+        {
+          item_id: itemId,
+          product_id: selectedProductId,
+        },
+      );
+      setEditingProductItemId(null);
+      setSelectedProductId(null);
+      onAction && onAction(order.order_id, "refresh");
+    } catch (error) {
+      console.error("Failed to update product:", error);
+      alert("Failed to update product");
+    }
+  };
+
+  const handleDeleteItem = async (itemId) => {
+    try {
+      await api.delete(
+        `/orders/${encodeURIComponent(order.order_id)}/items/${itemId}`,
+      );
+      setConfirmDeleteItemId(null);
+      onAction && onAction(order.order_id, "refresh");
+    } catch (err) {
+      const msg = err?.response?.data?.detail || "Failed to remove item";
+      alert(msg);
+      setConfirmDeleteItemId(null);
+    }
+  };
+
+  const handleItemAdded = (data) => {
+    setShowAddProduct(false);
+    onAction && onAction(order.order_id, "refresh");
+  };
 
   const openSerials = async () => {
     setSerialLoading(true);
@@ -471,7 +1095,9 @@ function OrderLightbox({
   const saveSerials = async () => {
     await api.post(
       `/orders/${encodeURIComponent(order.order_id)}/serial_numbers/save`,
-      { entries: serialItems },
+      {
+        entries: serialItems,
+      },
     );
     setSerialOpen(false);
     onAction && onAction(order.order_id, "refresh");
@@ -503,12 +1129,13 @@ function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-email`,
-        { email: emailValue.trim() },
+        {
+          email: emailValue.trim(),
+        },
       );
       setEmailEditing(false);
       onAction && onAction(order.order_id, "refresh");
-    } catch (error) {
-      console.error("Failed to update email:", error);
+    } catch {
       alert("Failed to update email");
     }
   };
@@ -517,12 +1144,13 @@ function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-mobile`,
-        { mobile: mobileValue.trim() },
+        {
+          mobile: mobileValue.trim(),
+        },
       );
       setMobileEditing(false);
       onAction && onAction(order.order_id, "refresh");
-    } catch (error) {
-      console.error("Failed to update mobile:", error);
+    } catch {
       alert("Failed to update mobile");
     }
   };
@@ -533,20 +1161,27 @@ function OrderLightbox({
       if (isNaN(newPrice) || newPrice < 0) return alert("Invalid price");
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-item-price`,
-        { item_id: itemId, unit_price: newPrice },
+        {
+          item_id: itemId,
+          unit_price: newPrice,
+        },
       );
       setEditingItemId(null);
       setEditingPrice("");
       onAction && onAction(order.order_id, "refresh");
-    } catch (error) {
-      console.error("Failed to update item price:", error);
+    } catch {
       alert("Failed to update item price");
     }
   };
 
-  const handleDelete = async () => {
-    await onAction(order.order_id, "delete");
-    onClose();
+  const handleReject = async () => {
+    try {
+      await api.put(`/orders/${encodeURIComponent(order.order_id)}/reject`);
+      alert("Order rejected successfully");
+      onClose();
+    } catch {
+      alert("Failed to reject order");
+    }
   };
 
   const cust = details?.customer || order.customer;
@@ -573,8 +1208,9 @@ function OrderLightbox({
         </div>
 
         <div className="lb-body">
-          {/* LEFT COLUMN */}
+          {/* ── LEFT COLUMN ── */}
           <div className="lb-section">
+            {/* Customer & Order Info */}
             <div>
               <div className="lb-section-title">Customer & Order</div>
               <div className="lb-info-grid">
@@ -694,25 +1330,118 @@ function OrderLightbox({
               </div>
             )}
 
-            {details?.address && (
+            {/* ── DELIVERY ADDRESS ── */}
+            {(details?.address || !loading) && (
               <div>
-                <div className="lb-section-title">Delivery Address</div>
                 <div
-                  className="lb-info-card"
-                  style={{ lineHeight: 1.6, fontSize: 13 }}
+                  className="lb-section-title"
+                  style={{ display: "flex", alignItems: "center", gap: 8 }}
                 >
-                  <strong>{details.address.name}</strong> ·{" "}
-                  {details.address.mobile}
-                  <br />
-                  {details.address.address_line}, {details.address.city},{" "}
-                  {details.address.state_name} — {details.address.pincode}
-                  {details.address.landmark && (
-                    <span> ({details.address.landmark})</span>
+                  Delivery Address
+                  {addressMode === "view" && (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <span
+                        className="edit-icon"
+                        onClick={loadAddresses}
+                        title="Change address"
+                        style={{ cursor: "pointer" }}
+                      >
+                        ✏️
+                      </span>
+                      <button
+                        className="lb-btn lb-btn-secondary lb-btn-sm"
+                        onClick={() => setAddressMode("add")}
+                        style={{ fontSize: 11, padding: "2px 8px" }}
+                      >
+                        ➕ New
+                      </button>
+                    </div>
                   )}
                 </div>
+
+                {/* VIEW MODE */}
+                {addressMode === "view" && details?.address && (
+                  <div
+                    className="lb-info-card"
+                    style={{ lineHeight: 1.6, fontSize: 13 }}
+                  >
+                    <strong>{details.address.name}</strong> ·{" "}
+                    {details.address.mobile}
+                    <br />
+                    {details.address.address_line}, {details.address.city},{" "}
+                    {details.address.state_name} — {details.address.pincode}
+                    {details.address.landmark && (
+                      <span> ({details.address.landmark})</span>
+                    )}
+                  </div>
+                )}
+
+                {/* SELECT EXISTING ADDRESS */}
+                {addressMode === "select" && (
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                  >
+                    {loadingAddresses ? (
+                      <div style={{ color: "var(--text3)", fontSize: 12.5 }}>
+                        Loading addresses…
+                      </div>
+                    ) : (
+                      <>
+                        <select
+                          value={selectedAddressId || ""}
+                          onChange={(e) =>
+                            setSelectedAddressId(parseInt(e.target.value))
+                          }
+                          className="form-select"
+                        >
+                          <option value="">Select Address</option>
+                          {availableAddresses.map((addr) => (
+                            <option
+                              key={addr.address_id}
+                              value={addr.address_id}
+                            >
+                              {addr.label ||
+                                `${addr.address_line}, ${addr.city}`}
+                            </option>
+                          ))}
+                        </select>
+                        <div style={{ display: "flex", gap: 7 }}>
+                          <button
+                            className="lb-btn lb-btn-primary lb-btn-sm"
+                            onClick={saveAddress}
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="lb-btn lb-btn-secondary lb-btn-sm"
+                            onClick={() => setAddressMode("add")}
+                          >
+                            ➕ Add New Instead
+                          </button>
+                          <button
+                            className="lb-btn lb-btn-secondary lb-btn-sm"
+                            onClick={() => setAddressMode("view")}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* ADD NEW ADDRESS FORM */}
+                {addressMode === "add" && (
+                  <AddAddressForm
+                    order={order}
+                    onSaved={handleAddressCreated}
+                    onCancel={() => setAddressMode("view")}
+                  />
+                )}
               </div>
             )}
 
+            {/* Remarks */}
             <div>
               <div className="lb-section-title">Remarks</div>
               {remarksEditing ? (
@@ -725,13 +1454,13 @@ function OrderLightbox({
                   />
                   <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
                     <button
-                      className="lb-btn lb-btn-primary"
+                      className="lb-btn lb-btn-primary lb-btn-sm"
                       onClick={saveRemarks}
                     >
                       Save
                     </button>
                     <button
-                      className="lb-btn lb-btn-secondary"
+                      className="lb-btn lb-btn-secondary lb-btn-sm"
                       onClick={() => setRemarksEditing(false)}
                     >
                       Cancel
@@ -757,6 +1486,7 @@ function OrderLightbox({
               )}
             </div>
 
+            {/* UTR box */}
             {localPayStatus !== "paid" && utrOpen && (
               <div className="utr-box">
                 <label>Enter UTR / Transaction Reference Number</label>
@@ -782,11 +1512,29 @@ function OrderLightbox({
             )}
           </div>
 
-          {/* RIGHT COLUMN */}
+          {/* ── RIGHT COLUMN ── */}
           <div className="lb-section">
+            {/* Items table */}
             {details?.items?.length > 0 && (
               <div>
-                <div className="lb-section-title">Items</div>
+                <div
+                  className="lb-section-title"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span>Items ({details.items.length})</span>
+                  <button
+                    className="lb-btn lb-btn-secondary lb-btn-sm"
+                    onClick={() => setShowAddProduct((v) => !v)}
+                    style={{ fontSize: 11 }}
+                  >
+                    {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
+                  </button>
+                </div>
+
                 <div
                   style={{
                     border: "1px solid var(--border)",
@@ -801,12 +1549,70 @@ function OrderLightbox({
                         <th>Qty</th>
                         <th>Unit Price</th>
                         <th>Total</th>
+                        <th></th>
                       </tr>
                     </thead>
                     <tbody>
                       {details.items.map((it) => (
                         <tr key={it.item_id}>
-                          <td>{it.product_name}</td>
+                          <td>
+                            {editingProductItemId === it.item_id ? (
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 6,
+                                  alignItems: "center",
+                                }}
+                              >
+                                <div style={{ flex: 1 }}>
+                                  <ProductSearchInput
+                                    products={availableProducts}
+                                    value={selectedProductId}
+                                    onChange={(p) =>
+                                      setSelectedProductId(p?.id || null)
+                                    }
+                                    placeholder="Search product…"
+                                  />
+                                </div>
+                                <button
+                                  className="lb-btn lb-btn-primary lb-btn-sm"
+                                  onClick={() => saveProduct(it.item_id)}
+                                  disabled={!selectedProductId}
+                                >
+                                  ✓
+                                </button>
+                                <button
+                                  className="lb-btn lb-btn-secondary lb-btn-sm"
+                                  onClick={() => {
+                                    setEditingProductItemId(null);
+                                    setSelectedProductId(null);
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                }}
+                              >
+                                <span>{it.product_name}</span>
+                                <span
+                                  className="edit-icon"
+                                  onClick={() => {
+                                    setEditingProductItemId(it.item_id);
+                                    setSelectedProductId(it.product_id);
+                                  }}
+                                  title="Edit product"
+                                >
+                                  ✏️
+                                </span>
+                              </div>
+                            )}
+                          </td>
                           <td>{it.quantity}</td>
                           <td>
                             {editingItemId === it.item_id ? (
@@ -853,13 +1659,98 @@ function OrderLightbox({
                             )}
                           </td>
                           <td>{fmtCurrency(it.total_price)}</td>
+                          <td style={{ width: 32, textAlign: "center" }}>
+                            {confirmDeleteItemId === it.item_id ? (
+                              <div style={{ display: "flex", gap: 4 }}>
+                                <button
+                                  className="lb-btn lb-btn-danger lb-btn-sm"
+                                  onClick={() => handleDeleteItem(it.item_id)}
+                                  style={{ padding: "2px 7px", fontSize: 11 }}
+                                >
+                                  Yes
+                                </button>
+                                <button
+                                  className="lb-btn lb-btn-secondary lb-btn-sm"
+                                  onClick={() => setConfirmDeleteItemId(null)}
+                                  style={{ padding: "2px 7px", fontSize: 11 }}
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <span
+                                className="del-icon"
+                                title="Remove item"
+                                onClick={() =>
+                                  setConfirmDeleteItemId(it.item_id)
+                                }
+                              >
+                                🗑
+                              </span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+
+                {/* Add Product Panel */}
+                {showAddProduct && (
+                  <AddProductPanel
+                    orderId={order.order_id}
+                    products={availableProducts}
+                    onAdded={handleItemAdded}
+                    onCancel={() => setShowAddProduct(false)}
+                  />
+                )}
+
+                {productsLoading && (
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: "var(--text3)",
+                      marginTop: 4,
+                    }}
+                  >
+                    Loading product list…
+                  </div>
+                )}
               </div>
             )}
+
+            {/* If no items yet, still show add product */}
+            {!loading &&
+              details &&
+              (!details.items || details.items.length === 0) && (
+                <div>
+                  <div
+                    className="lb-section-title"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <span>Items</span>
+                    <button
+                      className="lb-btn lb-btn-secondary lb-btn-sm"
+                      onClick={() => setShowAddProduct((v) => !v)}
+                      style={{ fontSize: 11 }}
+                    >
+                      {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
+                    </button>
+                  </div>
+                  {showAddProduct && (
+                    <AddProductPanel
+                      orderId={order.order_id}
+                      products={availableProducts}
+                      onAdded={handleItemAdded}
+                      onCancel={() => setShowAddProduct(false)}
+                    />
+                  )}
+                </div>
+              )}
 
             {details?.serial_status && (
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -947,7 +1838,7 @@ function OrderLightbox({
           </div>
         </div>
 
-        {/* ACTION BAR */}
+        {/* ── ACTION BAR ── */}
         <div className="lb-actions">
           {localPayStatus !== "paid" ? (
             <button
@@ -989,7 +1880,6 @@ function OrderLightbox({
             {serialLoading ? "…" : "🔢 Serials"}
           </button>
 
-          {/* ── SMART INVOICE BUTTON ── */}
           <InvoiceButton
             orderId={order.order_id}
             invoiceNumber={order.invoice_number}
@@ -1000,25 +1890,27 @@ function OrderLightbox({
 
           <div style={{ flex: 1 }} />
 
-          {confirmDelete ? (
+          {confirmReject ? (
             <>
-              <span style={{ fontSize: 12, color: "var(--red)" }}>Sure?</span>
-              <button className="lb-btn lb-btn-danger" onClick={handleDelete}>
-                Yes, Delete
+              <span style={{ fontSize: 12, color: "var(--red)" }}>
+                Reject this order?
+              </span>
+              <button className="lb-btn lb-btn-danger" onClick={handleReject}>
+                Yes, Reject
               </button>
               <button
                 className="lb-btn lb-btn-secondary"
-                onClick={() => setConfirmDelete(false)}
+                onClick={() => setConfirmReject(false)}
               >
-                No
+                Cancel
               </button>
             </>
           ) : (
             <button
               className="lb-btn lb-btn-danger"
-              onClick={() => setConfirmDelete(true)}
+              onClick={() => setConfirmReject(true)}
             >
-              🗑 Delete
+              ⛔ Reject
             </button>
           )}
         </div>
@@ -1093,7 +1985,6 @@ export default function OrdersTable({
     return orders.filter((o) => {
       const cust = o.customer || {};
 
-      // Search
       const q = search.toLowerCase().trim();
       if (q) {
         const haystack = [
@@ -1109,21 +2000,17 @@ export default function OrdersTable({
         if (!haystack.includes(q)) return false;
       }
 
-      // Payment status
       if (
         payment_status &&
         o.payment_status?.toLowerCase() !== payment_status.toLowerCase()
       )
         return false;
-
-      // Delivery status
       if (
         delivery_status &&
         o.delivery_status?.toUpperCase() !== delivery_status.toUpperCase()
       )
         return false;
 
-      // Channel
       if (channel) {
         const ch = (o.channel || "").trim().toLowerCase();
         const target = channel.toLowerCase();
@@ -1134,7 +2021,6 @@ export default function OrdersTable({
         }
       }
 
-      // Date range
       if (date_from || date_to) {
         const orderDate = new Date(o.created_at);
         if (date_from && orderDate < new Date(date_from)) return false;
@@ -1145,7 +2031,6 @@ export default function OrdersTable({
         }
       }
 
-      // Pending invoice — keep only orders WITHOUT an invoice number
       if (pending_invoice && o.invoice_number) return false;
 
       return true;
@@ -1258,7 +2143,7 @@ export default function OrdersTable({
         Showing {filtered.length} of {orders.length} orders
       </div>
 
-      {/* ── LIGHTBOX ── */}
+      {/* LIGHTBOX */}
       {activeOrder && (
         <OrderLightbox
           order={activeOrder}

@@ -62,9 +62,6 @@ def generate_order_id(db, offline_customer_id: int) -> str:
     return f"{prefix}#{next_suffix}"
 
 
-
-
-
 # ================================
 # DB Dependency
 # ================================
@@ -113,6 +110,36 @@ class MobileUpdate(BaseModel):
 class ItemPriceUpdate(BaseModel):
     item_id: int
     unit_price: float
+
+class AddressUpdate(BaseModel):
+    address_id: int
+
+class ProductUpdate(BaseModel):
+    item_id: int
+    product_id: int
+
+# NEW: Add item to existing order
+class AddOrderItem(BaseModel):
+    product_id: int
+    quantity: int
+    unit_price: float
+
+# NEW: Create address for customer
+class AddressCreate(BaseModel):
+    customer_id: Optional[int] = None
+    offline_customer_id: Optional[int] = None
+    name: str
+    mobile: str
+    pincode: str
+    locality: str
+    address_line: str
+    city: str
+    state_id: int
+    landmark: Optional[str] = None
+    alternate_phone: Optional[str] = None
+    address_type: str = "HOME"
+    email: Optional[str] = None
+    gst: Optional[str] = None
 
 # ================================
 # CREATE ORDER (Fixed)
@@ -234,7 +261,7 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
 
 # ================================
-# LIST ORDERS (unchanged but cleaned)
+# LIST ORDERS
 # ================================
 @router.get("")
 def list_orders(
@@ -340,15 +367,251 @@ def list_orders(
 
         base["customer"] = customer
 
-        # ⚠️ IMPORTANT:
-        # DO NOT load address, items, serials here anymore
         out.append(base)
 
     return out
 
 
+# ================================
+# PRODUCTS LIST (for dropdowns)
+# ================================
+@router.get("/products/list")
+def list_products_for_orders(
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns a lightweight list of all visible products for use in order item dropdowns.
+    """
+    if search:
+        like = f"%{search.lower()}%"
+        rows = db.execute(text("""
+            SELECT product_id AS id, name, sku_id, category_id
+            FROM products
+            WHERE is_visible = 1
+              AND (LOWER(name) LIKE :like OR LOWER(sku_id) LIKE :like)
+            ORDER BY preference DESC, name ASC
+            LIMIT 100
+        """), {"like": like}).fetchall()
+    else:
+        rows = db.execute(text("""
+            SELECT product_id AS id, name, sku_id, category_id
+            FROM products
+            WHERE is_visible = 1
+            ORDER BY preference DESC, name ASC
+            LIMIT 200
+        """)).fetchall()
+
+    return [dict(row._mapping) for row in rows]
 
 
+# ================================
+# ADD ITEM TO EXISTING ORDER (NEW)
+# ================================
+@router.post("/{order_id}/add-item")
+def add_item_to_order(order_id: str, payload: AddOrderItem, db: Session = Depends(get_db)):
+    """
+    Add a new product line item to an existing order.
+    Recalculates order total_amount and total_items.
+    """
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Validate product exists
+    product = db.execute(
+        text("SELECT product_id, name FROM products WHERE product_id = :pid"),
+        {"pid": payload.product_id}
+    ).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    total_price = round(payload.unit_price * payload.quantity, 2)
+
+    # Insert into order_items
+    result = db.execute(text("""
+        INSERT INTO order_items
+            (order_id, product_id, quantity, unit_price, total_price)
+        VALUES
+            (:oid, :pid, :qty, :unit, :total)
+    """), {
+        "oid": order_id,
+        "pid": payload.product_id,
+        "qty": payload.quantity,
+        "unit": payload.unit_price,
+        "total": total_price
+    })
+    item_id = result.lastrowid
+
+    # Insert into order_details
+    db.execute(text("""
+        INSERT INTO order_details
+            (item_id, order_id, product_id, sr_no)
+        VALUES
+            (:item_id, :order_id, :product_id, NULL)
+    """), {
+        "item_id": item_id,
+        "order_id": order_id,
+        "product_id": payload.product_id
+    })
+
+    # Recalculate order totals
+    totals = db.execute(
+        text("SELECT SUM(total_price) AS total, SUM(quantity) AS items FROM order_items WHERE order_id = :oid"),
+        {"oid": order_id}
+    ).first()
+
+    order.total_amount = totals.total or 0
+    order.total_items = totals.items or 0
+    order.updated_at = datetime.now()
+
+    db.commit()
+
+    return {
+        "success": True,
+        "item_id": item_id,
+        "product_id": payload.product_id,
+        "product_name": product.name,
+        "quantity": payload.quantity,
+        "unit_price": payload.unit_price,
+        "total_price": total_price,
+        "order_total": float(order.total_amount),
+        "order_total_items": order.total_items
+    }
+
+
+# ================================
+# REMOVE ITEM FROM ORDER (NEW)
+# ================================
+@router.delete("/{order_id}/items/{item_id}")
+def remove_item_from_order(order_id: str, item_id: int, db: Session = Depends(get_db)):
+    """
+    Remove a line item from an existing order.
+    Recalculates order total_amount and total_items.
+    """
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Check item count — prevent removing last item
+    count = db.execute(
+        text("SELECT COUNT(*) FROM order_items WHERE order_id = :oid"),
+        {"oid": order_id}
+    ).scalar()
+    if count <= 1:
+        raise HTTPException(status_code=400, detail="Cannot remove the last item from an order")
+
+    # Delete related device_transaction serials
+    db.execute(text("""
+        DELETE dt FROM device_transaction dt
+        INNER JOIN order_items oi ON oi.order_id = dt.order_id
+        INNER JOIN products p ON p.product_id = oi.product_id AND p.sku_id = dt.sku_id
+        WHERE oi.item_id = :iid AND dt.in_out = 2
+    """), {"iid": item_id})
+
+    # Delete from order_details
+    db.execute(
+        text("DELETE FROM order_details WHERE item_id = :iid AND order_id = :oid"),
+        {"iid": item_id, "oid": order_id}
+    )
+
+    # Delete from order_items
+    db.execute(
+        text("DELETE FROM order_items WHERE item_id = :iid AND order_id = :oid"),
+        {"iid": item_id, "oid": order_id}
+    )
+
+    # Recalculate order totals
+    totals = db.execute(
+        text("SELECT SUM(total_price) AS total, SUM(quantity) AS items FROM order_items WHERE order_id = :oid"),
+        {"oid": order_id}
+    ).first()
+
+    order.total_amount = totals.total or 0
+    order.total_items = totals.items or 0
+    order.updated_at = datetime.now()
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Item removed",
+        "order_total": float(order.total_amount),
+        "order_total_items": order.total_items
+    }
+
+
+# ================================
+# CREATE ADDRESS FOR CUSTOMER (NEW)
+# ================================
+@router.post("/addresses/create")
+def create_customer_address(payload: AddressCreate, db: Session = Depends(get_db)):
+    """
+    Create a new address for either an online or offline customer.
+    Returns the new address_id.
+    """
+    if not payload.customer_id and not payload.offline_customer_id:
+        raise HTTPException(status_code=400, detail="Either customer_id or offline_customer_id is required")
+
+    # Validate state exists
+    state = db.execute(
+        text("SELECT state_id FROM state WHERE state_id = :sid"),
+        {"sid": payload.state_id}
+    ).first()
+    if not state:
+        raise HTTPException(status_code=404, detail="Invalid state_id")
+
+    now = datetime.now()
+
+    result = db.execute(text("""
+        INSERT INTO address
+            (customer_id, offline_customer_id, name, mobile, pincode, locality,
+             address_line, city, state_id, landmark, alternate_phone, address_type,
+             email, gst, created_at, updated_at, is_available)
+        VALUES
+            (:customer_id, :offline_customer_id, :name, :mobile, :pincode, :locality,
+             :address_line, :city, :state_id, :landmark, :alternate_phone, :address_type,
+             :email, :gst, :created_at, :updated_at, 1)
+    """), {
+        "customer_id": payload.customer_id,
+        "offline_customer_id": payload.offline_customer_id,
+        "name": payload.name,
+        "mobile": payload.mobile,
+        "pincode": payload.pincode,
+        "locality": payload.locality,
+        "address_line": payload.address_line,
+        "city": payload.city,
+        "state_id": payload.state_id,
+        "landmark": payload.landmark,
+        "alternate_phone": payload.alternate_phone,
+        "address_type": payload.address_type,
+        "email": payload.email,
+        "gst": payload.gst,
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    db.commit()
+    new_address_id = result.lastrowid
+
+    # Return the full new address
+    address = db.execute(text("""
+        SELECT a.*, s.name AS state_name
+        FROM address a
+        LEFT JOIN state s ON s.state_id = a.state_id
+        WHERE a.address_id = :aid
+    """), {"aid": new_address_id}).first()
+
+    return dict(address._mapping)
+
+
+# ================================
+# GET ALL STATES (for address form dropdown)
+# ================================
+@router.get("/states/list")
+def list_states(db: Session = Depends(get_db)):
+    rows = db.execute(text("SELECT state_id, name FROM state ORDER BY name ASC")).fetchall()
+    return [dict(row._mapping) for row in rows]
 
 
 # ================================
@@ -368,7 +631,6 @@ def mark_as_paid(order_id: str, db: Session = Depends(get_db)):
 def mark_paid_with_utr(order_id: str, payload: UTRPayload, db: Session = Depends(get_db)):
     """
     Mark an order as paid and record the UTR / transaction reference number.
-    Requires `utr_number` (VARCHAR) column to exist on the `orders` table.
     """
     utr = payload.utr_number.strip()
     if not utr:
@@ -378,13 +640,9 @@ def mark_paid_with_utr(order_id: str, payload: UTRPayload, db: Session = Depends
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
  
-    if order.payment_status == "paid":
-        # Allow updating UTR even if already paid (idempotent)
-        pass
- 
     order.payment_status = "paid"
     order.order_status = "APPR"
-    order.utr_number = utr      # ← new column
+    order.utr_number = utr
     order.updated_at = datetime.now()
  
     db.commit()
@@ -395,8 +653,6 @@ def mark_paid_with_utr(order_id: str, payload: UTRPayload, db: Session = Depends
         "payment_status": order.payment_status,
         "utr_number": order.utr_number,
         "order_status": order.order_status,
-        
-    
     }
 
 @router.put("/{order_id:path}/mark-fulfilled")
@@ -504,9 +760,6 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
         for row in order_items
     }
 
-    # ---------------------------------------------------------
-    # PROCESS EACH ENTRY
-    # ---------------------------------------------------------
     for entry in entries:
         item_id = entry.get("item_id")
         serials = entry.get("serials", [])
@@ -517,9 +770,7 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
         item = item_map[item_id]
         sku = item["sku_id"]
 
-        # ---------------------------------------------------------
-        # DELETE old OUT serial numbers for this SKU
-        # ---------------------------------------------------------
+        # Delete old OUT serial numbers for this SKU
         db.execute(text("""
             DELETE FROM device_transaction
             WHERE order_id = :oid
@@ -527,15 +778,12 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
               AND in_out = 2
         """), {"oid": order_id, "sku": sku})
 
-        # ---------------------------------------------------------
-        # INSERT NEW SERIALS
-        # ---------------------------------------------------------
+        # Insert new serials
         for sr in serials:
             sr = sr.strip()
             if not sr:
                 continue
 
-            # Look up correct model_name from last IN record
             result = db.execute(text("""
                 SELECT model_name
                 FROM device_transaction
@@ -547,7 +795,6 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
 
             correct_model_name = result.model_name if result else item["model_name"]
 
-            # Insert OUT entry
             db.execute(text("""
                 INSERT INTO device_transaction
                     (device_srno, model_name, sku_id, order_id, in_out, create_date, price, remarks)
@@ -563,14 +810,9 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
 
     db.commit()
 
-    # ---------------------------------------------------------
-    # SERIAL STATUS CALCULATION FOR FRONTEND
-    # ---------------------------------------------------------
-
-    # Get required SKUs for this order
+    # Serial status calculation
     order_skus = [row.sku_id for row in order_items]
 
-    # Count inserted serials (OUT entries)
     serial_counts = db.execute(text("""
         SELECT sku_id, COUNT(*) AS count
         FROM device_transaction
@@ -580,7 +822,6 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
 
     serial_map = {row.sku_id: row.count for row in serial_counts}
 
-    # Determine complete/partial/none
     if all(sku in serial_map and serial_map[sku] > 0 for sku in order_skus):
         serial_status = "complete"
     elif any(sku in serial_map and serial_map[sku] > 0 for sku in order_skus):
@@ -594,22 +835,12 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
     }
 
 
-
-
-
-
 @router.put("/{order_id}/toggle-payment")
 def toggle_payment(order_id: str, db: Session = Depends(get_db)):
-    """
-    Toggle payment_status between 'pending' and 'paid'.
-    Also set order_status automatically.
-    """
     order = db.query(Order).filter(Order.order_id == order_id).first()
-
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    # Toggle
     if order.payment_status == "paid":
         order.payment_status = "pending"
         order.order_status = "PEND"
@@ -650,7 +881,6 @@ def create_local_invoice(order_id: str, db: Session = Depends(get_db)):
     if not order:
         raise HTTPException(404, "Order not found")
 
-    # Generate invoice number
     invoice_number = "INV-" + datetime.now().strftime("%Y%m%d-%H%M%S")
 
     order.invoice_number = invoice_number
@@ -690,7 +920,6 @@ def update_delivery(order_id: str, payload: DeliveryUpdate, db: Session = Depend
         "delivery_status": payload.status,
     }
 
-# ---- SERIAL STATUS CHECK ----
 @router.put("/{order_id}/remarks")
 def update_order_remarks(order_id: str, data: dict, db: Session = Depends(get_db)):
     remarks = data.get("remarks")
@@ -721,40 +950,24 @@ def search_suggestions(q: str, db: Session = Depends(get_db)):
     rows = db.execute(text("""
         SELECT DISTINCT result FROM (
 
-            -- Order ID
             SELECT order_id AS result FROM orders WHERE LOWER(order_id) LIKE :q
-
             UNION
-
-            -- AWB
             SELECT CAST(awb_number AS CHAR) FROM orders WHERE LOWER(awb_number) LIKE :q
-
             UNION
-
-            -- Customer (online)
             SELECT name FROM customer WHERE LOWER(name) LIKE :q
             UNION
             SELECT mobile FROM customer WHERE LOWER(mobile) LIKE :q
-
             UNION
-
-            -- Customer (offline)
             SELECT name FROM offline_customer WHERE LOWER(name) LIKE :q
             UNION
             SELECT mobile FROM offline_customer WHERE LOWER(mobile) LIKE :q
-
             UNION
-
-            -- Address fields
             SELECT address_line FROM address WHERE LOWER(address_line) LIKE :q
             UNION
             SELECT city FROM address WHERE LOWER(city) LIKE :q
             UNION
             SELECT pincode FROM address WHERE LOWER(pincode) LIKE :q
-
             UNION
-
-            -- Product names
             SELECT name FROM products WHERE LOWER(name) LIKE :q
 
         ) AS all_results
@@ -766,26 +979,21 @@ def search_suggestions(q: str, db: Session = Depends(get_db)):
 @router.delete("/{order_id}")
 def delete_order(order_id: str, db: Session = Depends(get_db)):
     try:
-        # 1️⃣ Check if order exists
         order = db.query(Order).filter(Order.order_id == order_id).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        # 2️⃣ Delete from order_items
         db.execute(
             text("DELETE FROM order_items WHERE order_id = :oid"),
             {"oid": order_id}
         )
 
-        # 3️⃣ Delete from device_transactions
         db.execute(
             text("DELETE FROM device_transaction WHERE order_id = :oid"),
             {"oid": order_id}
         )
 
-        # 4️⃣ Delete main order
         db.delete(order)
-
         db.commit()
 
         return {"success": True, "message": "Order deleted successfully"}
@@ -801,6 +1009,7 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
     if not order:
         raise HTTPException(404, "Order not found")
     customer = None
+    row = None
     if order.customer_id:
         row = db.execute(
             text("SELECT name, mobile, email FROM customer WHERE customer_id=:cid"),
@@ -814,7 +1023,6 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
 
     if row:
         customer = dict(row._mapping)
-
 
     # ADDRESS
     address = db.execute(
@@ -850,7 +1058,7 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
 
     items = [dict(row._mapping) for row in items]
 
-    # SERIAL STATUS (reuse your correct logic)
+    # SERIAL STATUS
     serial_rows = db.execute(text("""
         SELECT 
             oi.item_id,
@@ -887,16 +1095,13 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
         "invoice_number": order.invoice_number
     }
 
+
 # ================================
-# NEW ENDPOINTS - EMAIL, MOBILE, ITEM PRICE UPDATE
+# UPDATE ENDPOINTS
 # ================================
 
 @router.put("/{order_id}/update-email")
 def update_customer_email(order_id: str, payload: EmailUpdate, db: Session = Depends(get_db)):
-    """
-    Update customer email for the order.
-    Updates the appropriate customer table (online/offline).
-    """
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -907,13 +1112,11 @@ def update_customer_email(order_id: str, payload: EmailUpdate, db: Session = Dep
 
     try:
         if order.customer_id:
-            # Update online customer
             db.execute(
                 text("UPDATE customer SET email = :email WHERE customer_id = :cid"),
                 {"email": email, "cid": order.customer_id}
             )
         elif order.offline_customer_id:
-            # Update offline customer
             db.execute(
                 text("UPDATE offline_customer SET email = :email WHERE customer_id = :cid"),
                 {"email": email, "cid": order.offline_customer_id}
@@ -932,10 +1135,6 @@ def update_customer_email(order_id: str, payload: EmailUpdate, db: Session = Dep
 
 @router.put("/{order_id}/update-mobile")
 def update_customer_mobile(order_id: str, payload: MobileUpdate, db: Session = Depends(get_db)):
-    """
-    Update customer mobile for the order.
-    Updates the appropriate customer table (online/offline).
-    """
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -946,13 +1145,11 @@ def update_customer_mobile(order_id: str, payload: MobileUpdate, db: Session = D
 
     try:
         if order.customer_id:
-            # Update online customer
             db.execute(
                 text("UPDATE customer SET mobile = :mobile WHERE customer_id = :cid"),
                 {"mobile": mobile, "cid": order.customer_id}
             )
         elif order.offline_customer_id:
-            # Update offline customer
             db.execute(
                 text("UPDATE offline_customer SET mobile = :mobile WHERE customer_id = :cid"),
                 {"mobile": mobile, "cid": order.offline_customer_id}
@@ -971,10 +1168,6 @@ def update_customer_mobile(order_id: str, payload: MobileUpdate, db: Session = D
 
 @router.put("/{order_id}/update-item-price")
 def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Depends(get_db)):
-    """
-    Update unit price for a specific order item.
-    Recalculates total_price based on quantity.
-    """
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -986,7 +1179,6 @@ def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Dep
         raise HTTPException(status_code=400, detail="Unit price cannot be negative")
 
     try:
-        # Get current item details
         item = db.execute(
             text("SELECT quantity FROM order_items WHERE item_id = :iid AND order_id = :oid"),
             {"iid": item_id, "oid": order_id}
@@ -998,7 +1190,6 @@ def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Dep
         quantity = item.quantity
         new_total_price = round(new_unit_price * quantity, 2)
 
-        # Update item prices
         db.execute(
             text("""
                 UPDATE order_items 
@@ -1013,7 +1204,6 @@ def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Dep
             }
         )
 
-        # Recalculate order total
         totals = db.execute(
             text("SELECT SUM(total_price) as sum FROM order_items WHERE order_id = :oid"),
             {"oid": order_id}
@@ -1021,7 +1211,6 @@ def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Dep
 
         new_order_total = totals.sum if totals.sum else 0
 
-        # Update order total
         db.execute(
             text("UPDATE orders SET total_amount = :total WHERE order_id = :oid"),
             {"total": new_order_total, "oid": order_id}
@@ -1042,3 +1231,119 @@ def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Dep
         db.rollback()
         print("Item price update error:", e)
         raise HTTPException(status_code=500, detail="Failed to update item price")
+
+
+@router.put("/{order_id}/update-address")
+def update_order_address(order_id: str, payload: AddressUpdate, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    address_id = payload.address_id
+
+    address = db.execute(
+        text("SELECT address_id FROM address WHERE address_id = :aid"),
+        {"aid": address_id}
+    ).first()
+
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+
+    try:
+        order.address_id = address_id
+        order.updated_at = datetime.now()
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "Address updated successfully",
+            "address_id": address_id
+        }
+
+    except Exception as e:
+        db.rollback()
+        print("Address update error:", e)
+        raise HTTPException(status_code=500, detail="Failed to update address")
+
+
+@router.put("/{order_id}/update-item-product")
+def update_item_product(order_id: str, payload: ProductUpdate, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    item_id = payload.item_id
+    new_product_id = payload.product_id
+
+    try:
+        product = db.execute(
+            text("SELECT product_id, name FROM products WHERE product_id = :pid"),
+            {"pid": new_product_id}
+        ).first()
+
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        db.execute(
+            text("""
+                UPDATE order_items 
+                SET product_id = :pid
+                WHERE item_id = :iid AND order_id = :oid
+            """),
+            {
+                "pid": new_product_id,
+                "iid": item_id,
+                "oid": order_id
+            }
+        )
+
+        db.execute(
+            text("""
+                UPDATE order_details 
+                SET product_id = :pid
+                WHERE item_id = :iid AND order_id = :oid
+            """),
+            {
+                "pid": new_product_id,
+                "iid": item_id,
+                "oid": order_id
+            }
+        )
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "Product updated successfully",
+            "item_id": item_id,
+            "product_id": new_product_id,
+            "product_name": product.name
+        }
+
+    except Exception as e:
+        db.rollback()
+        print("Product update error:", e)
+        raise HTTPException(status_code=500, detail="Failed to update product")
+
+
+@router.put("/{order_id}/reject")
+def reject_order(order_id: str, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    try:
+        order.order_status = "REJECTED"
+        order.updated_at = datetime.now()
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "Order rejected successfully",
+            "order_status": "REJECTED"
+        }
+
+    except Exception as e:
+        db.rollback()
+        print("Order reject error:", e)
+        raise HTTPException(status_code=500, detail="Failed to reject order")
