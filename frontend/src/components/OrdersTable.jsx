@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import api from "../api/axiosInstance";
-
+import logoSrc from "../assets/logo.png"; // adjust extension if needed (.svg, .webp, etc.)
 /* ─────────────────────────────────────────────
    GLOBAL STYLES  (injected once)
 ───────────────────────────────────────────── */
@@ -34,26 +34,44 @@ const STYLES = `
     font-family: 'DM Sans', sans-serif;
   }
 
-  .ot-wrap { font-family: 'DM Sans', sans-serif; color: var(--text); }
+  .ot-wrap { font-family: 'DM Sans', sans-serif; color: var(--text); width: 100%; }
 
+  /* ── RESPONSIVE TABLE WRAPPER ── */
   .ot-table-wrap {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm);
+    width: 100%;
   }
-  .ot-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .ot-table-scroll { overflow-x: auto; width: 100%; }
+  .ot-table {
+    width: 100%; border-collapse: collapse;
+    font-size: clamp(11px, 1.1vw, 13.5px);
+    min-width: 900px;
+  }
   .ot-table thead tr { background: var(--surface2); border-bottom: 1px solid var(--border); }
   .ot-table th {
-    padding: 11px 14px; text-align: left; font-weight: 600;
-    font-size: 12px; color: var(--text2); letter-spacing: .3px; white-space: nowrap; user-select: none;
+    padding: clamp(7px,0.7vw,11px) clamp(7px,0.9vw,14px);
+    text-align: left; font-weight: 600;
+    font-size: clamp(10px,1vw,12px); color: var(--text2);
+    letter-spacing: .3px; white-space: nowrap; user-select: none;
   }
-  .ot-table td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .ot-table td {
+    padding: clamp(7px,0.7vw,12px) clamp(7px,0.9vw,14px);
+    border-bottom: 1px solid var(--border); vertical-align: middle;
+  }
   .ot-table tbody tr:last-child td { border-bottom: none; }
   .ot-table tbody tr { transition: background .1s; cursor: pointer; }
   .ot-table tbody tr:hover td { background: #fafbff; }
 
+  @media (max-width: 1300px) {
+    .ot-col-hide-sm { display: none; }
+  }
+
   .badge {
-    display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px;
-    border-radius: 20px; font-size: 11.5px; font-weight: 600; letter-spacing: .2px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: clamp(2px,0.3vw,3px) clamp(6px,0.7vw,9px);
+    border-radius: 20px; font-size: clamp(10px,0.95vw,11.5px);
+    font-weight: 600; letter-spacing: .2px; white-space: nowrap;
   }
   .badge-green  { background: var(--green-bg); color: #027a48; }
   .badge-red    { background: var(--red-bg);   color: #b42318; }
@@ -67,9 +85,27 @@ const STYLES = `
     border-radius: 50%; background: currentColor; opacity: .8;
   }
 
-  .order-id { font-family: 'DM Mono', monospace; font-size: 12.5px; color: var(--accent); font-weight: 500; }
+  .order-id { font-family: 'DM Mono', monospace; font-size: clamp(10px,1vw,12.5px); color: var(--accent); font-weight: 500; }
   .invoice-num { font-family: 'DM Mono', monospace; font-size: 11.5px; color: #027a48; font-weight: 500; }
   .ot-load-more { padding: 14px; text-align: center; color: var(--text3); font-size: 13px; }
+
+  /* ── DELIVERY CELL ── */
+  .delivery-cell { display: flex; flex-direction: column; gap: 4px; }
+  .waybill-link {
+    font-family: 'DM Mono', monospace; font-size: clamp(9px,0.9vw,11px); color: var(--accent);
+    cursor: pointer; text-decoration: underline dotted; white-space: nowrap;
+    background: none; border: none; padding: 0; font-weight: 500;
+  }
+  .waybill-link:hover { color: var(--accent-dark); }
+  .push-btn {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: clamp(2px,0.3vw,3px) clamp(6px,0.7vw,8px);
+    border-radius: 20px; font-size: clamp(10px,0.95vw,11px); font-weight: 600; cursor: pointer;
+    background: var(--accent-light); color: var(--accent-dark);
+    border: 1px solid #b2ccff; transition: all .15s; white-space: nowrap;
+  }
+  .push-btn:hover { background: #dbeafe; }
+  .push-btn:disabled { opacity: .5; pointer-events: none; }
 
   /* ── LIGHTBOX ── */
   .lb-overlay {
@@ -115,7 +151,6 @@ const STYLES = `
 
   .edit-icon { cursor: pointer; color: var(--text3); transition: color 0.15s; font-size: 13px; }
   .edit-icon:hover { color: var(--accent); }
-
   .inline-edit-input {
     padding: 5px 9px; border: 1px solid var(--accent); border-radius: 5px;
     font-family: inherit; font-size: 13px; outline: none; width: 100%;
@@ -127,7 +162,6 @@ const STYLES = `
     box-shadow: 0 0 0 3px rgba(21,112,239,.12); background: var(--surface); cursor: pointer;
   }
 
-  /* ── ITEMS TABLE — overflow visible so dropdown escapes ── */
   .lb-items-table-wrap { border: 1px solid var(--border); border-radius: var(--radius); overflow: visible; }
   .lb-items-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .lb-items-table th {
@@ -157,6 +191,8 @@ const STYLES = `
   .lb-btn-success:hover { background: #d1fadf; }
   .lb-btn-teal { background: #f0fdfa; color: #0d9488; border-color: #99f6e4; }
   .lb-btn-teal:hover { background: #ccfbf1; }
+  .lb-btn-orange { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
+  .lb-btn-orange:hover { background: #ffedd5; }
   .lb-btn-sm { padding: 4px 9px; font-size: 11.5px; }
   .lb-btn:disabled { opacity: .5; pointer-events: none; }
 
@@ -261,11 +297,193 @@ const STYLES = `
   /* ── EMPTY ── */
   .ot-empty { text-align: center; padding: 60px 20px; color: var(--text3); font-size: 14px; }
 
+  /* ── DELHIVERY PUSH MODAL ── */
+  .dlv-modal-overlay {
+    position: fixed; inset: 0; background: rgba(16,24,40,.55);
+    backdrop-filter: blur(3px); display: flex; align-items: center;
+    justify-content: center; z-index: 2000; padding: 20px;
+    animation: fadeIn .15s ease;
+  }
+  .dlv-modal {
+    background: var(--surface); border-radius: var(--radius-xl);
+    width: 100%; max-width: 480px; box-shadow: var(--shadow-xl);
+    animation: slideUp .2s ease; overflow: hidden;
+  }
+  .dlv-modal-header {
+    padding: 14px 18px 12px; background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .dlv-modal-title { font-size: 14px; font-weight: 600; }
+  .dlv-modal-body { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .dlv-modal-footer {
+    padding: 12px 18px; border-top: 1px solid var(--border);
+    background: var(--surface2); display: flex; gap: 8px; justify-content: flex-end;
+  }
+
+  /* ── TRACKING MODAL ── */
+  .track-modal-overlay {
+    position: fixed; inset: 0; background: rgba(16,24,40,.65);
+    backdrop-filter: blur(4px); display: flex; align-items: flex-start;
+    justify-content: center; z-index: 2000; padding: 30px 16px; overflow-y: auto;
+    animation: fadeIn .15s ease;
+  }
+  .track-modal {
+    background: var(--surface); border-radius: var(--radius-xl);
+    width: 100%; max-width: 560px; box-shadow: var(--shadow-xl);
+    animation: slideUp .2s ease; flex-shrink: 0;
+  }
+  .track-modal-header {
+    padding: 16px 20px 14px; background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .track-timeline { padding: 18px; display: flex; flex-direction: column; gap: 0; }
+  .track-event {
+    display: flex; gap: 14px; padding-bottom: 16px;
+    position: relative;
+  }
+  .track-event::before {
+    content: ''; position: absolute; left: 7px; top: 20px;
+    width: 2px; bottom: 0; background: var(--border);
+  }
+  .track-event:last-child::before { display: none; }
+  .track-dot {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0; margin-top: 2px;
+    border: 2px solid #fff; box-shadow: 0 0 0 2px var(--accent);
+  }
+  .track-dot-gray { background: var(--text3); box-shadow: 0 0 0 2px var(--text3); }
+  .track-event-content { flex: 1; }
+  .track-event-status { font-size: 13px; font-weight: 600; color: var(--text); }
+  .track-event-loc { font-size: 12px; color: var(--text2); margin-top: 1px; }
+  .track-event-date { font-size: 11px; color: var(--text3); margin-top: 2px; font-family: 'DM Mono', monospace; }
+  .track-empty { text-align: center; padding: 40px; color: var(--text3); font-size: 13px; }
+
+  /* ─────────────────────────────────────────────
+     POD PRINT STYLES — Isolated iframe approach
+     eliminates duplicate-page bug entirely.
+     @page size is injected dynamically based on
+     the user's A5 / A6 selection.
+  ───────────────────────────────────────────── */
+
+  /* Screen preview wrapper */
+  .pod-preview-wrap {
+    padding: 20px;
+    background: #e5e7eb;
+    border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+    display: flex;
+    justify-content: center;
+  }
+
+  /* ── POD LABEL — shared screen + print styles ── */
+  .pod-label {
+    font-family: 'DM Sans', Arial, sans-serif;
+    background: #fff;
+    color: #000;
+    border: 2px solid #000;
+    border-radius: 4px;
+    box-sizing: border-box;
+    line-height: 1.45;
+  }
+
+  /* A5 preview: 148×210mm → ~559×793px at 96dpi */
+  .pod-label-a5 {
+    width: 148mm;
+    padding: 8mm;
+    font-size: 11.5pt;
+  }
+  /* A6 preview: 105×148mm → ~397×559px at 96dpi */
+  .pod-label-a6 {
+    width: 105mm;
+    padding: 6mm;
+    font-size: 9.5pt;
+  }
+
+  /* Size selector pill row */
+  .pod-size-selector {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .pod-size-btn {
+    padding: 5px 14px; border-radius: 20px; font-size: 12.5px; font-weight: 600;
+    cursor: pointer; border: 1.5px solid var(--border2);
+    background: var(--surface); color: var(--text2); transition: all .15s;
+  }
+  .pod-size-btn.active {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+
+  /* Header: logo left, order meta right */
+  .pod-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    border-bottom: 2px solid #000; padding-bottom: 5mm; margin-bottom: 5mm;
+    gap: 8px;
+  }
+  .pod-logo { max-height: 44px; max-width: 130px; object-fit: contain; }
+  .pod-meta-right { text-align: right; }
+  .pod-order-id { font-family: 'DM Mono', monospace; font-size: 1.25em; font-weight: 700; }
+  .pod-date-line { font-size: 0.78em; color: #555; margin-top: 2px; font-family: 'DM Mono', monospace; }
+
+  /* Barcode area */
+  .pod-barcode-area {
+    border: 1.5px dashed #999; border-radius: 4px;
+    padding: 5px 8px; margin-bottom: 5mm;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 60px; background: #fafafa;
+  }
+  .pod-barcode-awb {
+    font-family: 'DM Mono', monospace; font-size: 1.1em; font-weight: 700;
+    letter-spacing: 2px; margin-top: 3px; text-align: center;
+  }
+  .pod-barcode-sub {
+    font-size: 0.72em; color: #777; margin-top: 2px; text-align: center;
+  }
+  .pod-barcode-empty-label {
+    font-size: 0.75em; color: #bbb; text-align: center;
+    text-transform: uppercase; letter-spacing: .6px; padding: 8px 0;
+  }
+  .pod-barcode-canvas { max-width: 100%; height: auto; }
+
+  .pod-section { margin-bottom: 4mm; }
+  .pod-section-title {
+    font-size: 0.72em; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: #555; margin-bottom: 2mm;
+  }
+  .pod-address-box {
+    border: 1.5px solid #000; border-radius: 3px; padding: 4px 7px;
+    background: #f9f9f9; line-height: 1.6;
+  }
+  .pod-address-name { font-size: 1.15em; font-weight: 700; }
+  .pod-from-box {
+    border: 1px solid #888; border-radius: 3px;
+    padding: 4px 6px; font-size: 0.88em; line-height: 1.55; background: #f5f5f5;
+  }
+  .pod-items-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+  .pod-items-table th {
+    background: #111; color: #fff; padding: 3px 5px;
+    text-align: left; font-size: 0.8em;
+  }
+  .pod-items-table td { padding: 3px 5px; border-bottom: 1px solid #ddd; }
+  .pod-total-row td { border-top: 1.5px solid #000; font-weight: 700; }
+
+  .pod-footer {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-top: 1.5px solid #000; padding-top: 3mm; margin-top: 3mm;
+  }
+  .pod-footer-left { font-size: 0.88em; line-height: 1.7; }
+  .pod-sig-box {
+    border: 1px solid #999; border-radius: 3px;
+    padding: 14px 28px 5px; text-align: center; font-size: 0.75em; color: #666;
+  }
+  .pod-fine-print {
+    margin-top: 3mm; text-align: center; font-size: 0.7em;
+    color: #aaa; border-top: 1px dashed #ccc; padding-top: 3mm;
+  }
+
   /* ── RESPONSIVE ── */
   @media (max-width: 1100px) { .lb-body { grid-template-columns: 1fr; } .lb-panel { max-width: 800px; } }
   @media (max-width: 700px) {
     .lb-info-grid { grid-template-columns: 1fr; }
-    .ot-table th:nth-child(n+5), .ot-table td:nth-child(n+5) { display: none; }
     .form-grid-2, .form-grid-3, .remarks-utr-row { grid-template-columns: 1fr; }
   }
 `;
@@ -345,6 +563,17 @@ const fmtDate = (d) =>
       })
     : "—";
 
+const fmtDateTime = (d) => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  return dt.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 function PaymentBadge({ status }) {
   const map = {
     paid: ["badge-green", "Paid"],
@@ -372,7 +601,6 @@ function DeliveryBadge({ status }) {
 }
 
 function FulfillmentBadge({ status }) {
-  // fulfillment_status is a SmallInteger in the model
   const map = {
     0: ["badge-gray", "Pending"],
     1: ["badge-amber", "Processing"],
@@ -381,9 +609,8 @@ function FulfillmentBadge({ status }) {
     4: ["badge-green", "Fulfilled"],
     5: ["badge-red", "Cancelled"],
   };
-  const s = status != null ? status : null;
-  if (s === null) return <span className="badge badge-gray">—</span>;
-  const [cls, label] = map[s] || ["badge-gray", `${s}`];
+  if (status == null) return <span className="badge badge-gray">—</span>;
+  const [cls, label] = map[status] || ["badge-gray", `${status}`];
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
@@ -459,6 +686,1057 @@ function InvoiceButton({
 }
 
 /* ─────────────────────────────────────────────
+   REAL BARCODE — uses JsBarcode loaded from CDN
+   Renders CODE128 into a canvas element.
+   Falls back to text-only if JsBarcode is not
+   available (e.g. no internet).
+───────────────────────────────────────────── */
+
+// Load JsBarcode once, lazily
+let _jsBarcodePromise = null;
+function loadJsBarcode() {
+  if (_jsBarcodePromise) return _jsBarcodePromise;
+  _jsBarcodePromise = new Promise((resolve) => {
+    if (window.JsBarcode) {
+      resolve(window.JsBarcode);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src =
+      "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js";
+    script.onload = () => resolve(window.JsBarcode);
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+  return _jsBarcodePromise;
+}
+
+function BarcodeCanvas({ value, height = 60 }) {
+  const canvasRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!value) return;
+    loadJsBarcode().then((JsBarcode) => {
+      if (!JsBarcode || !canvasRef.current) {
+        setFailed(true);
+        return;
+      }
+      try {
+        JsBarcode(canvasRef.current, value, {
+          format: "CODE128",
+          width: 2.2,
+          height,
+          displayValue: false,
+          margin: 4,
+          background: "#fafafa",
+          lineColor: "#000",
+        });
+        setReady(true);
+      } catch {
+        setFailed(true);
+      }
+    });
+  }, [value, height]);
+
+  if (!value) return null;
+
+  return (
+    <>
+      <canvas
+        ref={canvasRef}
+        className="pod-barcode-canvas"
+        style={{ display: ready ? "block" : "none", maxWidth: "100%" }}
+      />
+      {failed && (
+        <div
+          style={{
+            fontFamily: "monospace",
+            fontSize: 11,
+            color: "#b00",
+            padding: 4,
+          }}
+        >
+          Barcode render failed — AWB: {value}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   OFFLINE POD PRINT
+   ─ User picks A5 or A6 in our UI first
+   ─ We then open a dedicated print window
+     (no body visibility hacks → zero duplicate pages)
+   ─ Real CODE128 barcode via JsBarcode
+───────────────────────────────────────────── */
+function OfflinePOD({ data, onClose }) {
+  const [paperSize, setPaperSize] = useState("A5"); // "A5" | "A6"
+  const printWindowRef = useRef(null);
+
+  if (!data) return null;
+
+  const addr = data.address || {};
+  const seller = data.seller || {};
+  const items = data.items || [];
+  const total = items.reduce((s, i) => s + parseFloat(i.total_price || 0), 0);
+  const hasAwb = data.awb_number && data.awb_number !== "To be assigned";
+  const handleDownloadPDF = () => {
+    const win = window.open("", "_blank");
+
+    if (!win) {
+      toast.error("Popup blocked. Please allow popups.");
+      return;
+    }
+
+    win.document.open();
+    win.document.write(buildPrintHtml());
+    win.document.close();
+
+    setTimeout(
+      () => {
+        win.focus();
+        win.print(); // user selects "Save as PDF"
+      },
+      hasAwb ? 800 : 200,
+    );
+  };
+
+  /* ── Dimensions ── */
+  const sizeConfig = {
+    A5: {
+      w: "148mm",
+      h: "210mm",
+      pad: "8mm",
+      fontSize: "11.5pt",
+      barcodeH: 68,
+    },
+    A6: { w: "105mm", h: "148mm", pad: "6mm", fontSize: "9.5pt", barcodeH: 50 },
+  };
+  const cfg = sizeConfig[paperSize];
+
+  /* ─────────────────────────────────────────
+     Build the full HTML for the print window.
+     We inline everything so the popup is
+     completely self-contained and only ever
+     prints exactly ONE page.
+  ───────────────────────────────────────── */
+  const buildPrintHtml = () => {
+    const itemRows = items
+      .map(
+        (it, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${it.product_name || ""}</td>
+        <td style="text-align:center">${it.quantity}</td>
+        <td>${fmtCurrency(it.unit_price)}</td>
+        <td>${fmtCurrency(it.total_price)}</td>
+      </tr>
+    `,
+      )
+      .join("");
+
+    const totalRow = `
+      <tr style="border-top:2px solid #000;font-weight:700">
+        <td colspan="3"></td>
+        <td><strong>Total</strong></td>
+        <td><strong>${fmtCurrency(total)}</strong></td>
+      </tr>
+    `;
+
+    const logoHtml = `<img src="${logoSrc}" alt="Logo" style="max-height:84px;max-width:170px;object-fit:contain;" />`;
+
+    const barcodeScript = hasAwb
+      ? `
+      <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+      <script>
+        window.onload = function() {
+          try {
+            JsBarcode("#awb-barcode", "${data.awb_number}", {
+              format: "CODE128",
+              width: 2.2,
+              height: ${cfg.barcodeH},
+              displayValue: false,
+              margin: 4,
+              background: "#fafafa",
+              lineColor: "#000"
+            });
+          } catch(e) {}
+        };
+      <\/script>
+    `
+      : "";
+
+    const barcodeArea = hasAwb
+      ? `
+      <div class="pod-barcode-area">
+        <svg id="awb-barcode"></svg>
+        <div class="pod-barcode-awb">${data.awb_number}</div>
+      </div>
+    `
+      : `
+      <div class="pod-barcode-area">
+        <div class="pod-barcode-empty-label">Stick courier barcode / label here</div>
+      </div>
+    `;
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <title>POD — ${data.order_id}</title>
+  ${barcodeScript}
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=DM+Mono:wght@400;500&display=swap');
+
+    @page {
+      size: ${cfg.w} ${cfg.h};
+      margin: 0;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: ${cfg.w};
+      height: ${cfg.h};
+      overflow: hidden;
+    }
+
+    body {
+      font-family: 'DM Sans', Arial, sans-serif;
+      font-size: ${cfg.fontSize};
+      color: #000;
+      background: #fff;
+      padding: ${cfg.pad};
+      line-height: 1.45;
+    }
+
+    .pod-label {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pod-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      border-bottom: 2px solid #000; padding-bottom: 4mm; margin-bottom: 4mm;
+      gap: 8px; flex-shrink: 0;
+    }
+    .pod-meta-right { text-align: right; }
+    .pod-order-id { font-family: 'DM Mono', monospace; font-size: 1.3em; font-weight: 700; }
+    .pod-date-line { font-size: 0.75em; color: #555; margin-top: 1px; font-family: 'DM Mono', monospace; }
+
+    .pod-barcode-area {
+      border: 1.5px dashed #999; border-radius: 4px;
+      padding: 4px 6px; margin-bottom: 4mm;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 50px; background: #fafafa; flex-shrink: 0;
+    }
+    .pod-barcode-awb {
+      font-family: 'DM Mono', monospace; font-size: 1.05em; font-weight: 700;
+      letter-spacing: 2px; margin-top: 2px; text-align: center;
+    }
+    .pod-barcode-sub { font-size: 0.68em; color: #777; margin-top: 1px; }
+    .pod-barcode-empty-label {
+      font-size: 0.72em; color: #bbb; text-align: center;
+      text-transform: uppercase; letter-spacing: .6px; padding: 6px 0;
+    }
+
+    svg#awb-barcode { max-width: 100%; height: auto; }
+
+    .pod-section { margin-bottom: 3mm; flex-shrink: 0; }
+    .pod-section-title {
+      font-size: 0.7em; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; color: #555; margin-bottom: 2mm;
+    }
+    .pod-address-box {
+      border: 1.5px solid #000; border-radius: 3px; padding: 3px 6px;
+      background: #f9f9f9; line-height: 1.6;
+    }
+    .pod-address-name { font-size: 1.1em; font-weight: 700; }
+    .pod-from-box {
+      border: 1px solid #888; border-radius: 3px;
+      padding: 3px 5px; font-size: 0.85em; line-height: 1.5; background: #f5f5f5;
+    }
+
+    .pod-items-section { flex: 1; min-height: 0; overflow: hidden; margin-bottom: 3mm; }
+    .pod-items-table { width: 100%; border-collapse: collapse; font-size: 0.83em; }
+    .pod-items-table th {
+      background: #111; color: #fff; padding: 2px 4px;
+      text-align: left; font-size: 0.78em;
+    }
+    .pod-items-table td { padding: 2px 4px; border-bottom: 1px solid #ddd; }
+    .pod-total-row td { border-top: 1.5px solid #000; font-weight: 700; }
+
+    .pod-footer {
+      display: flex; justify-content: space-between; align-items: flex-end;
+      border-top: 1.5px solid #000; padding-top: 3mm;
+      flex-shrink: 0;
+    }
+    .pod-footer-left { font-size: 0.85em; line-height: 1.7; }
+    .pod-sig-box {
+      border: 1px solid #999; border-radius: 3px;
+      padding: 12px 24px 4px; text-align: center; font-size: 0.72em; color: #666;
+    }
+    .pod-fine-print {
+      margin-top: 2mm; text-align: center; font-size: 0.67em;
+      color: #aaa; border-top: 1px dashed #ccc; padding-top: 2mm;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="pod-label">
+    <div class="pod-header">
+      ${logoHtml}
+      <div class="pod-meta-right">
+        <div class="pod-order-id">${data.order_id}</div>
+        <div class="pod-date-line">${fmtDate(data.created_at)}
+        Status: <strong>${(data.payment_status || "—").toUpperCase()}</strong>
+        </div>
+      </div>
+    </div>
+
+    ${barcodeArea}
+
+    <div class="pod-section">
+      <div class="pod-section-title">Deliver To</div>
+      <div class="pod-address-box">
+        <div class="pod-address-name">${addr.name || ""}</div>
+        <div>${addr.address_line || ""}${addr.locality ? `, ${addr.locality}` : ""}</div>
+        <div>${addr.city || ""}, ${addr.state_name || ""} — <strong>${addr.pincode || ""}</strong></div>
+        ${addr.landmark ? `<div>Near: ${addr.landmark}</div>` : ""}
+        <div>📞 <strong>${addr.mobile || ""}</strong></div>
+      </div>
+    </div>
+
+    <div class="pod-section">
+      <div class="pod-section-title">From</div>
+      <div class="pod-from-box">
+        <strong>${seller.name || ""}</strong><br/>
+        ${seller.address || ""}${seller.phone ? `<br/>📞 ${seller.phone}` : ""}
+      </div>
+    </div>
+
+    <div class="pod-items-section">
+      <div class="pod-section-title">Order Items</div>
+      <table class="pod-items-table">
+        <thead>
+          <tr><th>#</th><th>Product</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr>
+        </thead>
+        <tbody>
+          ${itemRows}
+          ${totalRow}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>`;
+  };
+
+  const handlePrint = () => {
+    // Close any previous print window
+    if (printWindowRef.current && !printWindowRef.current.closed) {
+      printWindowRef.current.close();
+    }
+
+    const win = window.open(
+      "",
+      "_blank",
+      `width=700,height=600,scrollbars=no,toolbar=no,menubar=no`,
+    );
+    if (!win) {
+      toast.error("Popup blocked. Please allow popups for this site.");
+      return;
+    }
+    printWindowRef.current = win;
+
+    win.document.open();
+    win.document.write(buildPrintHtml());
+    win.document.close();
+
+    // Wait for JsBarcode to render (if AWB present), then print
+    const doPrint = () => {
+      win.focus();
+      win.print();
+      // Optionally close after print dialog
+      win.onafterprint = () => win.close();
+    };
+
+    if (hasAwb) {
+      // Give JsBarcode ~800ms to load & render
+      setTimeout(doPrint, 800);
+    } else {
+      setTimeout(doPrint, 200);
+    }
+  };
+
+  /* Screen preview label class */
+  const previewClass =
+    paperSize === "A5" ? "pod-label pod-label-a5" : "pod-label pod-label-a6";
+
+  return (
+    <div
+      className="track-modal-overlay"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="track-modal" style={{ maxWidth: 680 }}>
+        {/* Header */}
+        <div className="track-modal-header">
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>
+              📦 Print POD / Shipping Label
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--text3)",
+                fontFamily: "'DM Mono',monospace",
+                marginTop: 2,
+              }}
+            >
+              {data.order_id}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {/* Paper size selector */}
+            <div className="pod-size-selector">
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: "var(--text3)",
+                  marginRight: 2,
+                }}
+              >
+                Size:
+              </span>
+              {["A5", "A6"].map((sz) => (
+                <button
+                  key={sz}
+                  className={`pod-size-btn${paperSize === sz ? " active" : ""}`}
+                  onClick={() => setPaperSize(sz)}
+                >
+                  {sz}
+                </button>
+              ))}
+            </div>
+            <button className="lb-btn lb-btn-primary" onClick={handlePrint}>
+              🖨️ Print
+            </button>
+            <button
+              className="lb-btn lb-btn-secondary"
+              onClick={handleDownloadPDF}
+            >
+              ⬇️ Download PDF
+            </button>
+            <button className="lb-close" onClick={onClose}>
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Screen preview */}
+        <div className="pod-preview-wrap">
+          <div className={previewClass}>
+            {/* Header */}
+            <div className="pod-header">
+              <img src={logoSrc} alt="Logo" className="pod-logo" />
+              <div className="pod-meta-right">
+                <div className="pod-order-id">{data.order_id}</div>
+                <div className="pod-date-line">{fmtDate(data.created_at)}</div>
+                {data.invoice_number && (
+                  <div className="pod-date-line">
+                    INV: {data.invoice_number}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Barcode */}
+            <div className="pod-barcode-area">
+              {hasAwb ? (
+                <>
+                  <BarcodeCanvas
+                    value={data.awb_number}
+                    height={cfg.barcodeH}
+                  />
+                  <div className="pod-barcode-awb">{data.awb_number}</div>
+                  <div className="pod-barcode-sub">Delhivery AWB — CODE128</div>
+                </>
+              ) : (
+                <div className="pod-barcode-empty-label">
+                  Stick courier barcode / label here
+                </div>
+              )}
+            </div>
+
+            {/* Deliver To */}
+            <div className="pod-section">
+              <div className="pod-section-title">Deliver To</div>
+              <div className="pod-address-box">
+                <div className="pod-address-name">{addr.name}</div>
+                <div>
+                  {addr.address_line}
+                  {addr.locality ? `, ${addr.locality}` : ""}
+                </div>
+                <div>
+                  {addr.city}, {addr.state_name} —{" "}
+                  <strong>{addr.pincode}</strong>
+                </div>
+                {addr.landmark && <div>Near: {addr.landmark}</div>}
+                <div>
+                  📞 <strong>{addr.mobile}</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* From */}
+            <div className="pod-section">
+              <div className="pod-section-title">From</div>
+              <div className="pod-from-box">
+                <strong>{seller.name}</strong>
+                <br />
+                {seller.address}
+                {seller.phone ? (
+                  <>
+                    <br />
+                    📞 {seller.phone}
+                  </>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Items */}
+            <div className="pod-section">
+              <div className="pod-section-title">Order Items</div>
+              <table className="pod-items-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Qty</th>
+                    <th>Unit Price</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it, i) => (
+                    <tr key={it.item_id}>
+                      <td>{i + 1}</td>
+                      <td>{it.product_name}</td>
+                      <td style={{ fontFamily: "monospace" }}>
+                        {it.sku_id || "—"}
+                      </td>
+                      <td style={{ textAlign: "center" }}>{it.quantity}</td>
+                      <td>{fmtCurrency(it.unit_price)}</td>
+                      <td>{fmtCurrency(it.total_price)}</td>
+                    </tr>
+                  ))}
+                  <tr className="pod-total-row">
+                    <td colSpan={4}></td>
+                    <td>
+                      <strong>Total</strong>
+                    </td>
+                    <td>
+                      <strong>{fmtCurrency(total)}</strong>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer */}
+            <div className="pod-footer">
+              <div className="pod-footer-left">
+                Payment:{" "}
+                <strong>{data.payment_type?.toUpperCase() || "—"}</strong>
+                <br />
+                Status:{" "}
+                <strong>{data.payment_status?.toUpperCase() || "—"}</strong>
+                {data.utr_number && (
+                  <>
+                    <br />
+                    <span
+                      style={{ fontFamily: "monospace", fontSize: "0.82em" }}
+                    >
+                      UTR: {data.utr_number}
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="pod-sig-box">Receiver's Signature</div>
+            </div>
+
+            <div className="pod-fine-print">
+              Computer-generated document.
+              {seller.phone ? ` Queries: ${seller.phone}` : ""}
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: "10px 20px",
+            fontSize: 11.5,
+            color: "var(--text3)",
+            background: "var(--surface2)",
+            borderTop: "1px solid var(--border)",
+            borderRadius: "0 0 var(--radius-xl) var(--radius-xl)",
+          }}
+        >
+          💡 Select <strong>A5</strong> or <strong>A6</strong> above, then click
+          Print. In the browser dialog, set paper size to match and disable
+          headers/footers for best results.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   DELHIVERY PUSH MODAL
+───────────────────────────────────────────── */
+function DelhiveryPushModal({ order, onClose, onSuccess }) {
+  const [serviceability, setServiceability] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [form, setForm] = useState({
+    weight: "0.5",
+    length: "10",
+    breadth: "10",
+    height: "10",
+    payment_mode:
+      order.payment_type?.toUpperCase() === "COD" ? "COD" : "Prepaid",
+    cod_amount: order.total_amount || 0,
+    hsn_code: "",
+    e_waybill: "",
+  });
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  useEffect(() => {
+    checkPincode();
+  }, []);
+
+  const checkPincode = async () => {
+    try {
+      setChecking(true);
+      const res = await api.get(
+        `/delhivery/pod-data/${encodeURIComponent(order.order_id)}`,
+      );
+      const pin = res.data?.address?.pincode;
+      if (pin) {
+        const srv = await api.get(`/delhivery/serviceability/${pin}`);
+        setServiceability(srv.data);
+      }
+    } catch {
+      /* silent */
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const handlePush = async () => {
+    setPushing(true);
+    try {
+      const res = await api.post("/delhivery/push-order", {
+        order_id: order.order_id,
+        weight: parseFloat(form.weight) || 0.5,
+        length: parseFloat(form.length) || 10,
+        breadth: parseFloat(form.breadth) || 10,
+        height: parseFloat(form.height) || 10,
+        payment_mode: form.payment_mode,
+        cod_amount: parseFloat(form.cod_amount) || 0,
+        hsn_code: form.hsn_code || undefined,
+        e_waybill: form.e_waybill || undefined,
+      });
+      toast.success(`Pushed to Delhivery! AWB: ${res.data.waybill}`);
+      onSuccess(res.data.waybill);
+      onClose();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to push to Delhivery");
+    } finally {
+      setPushing(false);
+    }
+  };
+
+  return (
+    <div
+      className="dlv-modal-overlay"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="dlv-modal">
+        <div className="dlv-modal-header">
+          <div>
+            <div className="dlv-modal-title">🚚 Push to Delhivery</div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--text3)",
+                fontFamily: "'DM Mono',monospace",
+                marginTop: 2,
+              }}
+            >
+              {order.order_id}
+            </div>
+          </div>
+          <button className="lb-close" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="dlv-modal-body">
+          {checking && (
+            <div style={{ fontSize: 12, color: "var(--text3)" }}>
+              Checking pincode serviceability…
+            </div>
+          )}
+          {serviceability && !checking && (
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: "var(--radius)",
+                background: serviceability.serviceable
+                  ? "var(--green-bg)"
+                  : "var(--red-bg)",
+                color: serviceability.serviceable ? "#027a48" : "#b42318",
+                border: `1px solid ${serviceability.serviceable ? "#a9efc5" : "#fda29b"}`,
+                fontSize: 12.5,
+                fontWeight: 500,
+              }}
+            >
+              {serviceability.serviceable
+                ? `✓ Pincode serviceable — ${serviceability.city}, ${serviceability.state}`
+                : `✕ Pincode NOT serviceable by Delhivery.`}
+            </div>
+          )}
+          <div className="form-grid-2">
+            <div className="form-field">
+              <label className="form-label">Payment Mode</label>
+              <select
+                className="form-select"
+                value={form.payment_mode}
+                onChange={(e) => set("payment_mode", e.target.value)}
+              >
+                <option value="Prepaid">Prepaid</option>
+                <option value="COD">COD</option>
+              </select>
+            </div>
+            {form.payment_mode === "COD" && (
+              <div className="form-field">
+                <label className="form-label">COD Amount (₹)</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  value={form.cod_amount}
+                  onChange={(e) => set("cod_amount", e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              fontWeight: 600,
+              color: "var(--text2)",
+              textTransform: "uppercase",
+              letterSpacing: ".4px",
+            }}
+          >
+            Package Dimensions
+          </div>
+          <div className="form-grid-2">
+            {[
+              ["weight", "Weight (kg)", "0.1", "0.1"],
+              ["length", "Length (cm)", "", ""],
+              ["breadth", "Breadth (cm)", "", ""],
+              ["height", "Height (cm)", "", ""],
+            ].map(([k, l, step, min]) => (
+              <div className="form-field" key={k}>
+                <label className="form-label">{l}</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  step={step || undefined}
+                  min={min || undefined}
+                  value={form[k]}
+                  onChange={(e) => set(k, e.target.value)}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="form-grid-2">
+            <div className="form-field">
+              <label className="form-label">HSN Code (optional)</label>
+              <input
+                className="form-input"
+                placeholder="e.g. 85171290"
+                value={form.hsn_code}
+                onChange={(e) => set("hsn_code", e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label">E-Waybill (if &gt;₹50k)</label>
+              <input
+                className="form-input"
+                placeholder="E-waybill number"
+                value={form.e_waybill}
+                onChange={(e) => set("e_waybill", e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+        <div className="dlv-modal-footer">
+          <button className="lb-btn lb-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="lb-btn lb-btn-primary"
+            onClick={handlePush}
+            disabled={pushing}
+          >
+            {pushing ? "Pushing…" : "🚀 Push Order"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   TRACKING MODAL
+───────────────────────────────────────────── */
+function TrackingModal({ waybill, orderId, onClose, onPrintPOD }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get(
+          `/delhivery/track/${encodeURIComponent(waybill)}`,
+        );
+        setData(res.data);
+      } catch (err) {
+        setError(err?.response?.data?.detail || "Failed to load tracking data");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [waybill]);
+
+  const statusColor = (s = "") => {
+    const lower = s.toLowerCase();
+    if (lower.includes("deliver")) return "#027a48";
+    if (lower.includes("transit") || lower.includes("scan"))
+      return "var(--accent)";
+    if (lower.includes("pick")) return "var(--amber)";
+    return "var(--text2)";
+  };
+
+  return (
+    <div
+      className="track-modal-overlay"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="track-modal">
+        <div className="track-modal-header">
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>
+              📦 Shipment Tracking
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 4,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: "'DM Mono',monospace",
+                  fontSize: 12,
+                  color: "var(--accent)",
+                  fontWeight: 600,
+                }}
+              >
+                {waybill}
+              </span>
+              {data?.status && (
+                <span className="badge badge-blue" style={{ fontSize: 11 }}>
+                  {data.status}
+                </span>
+              )}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="lb-btn lb-btn-orange lb-btn-sm"
+              onClick={onPrintPOD}
+            >
+              🖨️ Print POD
+            </button>
+            <button className="lb-close" onClick={onClose}>
+              ✕
+            </button>
+          </div>
+        </div>
+        {data && (
+          <div
+            style={{
+              padding: "10px 18px",
+              background: "var(--surface2)",
+              borderBottom: "1px solid var(--border)",
+              display: "flex",
+              gap: 20,
+              flexWrap: "wrap",
+              fontSize: 12,
+            }}
+          >
+            <span>
+              <strong>Origin:</strong> {data.origin || "—"}
+            </span>
+            <span>
+              <strong>Dest:</strong> {data.destination || "—"}
+            </span>
+            {data.expected_date && (
+              <span>
+                <strong>EDD:</strong> {fmtDate(data.expected_date)}
+              </span>
+            )}
+          </div>
+        )}
+        <div className="track-timeline">
+          {loading && <div className="track-empty">Loading tracking data…</div>}
+          {error && (
+            <div className="track-empty" style={{ color: "var(--red)" }}>
+              {error}
+            </div>
+          )}
+          {!loading &&
+            !error &&
+            (!data?.timeline || data.timeline.length === 0) && (
+              <div className="track-empty">
+                No tracking events yet. Check back soon.
+              </div>
+            )}
+          {!loading &&
+            !error &&
+            data?.timeline?.map((ev, i) => (
+              <div className="track-event" key={i}>
+                <div className={`track-dot ${i > 0 ? "track-dot-gray" : ""}`} />
+                <div className="track-event-content">
+                  <div
+                    className="track-event-status"
+                    style={{
+                      color: i === 0 ? statusColor(ev.status) : "var(--text)",
+                    }}
+                  >
+                    {ev.status}
+                  </div>
+                  {ev.location && (
+                    <div className="track-event-loc">📍 {ev.location}</div>
+                  )}
+                  {ev.remark && (
+                    <div className="track-event-loc">{ev.remark}</div>
+                  )}
+                  <div className="track-event-date">{fmtDateTime(ev.date)}</div>
+                </div>
+              </div>
+            ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   DELIVERY CELL — table row
+───────────────────────────────────────────── */
+function DeliveryCell({ order, onPushed }) {
+  const [showPush, setShowPush] = useState(false);
+  const [awb, setAwb] = useState(order.awb_number || "");
+  const [showTrack, setShowTrack] = useState(false);
+  const [showPOD, setShowPOD] = useState(false);
+  const [podData, setPodData] = useState(null);
+
+  const hasAwb = awb && awb !== "To be assigned";
+
+  const handlePrintPOD = async () => {
+    try {
+      const res = await api.get(
+        `/delhivery/pod-data/${encodeURIComponent(order.order_id)}`,
+      );
+      setPodData(res.data);
+      setShowTrack(false);
+      setShowPOD(true);
+    } catch {
+      toast.error("Failed to load POD data");
+    }
+  };
+
+  return (
+    <>
+      <div className="delivery-cell" onClick={(e) => e.stopPropagation()}>
+        <DeliveryBadge status={order.delivery_status} />
+        {hasAwb ? (
+          <button
+            className="waybill-link"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowTrack(true);
+            }}
+          >
+            📡 {awb}
+          </button>
+        ) : (
+          <button
+            className="push-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowPush(true);
+            }}
+            disabled={order.order_status === "REJECTED"}
+            title="Push to Delhivery"
+          >
+            🚚 Push
+          </button>
+        )}
+      </div>
+
+      {showPush && (
+        <DelhiveryPushModal
+          order={order}
+          onClose={() => setShowPush(false)}
+          onSuccess={(waybill) => {
+            setAwb(waybill);
+            onPushed && onPushed(order.order_id, waybill);
+          }}
+        />
+      )}
+
+      {showTrack && (
+        <TrackingModal
+          waybill={awb}
+          orderId={order.order_id}
+          onClose={() => setShowTrack(false)}
+          onPrintPOD={handlePrintPOD}
+        />
+      )}
+
+      {showPOD && podData && (
+        <OfflinePOD data={podData} onClose={() => setShowPOD(false)} />
+      )}
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────────
    ADD ADDRESS FORM
 ───────────────────────────────────────────── */
 function AddAddressForm({ order, onSaved, onCancel }) {
@@ -497,9 +1775,7 @@ function AddAddressForm({ order, onSaved, onCancel }) {
       !form.city ||
       !form.state_id
     ) {
-      toast.warn(
-        "Please fill in all required fields (Name, Mobile, Pincode, Address, City, State)",
-      );
+      toast.warn("Please fill in all required fields");
       return;
     }
     setSaving(true);
@@ -512,8 +1788,7 @@ function AddAddressForm({ order, onSaved, onCancel }) {
       });
       toast.success("Address saved and applied to order");
       onSaved(res.data);
-    } catch (err) {
-      console.error("Add product error:", err);
+    } catch {
       toast.error("Failed to create address. Please check all fields.");
     } finally {
       setSaving(false);
@@ -532,9 +1807,7 @@ function AddAddressForm({ order, onSaved, onCancel }) {
         gap: 12,
       }}
     >
-      <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>
-        ➕ New Address
-      </div>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>➕ New Address</div>
       <div className="form-grid-2">
         <div className="form-field">
           <label className="form-label">Full Name *</label>
@@ -693,7 +1966,6 @@ function AddAddressForm({ order, onSaved, onCancel }) {
 
 /* ─────────────────────────────────────────────
    PRODUCT SEARCH DROPDOWN
-   FIX #1: z-index:9999, overflow:visible on parent, portal-like positioning
 ───────────────────────────────────────────── */
 function ProductSearchInput({
   products,
@@ -826,8 +2098,7 @@ function AddProductPanel({ orderId, products, onAdded, onCancel }) {
       );
       toast.success(`Added ${selectedProduct.name} to order`);
       onAdded(res.data);
-    } catch (err) {
-      console.error("Add product error:", err);
+    } catch {
       toast.error("Failed to add product. Please try again.");
     } finally {
       setSaving(false);
@@ -919,7 +2190,6 @@ function OrderLightbox({
   const [serialLoading, setSerialLoading] = useState(false);
   const [remarksVal, setRemarksVal] = useState(details?.remarks || "");
   const [remarksEditing, setRemarksEditing] = useState(false);
-  // Inline UTR field state
   const [utrFieldVal, setUtrFieldVal] = useState(
     details?.utr_number || order.utr_number || "",
   );
@@ -938,24 +2208,18 @@ function OrderLightbox({
   const [mobileValue, setMobileValue] = useState("");
   const [editingItemId, setEditingItemId] = useState(null);
   const [editingPrice, setEditingPrice] = useState("");
-
-  // Address
   const [addressMode, setAddressMode] = useState("view");
   const [selectedAddressId, setSelectedAddressId] = useState(null);
   const [availableAddresses, setAvailableAddresses] = useState([]);
   const [loadingAddresses, setLoadingAddresses] = useState(false);
-
-  // Products
   const [editingProductItemId, setEditingProductItemId] = useState(null);
   const [availableProducts, setAvailableProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [selectedProductForEdit, setSelectedProductForEdit] = useState(null);
-
-  // Add product
   const [showAddProduct, setShowAddProduct] = useState(false);
-
-  // Delete item confirm
   const [confirmDeleteItemId, setConfirmDeleteItemId] = useState(null);
+  const [showPOD, setShowPOD] = useState(false);
+  const [podData, setPodData] = useState(null);
 
   useEffect(() => {
     if (details?.remarks != null) setRemarksVal(details.remarks);
@@ -1118,7 +2382,6 @@ function OrderLightbox({
     onAction && onAction(order.order_id, "refresh");
   };
 
-  // Inline UTR update (without changing payment status)
   const saveUtrField = async () => {
     try {
       await api.put(
@@ -1212,602 +2475,425 @@ function OrderLightbox({
     }
   };
 
+  const handlePrintOfflinePOD = async () => {
+    try {
+      const res = await api.get(
+        `/delhivery/pod-data/${encodeURIComponent(order.order_id)}`,
+      );
+      setPodData(res.data);
+      setShowPOD(true);
+    } catch {
+      setPodData({
+        order_id: order.order_id,
+        created_at: order.created_at,
+        items: [],
+        address: {},
+        seller: {},
+      });
+      setShowPOD(true);
+    }
+  };
+
   const cust = details?.customer || order.customer;
   const currentInvoice = details?.invoice_number ?? order.invoice_number;
   const currentOrderStatus = details?.order_status ?? localOrderStatus;
 
   return (
-    <div
-      className="lb-overlay"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <div className="lb-panel">
-        {/* HEADER */}
-        <div className="lb-header">
-          <div>
-            <div className="lb-title">Order Details</div>
-            <div className="lb-subtitle">{order.order_id}</div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <PaymentBadge status={localPayStatus} />
-            <DeliveryBadge status={deliveryStatus} />
-            {currentOrderStatus === "REJECTED" && (
-              <span className="badge badge-red">Rejected</span>
-            )}
-            <button className="lb-close" onClick={onClose}>
-              ✕
-            </button>
-          </div>
-        </div>
-
-        <div className="lb-body">
-          {/* ── LEFT COLUMN ── */}
-          <div className="lb-section">
+    <>
+      <div
+        className="lb-overlay"
+        onClick={(e) => e.target === e.currentTarget && onClose()}
+      >
+        <div className="lb-panel">
+          {/* HEADER */}
+          <div className="lb-header">
             <div>
-              <div className="lb-section-title">Customer & Order</div>
-              <div className="lb-info-grid">
-                <div className="lb-info-card">
-                  <div className="lb-info-label">Customer</div>
-                  <div className="lb-info-value">{cust?.name || "—"}</div>
-                </div>
-                <div className="lb-info-card">
-                  <div className="lb-info-label">Mobile</div>
-                  <div className="lb-info-value">
-                    {mobileEditing ? (
-                      <input
-                        className="inline-edit-input"
-                        value={mobileValue}
-                        onChange={(e) => setMobileValue(e.target.value)}
-                        onBlur={saveMobile}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveMobile();
-                          if (e.key === "Escape") {
-                            setMobileEditing(false);
-                            setMobileValue(cust?.mobile || "");
-                          }
-                        }}
-                        autoFocus
-                      />
-                    ) : (
-                      <>
-                        <span style={{ fontFamily: "'DM Mono',monospace" }}>
-                          {cust?.mobile || "—"}
-                        </span>
-                        <span
-                          className="edit-icon"
-                          onClick={() => setMobileEditing(true)}
-                          title="Edit mobile"
-                        >
-                          ✏️
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="lb-info-card">
-                  <div className="lb-info-label">Email</div>
-                  <div className="lb-info-value">
-                    {emailEditing ? (
-                      <input
-                        className="inline-edit-input"
-                        type="email"
-                        value={emailValue}
-                        onChange={(e) => setEmailValue(e.target.value)}
-                        onBlur={saveEmail}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveEmail();
-                          if (e.key === "Escape") {
-                            setEmailEditing(false);
-                            setEmailValue(cust?.email || "");
-                          }
-                        }}
-                        autoFocus
-                      />
-                    ) : (
-                      <>
-                        <span>{cust?.email || "—"}</span>
-                        <span
-                          className="edit-icon"
-                          onClick={() => setEmailEditing(true)}
-                          title="Edit email"
-                        >
-                          ✏️
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="lb-info-card">
-                  <div className="lb-info-label">Channel</div>
-                  <div className="lb-info-value">{order.channel || "—"}</div>
-                </div>
-                <div className="lb-info-card">
-                  <div className="lb-info-label">Created</div>
-                  <div className="lb-info-value">
-                    {fmtDate(order.created_at)}
-                  </div>
-                </div>
-                <div className="lb-info-card">
-                  <div className="lb-info-label">Amount</div>
-                  <div className="lb-info-value">
-                    {fmtCurrency(order.total_amount)}
-                  </div>
-                </div>
-                <div className="lb-info-card">
-                  <div className="lb-info-label">Payment Type</div>
-                  <div className="lb-info-value">
-                    {order.payment_type || "—"}
-                  </div>
-                </div>
-                {details?.fulfillment_status != null && (
+              <div className="lb-title">Order Details</div>
+              <div className="lb-subtitle">{order.order_id}</div>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <PaymentBadge status={localPayStatus} />
+              <DeliveryBadge status={deliveryStatus} />
+              {currentOrderStatus === "REJECTED" && (
+                <span className="badge badge-red">Rejected</span>
+              )}
+              {order.awb_number && order.awb_number !== "To be assigned" && (
+                <span
+                  style={{
+                    fontFamily: "'DM Mono',monospace",
+                    fontSize: 11,
+                    color: "var(--accent)",
+                    fontWeight: 600,
+                  }}
+                >
+                  AWB: {order.awb_number}
+                </span>
+              )}
+              <button className="lb-close" onClick={onClose}>
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div className="lb-body">
+            {/* ── LEFT COLUMN ── */}
+            <div className="lb-section">
+              <div>
+                <div className="lb-section-title">Customer & Order</div>
+                <div className="lb-info-grid">
                   <div className="lb-info-card">
-                    <div className="lb-info-label">Fulfillment</div>
+                    <div className="lb-info-label">Customer</div>
+                    <div className="lb-info-value">{cust?.name || "—"}</div>
+                  </div>
+                  <div className="lb-info-card">
+                    <div className="lb-info-label">Mobile</div>
                     <div className="lb-info-value">
-                      <FulfillmentBadge status={details.fulfillment_status} />
+                      {mobileEditing ? (
+                        <input
+                          className="inline-edit-input"
+                          value={mobileValue}
+                          onChange={(e) => setMobileValue(e.target.value)}
+                          onBlur={saveMobile}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveMobile();
+                            if (e.key === "Escape") {
+                              setMobileEditing(false);
+                              setMobileValue(cust?.mobile || "");
+                            }
+                          }}
+                          autoFocus
+                        />
+                      ) : (
+                        <>
+                          <span style={{ fontFamily: "'DM Mono',monospace" }}>
+                            {cust?.mobile || "—"}
+                          </span>
+                          <span
+                            className="edit-icon"
+                            onClick={() => setMobileEditing(true)}
+                            title="Edit mobile"
+                          >
+                            ✏️
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-
-            {loading && (
-              <div style={{ color: "var(--text3)", fontSize: 12.5 }}>
-                Loading details…
-              </div>
-            )}
-
-            {/* ── DELIVERY ADDRESS ── */}
-            {(details?.address || !loading) && (
-              <div>
-                <div
-                  className="lb-section-title"
-                  style={{ display: "flex", alignItems: "center", gap: 8 }}
-                >
-                  Delivery Address
-                  {addressMode === "view" && (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <span
-                        className="edit-icon"
-                        onClick={loadAddresses}
-                        title="Change address"
-                        style={{ cursor: "pointer" }}
-                      >
-                        ✏️
-                      </span>
-                      <button
-                        className="lb-btn lb-btn-secondary lb-btn-sm"
-                        onClick={() => setAddressMode("add")}
-                        style={{ fontSize: 11, padding: "2px 8px" }}
-                      >
-                        ➕ New
-                      </button>
+                  <div className="lb-info-card">
+                    <div className="lb-info-label">Email</div>
+                    <div className="lb-info-value">
+                      {emailEditing ? (
+                        <input
+                          className="inline-edit-input"
+                          type="email"
+                          value={emailValue}
+                          onChange={(e) => setEmailValue(e.target.value)}
+                          onBlur={saveEmail}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEmail();
+                            if (e.key === "Escape") {
+                              setEmailEditing(false);
+                              setEmailValue(cust?.email || "");
+                            }
+                          }}
+                          autoFocus
+                        />
+                      ) : (
+                        <>
+                          <span>{cust?.email || "—"}</span>
+                          <span
+                            className="edit-icon"
+                            onClick={() => setEmailEditing(true)}
+                            title="Edit email"
+                          >
+                            ✏️
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="lb-info-card">
+                    <div className="lb-info-label">Channel</div>
+                    <div className="lb-info-value">{order.channel || "—"}</div>
+                  </div>
+                  <div className="lb-info-card">
+                    <div className="lb-info-label">Created</div>
+                    <div className="lb-info-value">
+                      {fmtDate(order.created_at)}
+                    </div>
+                  </div>
+                  <div className="lb-info-card">
+                    <div className="lb-info-label">Amount</div>
+                    <div className="lb-info-value">
+                      {fmtCurrency(order.total_amount)}
+                    </div>
+                  </div>
+                  <div className="lb-info-card">
+                    <div className="lb-info-label">Payment Type</div>
+                    <div className="lb-info-value">
+                      {order.payment_type || "—"}
+                    </div>
+                  </div>
+                  {details?.fulfillment_status != null && (
+                    <div className="lb-info-card">
+                      <div className="lb-info-label">Fulfillment</div>
+                      <div className="lb-info-value">
+                        <FulfillmentBadge status={details.fulfillment_status} />
+                      </div>
                     </div>
                   )}
                 </div>
-                {addressMode === "view" && details?.address && (
+              </div>
+
+              {loading && (
+                <div style={{ color: "var(--text3)", fontSize: 12.5 }}>
+                  Loading details…
+                </div>
+              )}
+
+              {/* DELIVERY ADDRESS */}
+              {(details?.address || !loading) && (
+                <div>
                   <div
-                    className="lb-info-card"
-                    style={{ lineHeight: 1.6, fontSize: 13 }}
+                    className="lb-section-title"
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
                   >
-                    <strong>{details.address.name}</strong> ·{" "}
-                    {details.address.mobile}
-                    <br />
-                    {details.address.address_line}, {details.address.city},{" "}
-                    {details.address.state_name} — {details.address.pincode}
-                    {details.address.landmark && (
-                      <span> ({details.address.landmark})</span>
+                    Delivery Address
+                    {addressMode === "view" && (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <span
+                          className="edit-icon"
+                          onClick={loadAddresses}
+                          title="Change address"
+                          style={{ cursor: "pointer" }}
+                        >
+                          ✏️
+                        </span>
+                        <button
+                          className="lb-btn lb-btn-secondary lb-btn-sm"
+                          onClick={() => setAddressMode("add")}
+                          style={{ fontSize: 11, padding: "2px 8px" }}
+                        >
+                          ➕ New
+                        </button>
+                      </div>
                     )}
                   </div>
-                )}
-                {addressMode === "select" && (
-                  <div
-                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
-                  >
-                    {loadingAddresses ? (
-                      <div style={{ color: "var(--text3)", fontSize: 12.5 }}>
-                        Loading addresses…
-                      </div>
-                    ) : (
-                      <>
-                        <select
-                          value={selectedAddressId || ""}
-                          onChange={(e) =>
-                            setSelectedAddressId(parseInt(e.target.value))
-                          }
-                          className="form-select"
-                        >
-                          <option value="">Select Address</option>
-                          {availableAddresses.map((addr) => (
-                            <option
-                              key={addr.address_id}
-                              value={addr.address_id}
+                  {addressMode === "view" && details?.address && (
+                    <div
+                      className="lb-info-card"
+                      style={{ lineHeight: 1.6, fontSize: 13 }}
+                    >
+                      <strong>{details.address.name}</strong> ·{" "}
+                      {details.address.mobile}
+                      <br />
+                      {details.address.address_line}, {details.address.city},{" "}
+                      {details.address.state_name} — {details.address.pincode}
+                      {details.address.landmark && (
+                        <span> ({details.address.landmark})</span>
+                      )}
+                    </div>
+                  )}
+                  {addressMode === "select" && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      {loadingAddresses ? (
+                        <div style={{ color: "var(--text3)", fontSize: 12.5 }}>
+                          Loading addresses…
+                        </div>
+                      ) : (
+                        <>
+                          <select
+                            value={selectedAddressId || ""}
+                            onChange={(e) =>
+                              setSelectedAddressId(parseInt(e.target.value))
+                            }
+                            className="form-select"
+                          >
+                            <option value="">Select Address</option>
+                            {availableAddresses.map((addr) => (
+                              <option
+                                key={addr.address_id}
+                                value={addr.address_id}
+                              >
+                                {addr.label ||
+                                  `${addr.address_line}, ${addr.city}`}
+                              </option>
+                            ))}
+                          </select>
+                          <div style={{ display: "flex", gap: 7 }}>
+                            <button
+                              className="lb-btn lb-btn-primary lb-btn-sm"
+                              onClick={saveAddress}
                             >
-                              {addr.label ||
-                                `${addr.address_line}, ${addr.city}`}
-                            </option>
-                          ))}
-                        </select>
-                        <div style={{ display: "flex", gap: 7 }}>
+                              Save
+                            </button>
+                            <button
+                              className="lb-btn lb-btn-secondary lb-btn-sm"
+                              onClick={() => setAddressMode("add")}
+                            >
+                              ➕ Add New Instead
+                            </button>
+                            <button
+                              className="lb-btn lb-btn-secondary lb-btn-sm"
+                              onClick={() => setAddressMode("view")}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {addressMode === "add" && (
+                    <AddAddressForm
+                      order={order}
+                      onSaved={handleAddressCreated}
+                      onCancel={() => setAddressMode("view")}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* REMARKS + UTR */}
+              <div>
+                <div className="lb-section-title">Notes</div>
+                <div className="remarks-utr-row">
+                  <div className="form-field">
+                    <label className="form-label">Remarks</label>
+                    {remarksEditing ? (
+                      <>
+                        <textarea
+                          className="remarks-input"
+                          value={remarksVal}
+                          onChange={(e) => setRemarksVal(e.target.value)}
+                          placeholder="Add a remark…"
+                        />
+                        <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
                           <button
                             className="lb-btn lb-btn-primary lb-btn-sm"
-                            onClick={saveAddress}
+                            onClick={saveRemarks}
                           >
                             Save
                           </button>
                           <button
                             className="lb-btn lb-btn-secondary lb-btn-sm"
-                            onClick={() => setAddressMode("add")}
-                          >
-                            ➕ Add New Instead
-                          </button>
-                          <button
-                            className="lb-btn lb-btn-secondary lb-btn-sm"
-                            onClick={() => setAddressMode("view")}
+                            onClick={() => setRemarksEditing(false)}
                           >
                             Cancel
                           </button>
                         </div>
                       </>
+                    ) : (
+                      <div
+                        onClick={() => setRemarksEditing(true)}
+                        style={{
+                          padding: "9px 11px",
+                          background: "var(--surface2)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "var(--radius)",
+                          fontSize: 13,
+                          cursor: "pointer",
+                          color: remarksVal ? "var(--text)" : "var(--text3)",
+                          minHeight: 54,
+                        }}
+                      >
+                        {remarksVal || "Click to add a remark…"}
+                      </div>
                     )}
                   </div>
-                )}
-                {addressMode === "add" && (
-                  <AddAddressForm
-                    order={order}
-                    onSaved={handleAddressCreated}
-                    onCancel={() => setAddressMode("view")}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* ── REMARKS + UTR SIDE BY SIDE ── */}
-            <div>
-              <div className="lb-section-title">Notes</div>
-              <div className="remarks-utr-row">
-                {/* Remarks */}
-                <div className="form-field">
-                  <label className="form-label">Remarks</label>
-                  {remarksEditing ? (
-                    <>
-                      <textarea
-                        className="remarks-input"
-                        value={remarksVal}
-                        onChange={(e) => setRemarksVal(e.target.value)}
-                        placeholder="Add a remark…"
-                      />
-                      <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
-                        <button
-                          className="lb-btn lb-btn-primary lb-btn-sm"
-                          onClick={saveRemarks}
-                        >
-                          Save
-                        </button>
-                        <button
-                          className="lb-btn lb-btn-secondary lb-btn-sm"
-                          onClick={() => setRemarksEditing(false)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div
-                      onClick={() => setRemarksEditing(true)}
-                      style={{
-                        padding: "9px 11px",
-                        background: "var(--surface2)",
-                        border: "1px solid var(--border)",
-                        borderRadius: "var(--radius)",
-                        fontSize: 13,
-                        cursor: "pointer",
-                        color: remarksVal ? "var(--text)" : "var(--text3)",
-                        minHeight: 54,
-                      }}
-                    >
-                      {remarksVal || "Click to add a remark…"}
-                    </div>
-                  )}
-                </div>
-
-                {/* UTR Number inline field */}
-                <div className="form-field">
-                  <label className="form-label">UTR / Ref No.</label>
-                  {utrFieldEditing ? (
-                    <>
-                      <input
-                        className="form-input"
+                  <div className="form-field">
+                    <label className="form-label">UTR / Ref No.</label>
+                    {utrFieldEditing ? (
+                      <>
+                        <input
+                          className="form-input"
+                          style={{
+                            fontFamily: "'DM Mono',monospace",
+                            fontSize: 12.5,
+                          }}
+                          value={utrFieldVal}
+                          onChange={(e) => setUtrFieldVal(e.target.value)}
+                          placeholder="Transaction reference…"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveUtrField();
+                            if (e.key === "Escape") setUtrFieldEditing(false);
+                          }}
+                          autoFocus
+                        />
+                        <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
+                          <button
+                            className="lb-btn lb-btn-primary lb-btn-sm"
+                            onClick={saveUtrField}
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="lb-btn lb-btn-secondary lb-btn-sm"
+                            onClick={() => setUtrFieldEditing(false)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div
+                        onClick={() => setUtrFieldEditing(true)}
                         style={{
-                          fontFamily: "'DM Mono',monospace",
+                          padding: "9px 11px",
+                          background: "var(--surface2)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "var(--radius)",
                           fontSize: 12.5,
+                          cursor: "pointer",
+                          fontFamily: "'DM Mono',monospace",
+                          color: utrFieldVal ? "var(--green)" : "var(--text3)",
+                          minHeight: 54,
                         }}
-                        value={utrFieldVal}
-                        onChange={(e) => setUtrFieldVal(e.target.value)}
-                        placeholder="Transaction reference…"
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveUtrField();
-                          if (e.key === "Escape") setUtrFieldEditing(false);
-                        }}
-                        autoFocus
-                      />
-                      <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
-                        <button
-                          className="lb-btn lb-btn-primary lb-btn-sm"
-                          onClick={saveUtrField}
-                        >
-                          Save
-                        </button>
-                        <button
-                          className="lb-btn lb-btn-secondary lb-btn-sm"
-                          onClick={() => setUtrFieldEditing(false)}
-                        >
-                          Cancel
-                        </button>
+                      >
+                        {utrFieldVal || "Click to add UTR…"}
                       </div>
-                    </>
-                  ) : (
-                    <div
-                      onClick={() => setUtrFieldEditing(true)}
-                      style={{
-                        padding: "9px 11px",
-                        background: "var(--surface2)",
-                        border: "1px solid var(--border)",
-                        borderRadius: "var(--radius)",
-                        fontSize: 12.5,
-                        cursor: "pointer",
-                        fontFamily: "'DM Mono',monospace",
-                        color: utrFieldVal ? "var(--green)" : "var(--text3)",
-                        minHeight: 54,
-                      }}
-                    >
-                      {utrFieldVal || "Click to add UTR…"}
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
+
+              {localPayStatus !== "paid" && utrOpen && (
+                <div className="utr-box">
+                  <label>Enter UTR / Transaction Reference Number</label>
+                  <div className="utr-input-row">
+                    <input
+                      className="utr-input"
+                      placeholder="e.g. UTR123456789012"
+                      value={utrValue}
+                      onChange={(e) => setUtrValue(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && submitUTR()}
+                    />
+                    <button
+                      className="lb-btn lb-btn-success"
+                      onClick={submitUTR}
+                    >
+                      Mark Paid
+                    </button>
+                    <button
+                      className="lb-btn lb-btn-secondary"
+                      onClick={() => setUtrOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* UTR mark-paid box */}
-            {localPayStatus !== "paid" && utrOpen && (
-              <div className="utr-box">
-                <label>Enter UTR / Transaction Reference Number</label>
-                <div className="utr-input-row">
-                  <input
-                    className="utr-input"
-                    placeholder="e.g. UTR123456789012"
-                    value={utrValue}
-                    onChange={(e) => setUtrValue(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && submitUTR()}
-                  />
-                  <button className="lb-btn lb-btn-success" onClick={submitUTR}>
-                    Mark Paid
-                  </button>
-                  <button
-                    className="lb-btn lb-btn-secondary"
-                    onClick={() => setUtrOpen(false)}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ── RIGHT COLUMN ── */}
-          <div className="lb-section">
-            {/* Items */}
-            {details?.items?.length > 0 && (
-              <div>
-                <div
-                  className="lb-section-title"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                  }}
-                >
-                  <span>Items ({details.items.length})</span>
-                  <button
-                    className="lb-btn lb-btn-secondary lb-btn-sm"
-                    onClick={() => setShowAddProduct((v) => !v)}
-                    style={{ fontSize: 11 }}
-                  >
-                    {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
-                  </button>
-                </div>
-
-                {/* FIX #1: wrapper must NOT have overflow:hidden */}
-                <div className="lb-items-table-wrap">
-                  <table className="lb-items-table">
-                    <thead>
-                      <tr>
-                        <th>Product</th>
-                        <th>Qty</th>
-                        <th>Unit Price</th>
-                        <th>Total</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {details.items.map((it) => (
-                        <tr key={it.item_id} style={{ overflow: "visible" }}>
-                          <td
-                            style={{
-                              overflow: "visible",
-                              position: "relative",
-                            }}
-                          >
-                            {editingProductItemId === it.item_id ? (
-                              <div
-                                style={{
-                                  display: "flex",
-                                  gap: 6,
-                                  alignItems: "center",
-                                  overflow: "visible",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    flex: 1,
-                                    position: "relative",
-                                    overflow: "visible",
-                                  }}
-                                >
-                                  <ProductSearchInput
-                                    products={availableProducts}
-                                    value={selectedProductForEdit?.id}
-                                    onChange={(p) =>
-                                      setSelectedProductForEdit(p)
-                                    }
-                                    placeholder="Search product…"
-                                  />
-                                </div>
-                                <button
-                                  className="lb-btn lb-btn-primary lb-btn-sm"
-                                  onClick={() => saveProduct(it.item_id)}
-                                  disabled={!selectedProductForEdit}
-                                >
-                                  ✓
-                                </button>
-                                <button
-                                  className="lb-btn lb-btn-secondary lb-btn-sm"
-                                  onClick={() => {
-                                    setEditingProductItemId(null);
-                                    setSelectedProductForEdit(null);
-                                  }}
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ) : (
-                              <div
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 6,
-                                }}
-                              >
-                                <span>{it.product_name}</span>
-                                <span
-                                  className="edit-icon"
-                                  onClick={() => {
-                                    setEditingProductItemId(it.item_id);
-                                    setSelectedProductForEdit(null);
-                                  }}
-                                  title="Edit product"
-                                >
-                                  ✏️
-                                </span>
-                              </div>
-                            )}
-                          </td>
-                          <td>{it.quantity}</td>
-                          <td>
-                            {editingItemId === it.item_id ? (
-                              <input
-                                className="inline-edit-input"
-                                type="number"
-                                step="0.01"
-                                value={editingPrice}
-                                onChange={(e) =>
-                                  setEditingPrice(e.target.value)
-                                }
-                                onBlur={() => saveItemPrice(it.item_id)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter")
-                                    saveItemPrice(it.item_id);
-                                  if (e.key === "Escape") {
-                                    setEditingItemId(null);
-                                    setEditingPrice("");
-                                  }
-                                }}
-                                autoFocus
-                                style={{ width: "110px" }}
-                              />
-                            ) : (
-                              <div
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 6,
-                                }}
-                              >
-                                <span>{fmtCurrency(it.unit_price)}</span>
-                                <span
-                                  className="edit-icon"
-                                  onClick={() => {
-                                    setEditingItemId(it.item_id);
-                                    setEditingPrice(it.unit_price);
-                                  }}
-                                  title="Edit price"
-                                >
-                                  ✏️
-                                </span>
-                              </div>
-                            )}
-                          </td>
-                          <td>{fmtCurrency(it.total_price)}</td>
-                          <td style={{ width: 32, textAlign: "center" }}>
-                            {confirmDeleteItemId === it.item_id ? (
-                              <div style={{ display: "flex", gap: 4 }}>
-                                <button
-                                  className="lb-btn lb-btn-danger lb-btn-sm"
-                                  onClick={() => handleDeleteItem(it.item_id)}
-                                  style={{ padding: "2px 7px", fontSize: 11 }}
-                                >
-                                  Yes
-                                </button>
-                                <button
-                                  className="lb-btn lb-btn-secondary lb-btn-sm"
-                                  onClick={() => setConfirmDeleteItemId(null)}
-                                  style={{ padding: "2px 7px", fontSize: 11 }}
-                                >
-                                  No
-                                </button>
-                              </div>
-                            ) : (
-                              <span
-                                className="del-icon"
-                                title="Remove item"
-                                onClick={() =>
-                                  setConfirmDeleteItemId(it.item_id)
-                                }
-                              >
-                                🗑
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {showAddProduct && (
-                  <AddProductPanel
-                    orderId={order.order_id}
-                    products={availableProducts}
-                    onAdded={handleItemAdded}
-                    onCancel={() => setShowAddProduct(false)}
-                  />
-                )}
-                {productsLoading && (
-                  <div
-                    style={{
-                      fontSize: 11.5,
-                      color: "var(--text3)",
-                      marginTop: 4,
-                    }}
-                  >
-                    Loading product list…
-                  </div>
-                )}
-              </div>
-            )}
-
-            {!loading &&
-              details &&
-              (!details.items || details.items.length === 0) && (
+            {/* ── RIGHT COLUMN ── */}
+            <div className="lb-section">
+              {details?.items?.length > 0 && (
                 <div>
                   <div
                     className="lb-section-title"
@@ -1817,7 +2903,7 @@ function OrderLightbox({
                       justifyContent: "space-between",
                     }}
                   >
-                    <span>Items</span>
+                    <span>Items ({details.items.length})</span>
                     <button
                       className="lb-btn lb-btn-secondary lb-btn-sm"
                       onClick={() => setShowAddProduct((v) => !v)}
@@ -1825,6 +2911,171 @@ function OrderLightbox({
                     >
                       {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
                     </button>
+                  </div>
+                  <div className="lb-items-table-wrap">
+                    <table className="lb-items-table">
+                      <thead>
+                        <tr>
+                          <th>Product</th>
+                          <th>Qty</th>
+                          <th>Unit Price</th>
+                          <th>Total</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {details.items.map((it) => (
+                          <tr key={it.item_id} style={{ overflow: "visible" }}>
+                            <td
+                              style={{
+                                overflow: "visible",
+                                position: "relative",
+                              }}
+                            >
+                              {editingProductItemId === it.item_id ? (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: 6,
+                                    alignItems: "center",
+                                    overflow: "visible",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      flex: 1,
+                                      position: "relative",
+                                      overflow: "visible",
+                                    }}
+                                  >
+                                    <ProductSearchInput
+                                      products={availableProducts}
+                                      value={selectedProductForEdit?.id}
+                                      onChange={(p) =>
+                                        setSelectedProductForEdit(p)
+                                      }
+                                      placeholder="Search product…"
+                                    />
+                                  </div>
+                                  <button
+                                    className="lb-btn lb-btn-primary lb-btn-sm"
+                                    onClick={() => saveProduct(it.item_id)}
+                                    disabled={!selectedProductForEdit}
+                                  >
+                                    ✓
+                                  </button>
+                                  <button
+                                    className="lb-btn lb-btn-secondary lb-btn-sm"
+                                    onClick={() => {
+                                      setEditingProductItemId(null);
+                                      setSelectedProductForEdit(null);
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ) : (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                  }}
+                                >
+                                  <span>{it.product_name}</span>
+                                  <span
+                                    className="edit-icon"
+                                    onClick={() => {
+                                      setEditingProductItemId(it.item_id);
+                                      setSelectedProductForEdit(null);
+                                    }}
+                                    title="Edit product"
+                                  >
+                                    ✏️
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                            <td>{it.quantity}</td>
+                            <td>
+                              {editingItemId === it.item_id ? (
+                                <input
+                                  className="inline-edit-input"
+                                  type="number"
+                                  step="0.01"
+                                  value={editingPrice}
+                                  onChange={(e) =>
+                                    setEditingPrice(e.target.value)
+                                  }
+                                  onBlur={() => saveItemPrice(it.item_id)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter")
+                                      saveItemPrice(it.item_id);
+                                    if (e.key === "Escape") {
+                                      setEditingItemId(null);
+                                      setEditingPrice("");
+                                    }
+                                  }}
+                                  autoFocus
+                                  style={{ width: "110px" }}
+                                />
+                              ) : (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                  }}
+                                >
+                                  <span>{fmtCurrency(it.unit_price)}</span>
+                                  <span
+                                    className="edit-icon"
+                                    onClick={() => {
+                                      setEditingItemId(it.item_id);
+                                      setEditingPrice(it.unit_price);
+                                    }}
+                                    title="Edit price"
+                                  >
+                                    ✏️
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                            <td>{fmtCurrency(it.total_price)}</td>
+                            <td style={{ width: 32, textAlign: "center" }}>
+                              {confirmDeleteItemId === it.item_id ? (
+                                <div style={{ display: "flex", gap: 4 }}>
+                                  <button
+                                    className="lb-btn lb-btn-danger lb-btn-sm"
+                                    onClick={() => handleDeleteItem(it.item_id)}
+                                    style={{ padding: "2px 7px", fontSize: 11 }}
+                                  >
+                                    Yes
+                                  </button>
+                                  <button
+                                    className="lb-btn lb-btn-secondary lb-btn-sm"
+                                    onClick={() => setConfirmDeleteItemId(null)}
+                                    style={{ padding: "2px 7px", fontSize: 11 }}
+                                  >
+                                    No
+                                  </button>
+                                </div>
+                              ) : (
+                                <span
+                                  className="del-icon"
+                                  title="Remove item"
+                                  onClick={() =>
+                                    setConfirmDeleteItemId(it.item_id)
+                                  }
+                                >
+                                  🗑
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                   {showAddProduct && (
                     <AddProductPanel
@@ -1837,174 +3088,251 @@ function OrderLightbox({
                 </div>
               )}
 
-            {details?.serial_status && (
-              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <div className="lb-section-title" style={{ marginBottom: 0 }}>
-                  Serial Status:
-                </div>
-                <SerialBadge status={details.serial_status} />
-              </div>
-            )}
+              {!loading &&
+                details &&
+                (!details.items || details.items.length === 0) && (
+                  <div>
+                    <div
+                      className="lb-section-title"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <span>Items</span>
+                      <button
+                        className="lb-btn lb-btn-secondary lb-btn-sm"
+                        onClick={() => setShowAddProduct((v) => !v)}
+                        style={{ fontSize: 11 }}
+                      >
+                        {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
+                      </button>
+                    </div>
+                    {showAddProduct && (
+                      <AddProductPanel
+                        orderId={order.order_id}
+                        products={availableProducts}
+                        onAdded={handleItemAdded}
+                        onCancel={() => setShowAddProduct(false)}
+                      />
+                    )}
+                  </div>
+                )}
 
-            {serialOpen && (
-              <div
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius)",
-                  overflow: "hidden",
-                }}
-              >
+              {details?.serial_status && (
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <div className="lb-section-title" style={{ marginBottom: 0 }}>
+                    Serial Status:
+                  </div>
+                  <SerialBadge status={details.serial_status} />
+                </div>
+              )}
+
+              {serialOpen && (
                 <div
                   style={{
-                    padding: "11px 14px",
-                    background: "var(--surface2)",
-                    borderBottom: "1px solid var(--border)",
-                    fontWeight: 600,
-                    fontSize: 13,
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    overflow: "hidden",
                   }}
                 >
-                  Assign Serial Numbers
-                </div>
-                <div style={{ padding: 14 }}>
-                  {serialItems.map((item) => (
-                    <div className="serial-item" key={item.item_id}>
-                      <h4>
-                        {item.product_name} — Qty {item.quantity}
-                      </h4>
-                      {item.serials.map((sn, i) => (
-                        <input
-                          key={`${item.item_id}-${i}`}
-                          className="serial-input"
-                          type="text"
-                          value={sn}
-                          placeholder={`Serial ${i + 1}`}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSerialItems((prev) =>
-                              prev.map((it) =>
-                                it.item_id === item.item_id
-                                  ? {
-                                      ...it,
-                                      serials: it.serials.map((s, idx) =>
-                                        idx === i ? val : s,
-                                      ),
-                                    }
-                                  : it,
-                              ),
-                            );
-                          }}
-                        />
-                      ))}
-                    </div>
-                  ))}
                   <div
                     style={{
-                      display: "flex",
-                      gap: 7,
-                      justifyContent: "flex-end",
+                      padding: "11px 14px",
+                      background: "var(--surface2)",
+                      borderBottom: "1px solid var(--border)",
+                      fontWeight: 600,
+                      fontSize: 13,
                     }}
                   >
-                    <button
-                      className="lb-btn lb-btn-secondary"
-                      onClick={() => setSerialOpen(false)}
+                    Assign Serial Numbers
+                  </div>
+                  <div style={{ padding: 14 }}>
+                    {serialItems.map((item) => (
+                      <div className="serial-item" key={item.item_id}>
+                        <h4>
+                          {item.product_name} — Qty {item.quantity}
+                        </h4>
+                        {item.serials.map((sn, i) => (
+                          <input
+                            key={`${item.item_id}-${i}`}
+                            className="serial-input"
+                            type="text"
+                            value={sn}
+                            placeholder={`Serial ${i + 1}`}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSerialItems((prev) =>
+                                prev.map((it) =>
+                                  it.item_id === item.item_id
+                                    ? {
+                                        ...it,
+                                        serials: it.serials.map((s, idx) =>
+                                          idx === i ? val : s,
+                                        ),
+                                      }
+                                    : it,
+                                ),
+                              );
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ))}
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 7,
+                        justifyContent: "flex-end",
+                      }}
                     >
-                      Cancel
-                    </button>
-                    <button
-                      className="lb-btn lb-btn-primary"
-                      onClick={saveSerials}
-                    >
-                      Save Serials
-                    </button>
+                      <button
+                        className="lb-btn lb-btn-secondary"
+                        onClick={() => setSerialOpen(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="lb-btn lb-btn-primary"
+                        onClick={saveSerials}
+                      >
+                        Save Serials
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── ACTION BAR ── */}
+          <div className="lb-actions">
+            {localPayStatus !== "paid" ? (
+              <button
+                className="lb-btn lb-btn-success"
+                onClick={() => setUtrOpen((v) => !v)}
+              >
+                💳 Mark as Paid
+              </button>
+            ) : (
+              <span className="badge badge-green" style={{ fontSize: 11.5 }}>
+                ✓ Payment Received
+              </span>
+            )}
+            <select
+              value={deliveryStatus}
+              onChange={(e) => cycleDelivery(e.target.value)}
+              style={{
+                padding: "7px 11px",
+                border: "1px solid var(--border2)",
+                borderRadius: "var(--radius)",
+                fontFamily: "inherit",
+                fontSize: 12.5,
+                background: "var(--surface)",
+                cursor: "pointer",
+              }}
+            >
+              <option value="NOT_SHIPPED">Not Shipped</option>
+              <option value="SHIPPED">Shipped</option>
+              <option value="READY">Ready</option>
+              <option value="COMPLETED">Completed</option>
+            </select>
+            <button
+              className="lb-btn lb-btn-secondary"
+              onClick={serialOpen ? () => setSerialOpen(false) : openSerials}
+              disabled={serialLoading}
+            >
+              {serialLoading ? "…" : "🔢 Serials"}
+            </button>
+            <InvoiceButton
+              orderId={order.order_id}
+              invoiceNumber={order.invoice_number}
+              detailsInvoice={currentInvoice}
+              onGenerate={handleInvoice}
+              loading={invoiceLoading}
+              orderStatus={currentOrderStatus}
+            />
+            <button
+              className="lb-btn lb-btn-orange"
+              onClick={handlePrintOfflinePOD}
+            >
+              🖨️ Print POD
+            </button>
+            <button
+              className="lb-btn lb-btn-secondary"
+              onClick={handlePrintOfflinePOD} // opens same modal
+            >
+              ⬇️ Download POD
+            </button>
+            <div style={{ flex: 1 }} />
+            {confirmReject ? (
+              <>
+                <span style={{ fontSize: 12, color: "var(--red)" }}>
+                  Reject this order?
+                </span>
+                <button className="lb-btn lb-btn-danger" onClick={handleReject}>
+                  Yes, Reject
+                </button>
+                <button
+                  className="lb-btn lb-btn-secondary"
+                  onClick={() => setConfirmReject(false)}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              currentOrderStatus !== "REJECTED" && (
+                <button
+                  className="lb-btn lb-btn-danger"
+                  onClick={() => setConfirmReject(true)}
+                >
+                  ⛔ Reject
+                </button>
+              )
             )}
           </div>
         </div>
-
-        {/* ── ACTION BAR ── */}
-        <div className="lb-actions">
-          {localPayStatus !== "paid" ? (
-            <button
-              className="lb-btn lb-btn-success"
-              onClick={() => setUtrOpen((v) => !v)}
-            >
-              💳 Mark as Paid
-            </button>
-          ) : (
-            <span className="badge badge-green" style={{ fontSize: 11.5 }}>
-              ✓ Payment Received
-            </span>
-          )}
-
-          <select
-            value={deliveryStatus}
-            onChange={(e) => cycleDelivery(e.target.value)}
-            style={{
-              padding: "7px 11px",
-              border: "1px solid var(--border2)",
-              borderRadius: "var(--radius)",
-              fontFamily: "inherit",
-              fontSize: 12.5,
-              background: "var(--surface)",
-              cursor: "pointer",
-            }}
-          >
-            <option value="NOT_SHIPPED">Not Shipped</option>
-            <option value="SHIPPED">Shipped</option>
-            <option value="READY">Ready</option>
-            <option value="COMPLETED">Completed</option>
-          </select>
-
-          <button
-            className="lb-btn lb-btn-secondary"
-            onClick={serialOpen ? () => setSerialOpen(false) : openSerials}
-            disabled={serialLoading}
-          >
-            {serialLoading ? "…" : "🔢 Serials"}
-          </button>
-
-          <InvoiceButton
-            orderId={order.order_id}
-            invoiceNumber={order.invoice_number}
-            detailsInvoice={currentInvoice}
-            onGenerate={handleInvoice}
-            loading={invoiceLoading}
-            orderStatus={currentOrderStatus}
-          />
-
-          <div style={{ flex: 1 }} />
-
-          {confirmReject ? (
-            <>
-              <span style={{ fontSize: 12, color: "var(--red)" }}>
-                Reject this order?
-              </span>
-              <button className="lb-btn lb-btn-danger" onClick={handleReject}>
-                Yes, Reject
-              </button>
-              <button
-                className="lb-btn lb-btn-secondary"
-                onClick={() => setConfirmReject(false)}
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            currentOrderStatus !== "REJECTED" && (
-              <button
-                className="lb-btn lb-btn-danger"
-                onClick={() => setConfirmReject(true)}
-              >
-                ⛔ Reject
-              </button>
-            )
-          )}
-        </div>
       </div>
-    </div>
+
+      {showPOD && podData && (
+        <OfflinePOD data={podData} onClose={() => setShowPOD(false)} />
+      )}
+    </>
   );
+}
+
+/* ─────────────────────────────────────────────
+   VIRTUALISED ROW WINDOW
+───────────────────────────────────────────── */
+const PAGE_SIZE = 200;
+
+function useVirtualRows(rows) {
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const sentinelRef = useRef(null);
+
+  useEffect(() => {
+    setLimit(PAGE_SIZE);
+  }, [rows]);
+
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const obs = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting)
+          setLimit((l) => Math.min(l + PAGE_SIZE, rows.length));
+      },
+      { rootMargin: "400px" },
+    );
+    obs.observe(sentinelRef.current);
+    return () => obs.disconnect();
+  }, [rows.length]);
+
+  return {
+    visibleRows: rows.slice(0, limit),
+    sentinelRef,
+    hasMore: limit < rows.length,
+  };
 }
 
 /* ─────────────────────────────────────────────
@@ -2024,37 +3352,7 @@ export default function OrdersTable({
   const [activeOrder, setActiveOrder] = useState(null);
   const [detailsCache, setDetailsCache] = useState({});
   const [loadingDetails, setLoadingDetails] = useState({});
-  const loadMoreRef = useRef(null);
-
-  useEffect(() => {
-    if (!hasMore || !onLoadMore) return;
-    const obs = new IntersectionObserver(
-      ([e]) => {
-        if (e.isIntersecting && !isLoadingMore) onLoadMore();
-      },
-      { rootMargin: "300px" },
-    );
-    if (loadMoreRef.current) obs.observe(loadMoreRef.current);
-    return () => obs.disconnect();
-  }, [hasMore, isLoadingMore, onLoadMore]);
-
-  const openOrder = useCallback(
-    async (order) => {
-      setActiveOrder(order);
-      const id = order.order_id;
-      if (detailsCache[id]) return;
-      setLoadingDetails((p) => ({ ...p, [id]: true }));
-      try {
-        const res = await api.get(`/orders/${encodeURIComponent(id)}/details`);
-        setDetailsCache((p) => ({ ...p, [id]: res.data }));
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoadingDetails((p) => ({ ...p, [id]: false }));
-      }
-    },
-    [detailsCache],
-  );
+  const [pushedAwbs, setPushedAwbs] = useState({});
 
   const filtered = useMemo(() => {
     const {
@@ -2112,127 +3410,202 @@ export default function OrdersTable({
       }
       if (pending_invoice) {
         const inv = (o.invoice_number || "").trim();
-
-        // EXCLUDE if invoice exists OR is NA
         if (inv && inv !== "") return false;
       }
       return true;
     });
   }, [orders, filters]);
 
+  const enrichedOrders = useMemo(() => {
+    if (Object.keys(pushedAwbs).length === 0) return filtered;
+    return filtered.map((o) =>
+      pushedAwbs[o.order_id]
+        ? {
+            ...o,
+            awb_number: pushedAwbs[o.order_id],
+            delivery_status: "SHIPPED",
+          }
+        : o,
+    );
+  }, [filtered, pushedAwbs]);
+
+  const deduped = useMemo(() => {
+    const seen = new Set();
+    return enrichedOrders.filter((o) => {
+      if (seen.has(o.order_id)) return false;
+      seen.add(o.order_id);
+      return true;
+    });
+  }, [enrichedOrders]);
+
+  const {
+    visibleRows,
+    sentinelRef,
+    hasMore: hasMoreVirtual,
+  } = useVirtualRows(deduped);
+
+  const openOrder = useCallback(
+    async (order) => {
+      setActiveOrder(order);
+      const id = order.order_id;
+      if (detailsCache[id]) return;
+      setLoadingDetails((p) => ({ ...p, [id]: true }));
+      try {
+        const res = await api.get(`/orders/${encodeURIComponent(id)}/details`);
+        setDetailsCache((p) => ({ ...p, [id]: res.data }));
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingDetails((p) => ({ ...p, [id]: false }));
+      }
+    },
+    [detailsCache],
+  );
+
   return (
     <div className="ot-wrap">
-      {/* Toast container lives here so it's always mounted */}
       <ToastContainer />
 
       <div className="ot-table-wrap">
-        {filtered.length === 0 ? (
+        {deduped.length === 0 ? (
           <div className="ot-empty">
-            <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>No orders
-            match your filters.
+            <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
+            No orders match your filters.
           </div>
         ) : (
-          <table className="ot-table">
-            <thead>
-              <tr>
-                <th>Order ID</th>
-                <th>Customer</th>
-                <th>Mobile</th>
-                <th>Date</th>
-                <th>Items</th>
-                <th>Amount</th>
-                <th>Channel</th>
-                <th>Payment</th>
-                <th>Delivery</th>
-                <th>Fulfillment</th>
-                <th>Invoice</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((order) => {
-                const cust = order.customer || {};
-                return (
-                  <tr key={order.order_id} onClick={() => openOrder(order)}>
-                    <td>
-                      <span className="order-id">{order.order_id}</span>
-                    </td>
-                    <td style={{ fontWeight: 500 }}>{cust.name || "—"}</td>
-                    <td
-                      style={{
-                        fontFamily: "'DM Mono',monospace",
-                        fontSize: 12.5,
-                        color: "var(--text2)",
-                      }}
-                    >
-                      {cust.mobile || "—"}
-                    </td>
-                    <td style={{ color: "var(--text2)", whiteSpace: "nowrap" }}>
-                      {fmtDate(order.created_at)}
-                    </td>
-                    <td style={{ color: "var(--text2)" }}>
-                      {order.total_items ?? "—"}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>
-                      {fmtCurrency(order.total_amount)}
-                    </td>
-                    <td>
-                      <span
-                        className={`badge ${order.channel?.toLowerCase() === "offline" ? "badge-purple" : "badge-blue"}`}
-                      >
-                        {order.channel || "—"}
-                      </span>
-                    </td>
-                    <td>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 4,
-                        }}
-                      >
-                        <PaymentBadge status={order.payment_status} />
-                        {order.payment_status?.toLowerCase() === "paid" &&
-                          order.utr_number && (
-                            <span
-                              style={{
-                                fontFamily: "'DM Mono', monospace",
-                                fontSize: 11,
-                                color: "var(--green)",
-                                lineHeight: 1.2,
-                              }}
-                            >
-                              {order.utr_number}
-                            </span>
-                          )}
-                      </div>
-                    </td>
-                    <td>
-                      <DeliveryBadge status={order.delivery_status} />
-                    </td>
-                    <td>
-                      <FulfillmentBadge status={order.fulfillment_status} />
-                    </td>
-                    <td>
-                      <InvoiceCell
-                        invoiceNumber={order.invoice_number}
-                        orderStatus={order.order_status}
-                      />
-                    </td>
+          <>
+            <div className="ot-table-scroll">
+              <table className="ot-table">
+                <thead>
+                  <tr>
+                    <th>Order ID</th>
+                    <th>Customer</th>
+                    <th>Mobile</th>
+                    <th className="ot-col-hide-sm">Date</th>
+                    <th className="ot-col-hide-sm">Items</th>
+                    <th>Amount</th>
+                    <th className="ot-col-hide-sm">Channel</th>
+                    <th>Payment</th>
+                    <th>Delivery</th>
+                    <th className="ot-col-hide-sm">Fulfillment</th>
+                    <th>Invoice</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-        {hasMore && (
-          <div ref={loadMoreRef} className="ot-load-more">
-            {isLoadingMore ? "Loading more orders…" : " "}
-          </div>
+                </thead>
+                <tbody>
+                  {visibleRows.map((order) => {
+                    const cust = order.customer || {};
+                    return (
+                      <tr key={order.order_id} onClick={() => openOrder(order)}>
+                        <td>
+                          <span className="order-id">{order.order_id}</span>
+                        </td>
+                        <td style={{ fontWeight: 500, whiteSpace: "nowrap" }}>
+                          {cust.name || "—"}
+                        </td>
+                        <td
+                          style={{
+                            fontFamily: "'DM Mono',monospace",
+                            fontSize: "clamp(10px,0.9vw,12.5px)",
+                            color: "var(--text2)",
+                          }}
+                        >
+                          {cust.mobile || "—"}
+                        </td>
+                        <td
+                          className="ot-col-hide-sm"
+                          style={{
+                            color: "var(--text2)",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {fmtDate(order.created_at)}
+                        </td>
+                        <td
+                          className="ot-col-hide-sm"
+                          style={{ color: "var(--text2)" }}
+                        >
+                          {order.total_items ?? "—"}
+                        </td>
+                        <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+                          {fmtCurrency(order.total_amount)}
+                        </td>
+                        <td className="ot-col-hide-sm">
+                          <span
+                            className={`badge ${order.channel?.toLowerCase() === "offline" ? "badge-purple" : "badge-blue"}`}
+                          >
+                            {order.channel || "—"}
+                          </span>
+                        </td>
+                        <td>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 3,
+                            }}
+                          >
+                            <PaymentBadge status={order.payment_status} />
+                            {order.payment_status?.toLowerCase() === "paid" &&
+                              order.utr_number && (
+                                <span
+                                  style={{
+                                    fontFamily: "'DM Mono', monospace",
+                                    fontSize: 10,
+                                    color: "var(--green)",
+                                    lineHeight: 1.2,
+                                  }}
+                                >
+                                  {order.utr_number}
+                                </span>
+                              )}
+                          </div>
+                        </td>
+                        <td>
+                          <DeliveryCell
+                            order={order}
+                            onPushed={(orderId, waybill) => {
+                              setPushedAwbs((p) => ({
+                                ...p,
+                                [orderId]: waybill,
+                              }));
+                              onAction && onAction(orderId, "refresh");
+                            }}
+                          />
+                        </td>
+                        <td className="ot-col-hide-sm">
+                          <FulfillmentBadge status={order.fulfillment_status} />
+                        </td>
+                        <td>
+                          <InvoiceCell
+                            invoiceNumber={order.invoice_number}
+                            orderStatus={order.order_status}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {hasMoreVirtual && (
+              <div ref={sentinelRef} className="ot-load-more">
+                Loading more rows…
+              </div>
+            )}
+            {!hasMoreVirtual && hasMore && (
+              <div className="ot-load-more">
+                {isLoadingMore ? "Loading more orders…" : " "}
+              </div>
+            )}
+          </>
         )}
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, color: "var(--text3)" }}>
-        Showing {filtered.length} of {orders.length} orders
+        Showing {Math.min(visibleRows.length, deduped.length)} of{" "}
+        {deduped.length} filtered
+        {orders.length !== deduped.length ? ` (${orders.length} total)` : ""}
       </div>
 
       {activeOrder && (

@@ -9,6 +9,8 @@ from routes import customers
 from routes import states
 from routes.wix_sync import start_wix_auto_sync
 from routes.device_transactions import router as device_transactions_router
+from routes.delhivery import router as delhivery_router
+
 
 app = FastAPI(title="FastOrderLogic Backend")
 
@@ -28,7 +30,7 @@ app.include_router(address_routes.router)
 app.include_router(customers.router)
 app.include_router(states.router)
 app.include_router(device_transactions_router)
-
+app.include_router(delhivery_router)
 
 @app.get("/")
 def home():
