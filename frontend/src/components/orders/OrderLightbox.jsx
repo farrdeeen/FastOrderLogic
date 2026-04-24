@@ -14,6 +14,38 @@ import AddProductPanel from "./AddProductPanel";
 import ProductSearchInput from "./ProductSearchInput";
 import OfflinePOD from "./OfflinePOD";
 
+/* ─── Derive order lifecycle status automatically ──────────────────────────
+   Rules (checked in order):
+   1. Has invoice_number  → FULFILLED  (all edits locked)
+   2. Has awb_number      → SHIPPED
+   3. Has utr_number      → PAID / awaiting shipment
+   4. Has serials in DB   → PACKED / ready to ship
+   5. Default             → PENDING
+   ───────────────────────────────────────────────────────────────────────── */
+function deriveStatus({
+  invoice_number,
+  awb_number,
+  utr_number,
+  serial_status,
+}) {
+  if (invoice_number && invoice_number !== "NA" && invoice_number.trim() !== "")
+    return "FULFILLED";
+  if (awb_number && awb_number !== "To be assigned" && awb_number.trim() !== "")
+    return "SHIPPED";
+  if (utr_number && utr_number.trim() !== "") return "PAID";
+  if (serial_status === "complete" || serial_status === "partial")
+    return "PACKED";
+  return "PENDING";
+}
+
+const STATUS_BADGE = {
+  FULFILLED: { label: "Fulfilled", cls: "badge-green" },
+  SHIPPED: { label: "Shipped", cls: "badge-blue" },
+  PAID: { label: "Paid — Awaiting Shipment", cls: "badge-amber" },
+  PACKED: { label: "Packed", cls: "badge-purple" },
+  PENDING: { label: "Pending", cls: "badge-gray" },
+};
+
 export default function OrderLightbox({
   order,
   details,
@@ -27,42 +59,62 @@ export default function OrderLightbox({
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialItems, setSerialItems] = useState([]);
   const [serialLoading, setSerialLoading] = useState(false);
+
   const [remarksVal, setRemarksVal] = useState(details?.remarks || "");
   const [remarksEditing, setRemarksEditing] = useState(false);
+
+  // UTR field (standalone, not tied to mark-paid)
   const [utrFieldVal, setUtrFieldVal] = useState(
     details?.utr_number || order.utr_number || "",
   );
   const [utrFieldEditing, setUtrFieldEditing] = useState(false);
-  const [deliveryStatus, setDeliveryStatus] = useState(
-    order.delivery_status || "NOT_SHIPPED",
+
+  // AWB field (manual update)
+  const [awbFieldVal, setAwbFieldVal] = useState(order.awb_number || "");
+  const [awbFieldEditing, setAwbFieldEditing] = useState(false);
+
+  // Invoice number field (manual update)
+  const [invoiceFieldVal, setInvoiceFieldVal] = useState(
+    details?.invoice_number ?? order.invoice_number ?? "",
   );
+  const [invoiceFieldEditing, setInvoiceFieldEditing] = useState(false);
+
   const [localPayStatus, setLocalPayStatus] = useState(order.payment_status);
   const [localOrderStatus, setLocalOrderStatus] = useState(
     order.order_status || "",
   );
   const [confirmReject, setConfirmReject] = useState(false);
+
   const [emailEditing, setEmailEditing] = useState(false);
   const [emailValue, setEmailValue] = useState("");
   const [mobileEditing, setMobileEditing] = useState(false);
   const [mobileValue, setMobileValue] = useState("");
+
   const [editingItemId, setEditingItemId] = useState(null);
   const [editingPrice, setEditingPrice] = useState("");
+
   const [addressMode, setAddressMode] = useState("view");
   const [selectedAddressId, setSelectedAddressId] = useState(null);
   const [availableAddresses, setAvailableAddresses] = useState([]);
   const [loadingAddresses, setLoadingAddresses] = useState(false);
+
   const [editingProductItemId, setEditingProductItemId] = useState(null);
   const [availableProducts, setAvailableProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [selectedProductForEdit, setSelectedProductForEdit] = useState(null);
+
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [confirmDeleteItemId, setConfirmDeleteItemId] = useState(null);
+
   const [showPOD, setShowPOD] = useState(false);
   const [podData, setPodData] = useState(null);
 
+  // Sync fields when details arrive
   useEffect(() => {
     if (details?.remarks != null) setRemarksVal(details.remarks);
     if (details?.utr_number != null) setUtrFieldVal(details.utr_number || "");
+    if (details?.invoice_number != null)
+      setInvoiceFieldVal(details.invoice_number || "");
   }, [details]);
 
   useEffect(() => {
@@ -71,11 +123,22 @@ export default function OrderLightbox({
       setEmailValue(cust.email || "");
       setMobileValue(cust.mobile || "");
     }
+    setAwbFieldVal(order.awb_number || "");
   }, [order]);
 
   useEffect(() => {
     loadProducts();
   }, []);
+
+  /* ── Derived lifecycle status ── */
+  const lifecycleStatus = deriveStatus({
+    invoice_number: invoiceFieldVal,
+    awb_number: awbFieldVal,
+    utr_number: utrFieldVal,
+    serial_status: details?.serial_status,
+  });
+  const isFulfilled = lifecycleStatus === "FULFILLED";
+  const statusInfo = STATUS_BADGE[lifecycleStatus];
 
   const loadProducts = async () => {
     setProductsLoading(true);
@@ -111,7 +174,9 @@ export default function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-address`,
-        { address_id: selectedAddressId },
+        {
+          address_id: selectedAddressId,
+        },
       );
       setAddressMode("view");
       toast.success("Delivery address updated");
@@ -125,7 +190,9 @@ export default function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-address`,
-        { address_id: newAddress.address_id },
+        {
+          address_id: newAddress.address_id,
+        },
       );
       setAddressMode("view");
       onAction && onAction(order.order_id, "refresh");
@@ -199,7 +266,9 @@ export default function OrderLightbox({
     try {
       await api.post(
         `/orders/${encodeURIComponent(order.order_id)}/serial_numbers/save`,
-        { entries: serialItems },
+        {
+          entries: serialItems,
+        },
       );
       toast.success("Serial numbers saved");
       setSerialOpen(false);
@@ -216,6 +285,7 @@ export default function OrderLightbox({
     }
     await onAction(order.order_id, "mark-paid-utr", utrValue.trim());
     setLocalPayStatus("paid");
+    setUtrFieldVal(utrValue.trim());
     setUtrOpen(false);
     setUtrValue("");
     onAction && onAction(order.order_id, "refresh");
@@ -225,7 +295,9 @@ export default function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-utr`,
-        { utr_number: utrFieldVal },
+        {
+          utr_number: utrFieldVal,
+        },
       );
       toast.success("UTR number updated");
       setUtrFieldEditing(false);
@@ -235,9 +307,38 @@ export default function OrderLightbox({
     }
   };
 
-  const cycleDelivery = async (status) => {
-    await onAction(order.order_id, "update-delivery", status);
-    setDeliveryStatus(status);
+  // ── NEW: Save AWB manually ──
+  const saveAwbField = async () => {
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-awb`,
+        {
+          awb_number: awbFieldVal,
+        },
+      );
+      toast.success("AWB number updated");
+      setAwbFieldEditing(false);
+      onAction && onAction(order.order_id, "refresh");
+    } catch {
+      toast.error("Failed to update AWB number");
+    }
+  };
+
+  // ── NEW: Save Invoice Number manually ──
+  const saveInvoiceField = async () => {
+    try {
+      await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-invoice-number`,
+        {
+          invoice_number: invoiceFieldVal,
+        },
+      );
+      toast.success("Invoice number updated");
+      setInvoiceFieldEditing(false);
+      onAction && onAction(order.order_id, "refresh");
+    } catch {
+      toast.error("Failed to update invoice number");
+    }
   };
 
   const handleInvoice = () =>
@@ -257,7 +358,9 @@ export default function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-email`,
-        { email: emailValue.trim() },
+        {
+          email: emailValue.trim(),
+        },
       );
       toast.success("Email updated");
       setEmailEditing(false);
@@ -271,7 +374,9 @@ export default function OrderLightbox({
     try {
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-mobile`,
-        { mobile: mobileValue.trim() },
+        {
+          mobile: mobileValue.trim(),
+        },
       );
       toast.success("Mobile updated");
       setMobileEditing(false);
@@ -290,7 +395,10 @@ export default function OrderLightbox({
       }
       await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-item-price`,
-        { item_id: itemId, unit_price: newPrice },
+        {
+          item_id: itemId,
+          unit_price: newPrice,
+        },
       );
       toast.success("Price updated");
       setEditingItemId(null);
@@ -334,8 +442,83 @@ export default function OrderLightbox({
   };
 
   const cust = details?.customer || order.customer;
-  const currentInvoice = details?.invoice_number ?? order.invoice_number;
+  const currentInvoice =
+    invoiceFieldVal || details?.invoice_number || order.invoice_number;
   const currentOrderStatus = details?.order_status ?? localOrderStatus;
+
+  /* ── Reusable inline field renderer ── */
+  const InlineField = ({
+    label,
+    value,
+    editing,
+    onEdit,
+    onSave,
+    onCancel,
+    onChange,
+    mono = false,
+    placeholder = "",
+  }) => (
+    <div className="form-field">
+      <label className="form-label">{label}</label>
+      {editing ? (
+        <>
+          <input
+            className="form-input"
+            style={
+              mono ? { fontFamily: "'DM Mono',monospace", fontSize: 12.5 } : {}
+            }
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSave();
+              if (e.key === "Escape") onCancel();
+            }}
+            autoFocus
+          />
+          <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
+            <button
+              className="lb-btn lb-btn-primary lb-btn-sm"
+              onClick={onSave}
+            >
+              Save
+            </button>
+            <button
+              className="lb-btn lb-btn-secondary lb-btn-sm"
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <div
+          onClick={isFulfilled ? undefined : onEdit}
+          style={{
+            padding: "9px 11px",
+            background: "var(--surface2)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            fontSize: mono ? 12.5 : 13,
+            cursor: isFulfilled ? "default" : "pointer",
+            fontFamily: mono ? "'DM Mono',monospace" : "inherit",
+            color: value
+              ? mono
+                ? "var(--green)"
+                : "var(--text)"
+              : "var(--text3)",
+            minHeight: 40,
+            display: "flex",
+            alignItems: "center",
+            opacity: isFulfilled ? 0.7 : 1,
+          }}
+        >
+          {value ||
+            (isFulfilled ? "—" : `Click to add ${label.toLowerCase()}…`)}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -350,13 +533,23 @@ export default function OrderLightbox({
               <div className="lb-title">Order Details</div>
               <div className="lb-subtitle">{order.order_id}</div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              {/* Auto-derived lifecycle badge */}
+              <span className={`badge ${statusInfo.cls}`}>
+                {statusInfo.label}
+              </span>
               <PaymentBadge status={localPayStatus} />
-              <DeliveryBadge status={deliveryStatus} />
               {currentOrderStatus === "REJECTED" && (
                 <span className="badge badge-red">Rejected</span>
               )}
-              {order.awb_number && order.awb_number !== "To be assigned" && (
+              {awbFieldVal && awbFieldVal !== "To be assigned" && (
                 <span
                   style={{
                     fontFamily: "'DM Mono',monospace",
@@ -365,7 +558,7 @@ export default function OrderLightbox({
                     fontWeight: 600,
                   }}
                 >
-                  AWB: {order.awb_number}
+                  AWB: {awbFieldVal}
                 </span>
               )}
               <button className="lb-close" onClick={onClose}>
@@ -377,6 +570,7 @@ export default function OrderLightbox({
           <div className="lb-body">
             {/* ── LEFT COLUMN ── */}
             <div className="lb-section">
+              {/* Customer & Order */}
               <div>
                 <div className="lb-section-title">Customer & Order</div>
                 <div className="lb-info-grid">
@@ -407,13 +601,15 @@ export default function OrderLightbox({
                           <span style={{ fontFamily: "'DM Mono',monospace" }}>
                             {cust?.mobile || "—"}
                           </span>
-                          <span
-                            className="edit-icon"
-                            onClick={() => setMobileEditing(true)}
-                            title="Edit mobile"
-                          >
-                            ✏️
-                          </span>
+                          {!isFulfilled && (
+                            <span
+                              className="edit-icon"
+                              onClick={() => setMobileEditing(true)}
+                              title="Edit mobile"
+                            >
+                              ✏️
+                            </span>
+                          )}
                         </>
                       )}
                     </div>
@@ -440,13 +636,15 @@ export default function OrderLightbox({
                       ) : (
                         <>
                           <span>{cust?.email || "—"}</span>
-                          <span
-                            className="edit-icon"
-                            onClick={() => setEmailEditing(true)}
-                            title="Edit email"
-                          >
-                            ✏️
-                          </span>
+                          {!isFulfilled && (
+                            <span
+                              className="edit-icon"
+                              onClick={() => setEmailEditing(true)}
+                              title="Edit email"
+                            >
+                              ✏️
+                            </span>
+                          )}
                         </>
                       )}
                     </div>
@@ -498,7 +696,7 @@ export default function OrderLightbox({
                     style={{ display: "flex", alignItems: "center", gap: 8 }}
                   >
                     Delivery Address
-                    {addressMode === "view" && (
+                    {addressMode === "view" && !isFulfilled && (
                       <div style={{ display: "flex", gap: 6 }}>
                         <span
                           className="edit-icon"
@@ -599,10 +797,13 @@ export default function OrderLightbox({
                 </div>
               )}
 
-              {/* ── REMARKS + UTR ── */}
+              {/* ── NOTES: Remarks + UTR + AWB + Invoice Number ── */}
               <div>
-                <div className="lb-section-title">Notes</div>
-                <div className="remarks-utr-row">
+                <div className="lb-section-title">Notes & References</div>
+
+                {/* Row 1: Remarks + UTR */}
+                <div className="remarks-utr-row" style={{ marginBottom: 10 }}>
+                  {/* Remarks */}
                   <div className="form-field">
                     <label className="form-label">Remarks</label>
                     {remarksEditing ? (
@@ -630,78 +831,71 @@ export default function OrderLightbox({
                       </>
                     ) : (
                       <div
-                        onClick={() => setRemarksEditing(true)}
+                        onClick={
+                          isFulfilled
+                            ? undefined
+                            : () => setRemarksEditing(true)
+                        }
                         style={{
                           padding: "9px 11px",
                           background: "var(--surface2)",
                           border: "1px solid var(--border)",
                           borderRadius: "var(--radius)",
                           fontSize: 13,
-                          cursor: "pointer",
+                          cursor: isFulfilled ? "default" : "pointer",
                           color: remarksVal ? "var(--text)" : "var(--text3)",
                           minHeight: 54,
+                          opacity: isFulfilled ? 0.7 : 1,
                         }}
                       >
-                        {remarksVal || "Click to add a remark…"}
+                        {remarksVal ||
+                          (isFulfilled ? "—" : "Click to add a remark…")}
                       </div>
                     )}
                   </div>
-                  <div className="form-field">
-                    <label className="form-label">UTR / Ref No.</label>
-                    {utrFieldEditing ? (
-                      <>
-                        <input
-                          className="form-input"
-                          style={{
-                            fontFamily: "'DM Mono',monospace",
-                            fontSize: 12.5,
-                          }}
-                          value={utrFieldVal}
-                          onChange={(e) => setUtrFieldVal(e.target.value)}
-                          placeholder="Transaction reference…"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveUtrField();
-                            if (e.key === "Escape") setUtrFieldEditing(false);
-                          }}
-                          autoFocus
-                        />
-                        <div style={{ display: "flex", gap: 7, marginTop: 5 }}>
-                          <button
-                            className="lb-btn lb-btn-primary lb-btn-sm"
-                            onClick={saveUtrField}
-                          >
-                            Save
-                          </button>
-                          <button
-                            className="lb-btn lb-btn-secondary lb-btn-sm"
-                            onClick={() => setUtrFieldEditing(false)}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </>
-                    ) : (
-                      <div
-                        onClick={() => setUtrFieldEditing(true)}
-                        style={{
-                          padding: "9px 11px",
-                          background: "var(--surface2)",
-                          border: "1px solid var(--border)",
-                          borderRadius: "var(--radius)",
-                          fontSize: 12.5,
-                          cursor: "pointer",
-                          fontFamily: "'DM Mono',monospace",
-                          color: utrFieldVal ? "var(--green)" : "var(--text3)",
-                          minHeight: 54,
-                        }}
-                      >
-                        {utrFieldVal || "Click to add UTR…"}
-                      </div>
-                    )}
-                  </div>
+
+                  {/* UTR */}
+                  <InlineField
+                    label="UTR / Ref No."
+                    value={utrFieldVal}
+                    editing={utrFieldEditing}
+                    onEdit={() => setUtrFieldEditing(true)}
+                    onSave={saveUtrField}
+                    onCancel={() => setUtrFieldEditing(false)}
+                    onChange={setUtrFieldVal}
+                    mono
+                    placeholder="Transaction reference…"
+                  />
+                </div>
+
+                {/* Row 2: AWB + Invoice Number */}
+                <div className="remarks-utr-row">
+                  <InlineField
+                    label="AWB / Waybill No."
+                    value={awbFieldVal}
+                    editing={awbFieldEditing}
+                    onEdit={() => setAwbFieldEditing(true)}
+                    onSave={saveAwbField}
+                    onCancel={() => setAwbFieldEditing(false)}
+                    onChange={setAwbFieldVal}
+                    mono
+                    placeholder="Courier tracking number…"
+                  />
+                  <InlineField
+                    label="Invoice Number"
+                    value={invoiceFieldVal}
+                    editing={invoiceFieldEditing}
+                    onEdit={() => setInvoiceFieldEditing(true)}
+                    onSave={saveInvoiceField}
+                    onCancel={() => setInvoiceFieldEditing(false)}
+                    onChange={setInvoiceFieldVal}
+                    mono
+                    placeholder="e.g. INV-20240101-001…"
+                  />
                 </div>
               </div>
 
+              {/* UTR mark-paid box */}
               {localPayStatus !== "paid" && utrOpen && (
                 <div className="utr-box">
                   <label>Enter UTR / Transaction Reference Number</label>
@@ -744,13 +938,15 @@ export default function OrderLightbox({
                     }}
                   >
                     <span>Items ({details.items.length})</span>
-                    <button
-                      className="lb-btn lb-btn-secondary lb-btn-sm"
-                      onClick={() => setShowAddProduct((v) => !v)}
-                      style={{ fontSize: 11 }}
-                    >
-                      {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
-                    </button>
+                    {!isFulfilled && (
+                      <button
+                        className="lb-btn lb-btn-secondary lb-btn-sm"
+                        onClick={() => setShowAddProduct((v) => !v)}
+                        style={{ fontSize: 11 }}
+                      >
+                        {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
+                      </button>
+                    )}
                   </div>
                   <div className="lb-items-table-wrap">
                     <table className="lb-items-table">
@@ -760,7 +956,7 @@ export default function OrderLightbox({
                           <th>Qty</th>
                           <th>Unit Price</th>
                           <th>Total</th>
-                          <th></th>
+                          {!isFulfilled && <th></th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -772,7 +968,8 @@ export default function OrderLightbox({
                                 position: "relative",
                               }}
                             >
-                              {editingProductItemId === it.item_id ? (
+                              {!isFulfilled &&
+                              editingProductItemId === it.item_id ? (
                                 <div
                                   style={{
                                     display: "flex",
@@ -823,22 +1020,24 @@ export default function OrderLightbox({
                                   }}
                                 >
                                   <span>{it.product_name}</span>
-                                  <span
-                                    className="edit-icon"
-                                    onClick={() => {
-                                      setEditingProductItemId(it.item_id);
-                                      setSelectedProductForEdit(null);
-                                    }}
-                                    title="Edit product"
-                                  >
-                                    ✏️
-                                  </span>
+                                  {!isFulfilled && (
+                                    <span
+                                      className="edit-icon"
+                                      onClick={() => {
+                                        setEditingProductItemId(it.item_id);
+                                        setSelectedProductForEdit(null);
+                                      }}
+                                      title="Edit product"
+                                    >
+                                      ✏️
+                                    </span>
+                                  )}
                                 </div>
                               )}
                             </td>
                             <td>{it.quantity}</td>
                             <td>
-                              {editingItemId === it.item_id ? (
+                              {!isFulfilled && editingItemId === it.item_id ? (
                                 <input
                                   className="inline-edit-input"
                                   type="number"
@@ -868,56 +1067,70 @@ export default function OrderLightbox({
                                   }}
                                 >
                                   <span>{fmtCurrency(it.unit_price)}</span>
-                                  <span
-                                    className="edit-icon"
-                                    onClick={() => {
-                                      setEditingItemId(it.item_id);
-                                      setEditingPrice(it.unit_price);
-                                    }}
-                                    title="Edit price"
-                                  >
-                                    ✏️
-                                  </span>
+                                  {!isFulfilled && (
+                                    <span
+                                      className="edit-icon"
+                                      onClick={() => {
+                                        setEditingItemId(it.item_id);
+                                        setEditingPrice(it.unit_price);
+                                      }}
+                                      title="Edit price"
+                                    >
+                                      ✏️
+                                    </span>
+                                  )}
                                 </div>
                               )}
                             </td>
                             <td>{fmtCurrency(it.total_price)}</td>
-                            <td style={{ width: 32, textAlign: "center" }}>
-                              {confirmDeleteItemId === it.item_id ? (
-                                <div style={{ display: "flex", gap: 4 }}>
-                                  <button
-                                    className="lb-btn lb-btn-danger lb-btn-sm"
-                                    onClick={() => handleDeleteItem(it.item_id)}
-                                    style={{ padding: "2px 7px", fontSize: 11 }}
+                            {!isFulfilled && (
+                              <td style={{ width: 32, textAlign: "center" }}>
+                                {confirmDeleteItemId === it.item_id ? (
+                                  <div style={{ display: "flex", gap: 4 }}>
+                                    <button
+                                      className="lb-btn lb-btn-danger lb-btn-sm"
+                                      onClick={() =>
+                                        handleDeleteItem(it.item_id)
+                                      }
+                                      style={{
+                                        padding: "2px 7px",
+                                        fontSize: 11,
+                                      }}
+                                    >
+                                      Yes
+                                    </button>
+                                    <button
+                                      className="lb-btn lb-btn-secondary lb-btn-sm"
+                                      onClick={() =>
+                                        setConfirmDeleteItemId(null)
+                                      }
+                                      style={{
+                                        padding: "2px 7px",
+                                        fontSize: 11,
+                                      }}
+                                    >
+                                      No
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span
+                                    className="del-icon"
+                                    title="Remove item"
+                                    onClick={() =>
+                                      setConfirmDeleteItemId(it.item_id)
+                                    }
                                   >
-                                    Yes
-                                  </button>
-                                  <button
-                                    className="lb-btn lb-btn-secondary lb-btn-sm"
-                                    onClick={() => setConfirmDeleteItemId(null)}
-                                    style={{ padding: "2px 7px", fontSize: 11 }}
-                                  >
-                                    No
-                                  </button>
-                                </div>
-                              ) : (
-                                <span
-                                  className="del-icon"
-                                  title="Remove item"
-                                  onClick={() =>
-                                    setConfirmDeleteItemId(it.item_id)
-                                  }
-                                >
-                                  🗑
-                                </span>
-                              )}
-                            </td>
+                                    🗑
+                                  </span>
+                                )}
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                  {showAddProduct && (
+                  {showAddProduct && !isFulfilled && (
                     <AddProductPanel
                       orderId={order.order_id}
                       products={availableProducts}
@@ -942,15 +1155,17 @@ export default function OrderLightbox({
                       }}
                     >
                       <span>Items</span>
-                      <button
-                        className="lb-btn lb-btn-secondary lb-btn-sm"
-                        onClick={() => setShowAddProduct((v) => !v)}
-                        style={{ fontSize: 11 }}
-                      >
-                        {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
-                      </button>
+                      {!isFulfilled && (
+                        <button
+                          className="lb-btn lb-btn-secondary lb-btn-sm"
+                          onClick={() => setShowAddProduct((v) => !v)}
+                          style={{ fontSize: 11 }}
+                        >
+                          {showAddProduct ? "✕ Cancel" : "➕ Add Product"}
+                        </button>
+                      )}
                     </div>
-                    {showAddProduct && (
+                    {showAddProduct && !isFulfilled && (
                       <AddProductPanel
                         orderId={order.order_id}
                         products={availableProducts}
@@ -961,7 +1176,7 @@ export default function OrderLightbox({
                   </div>
                 )}
 
-              {/* Serial status badge */}
+              {/* ── SERIAL STATUS BADGE ── */}
               {details?.serial_status && (
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                   <div className="lb-section-title" style={{ marginBottom: 0 }}>
@@ -971,7 +1186,71 @@ export default function OrderLightbox({
                 </div>
               )}
 
-              {/* Serial entry panel */}
+              {/* ── SERIAL NUMBERS READ VIEW (Point 4) ── */}
+              {details?.serial_items?.length > 0 && !serialOpen && (
+                <div>
+                  <div className="lb-section-title">
+                    Assigned Serial Numbers
+                  </div>
+                  <div
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {details.serial_items.map(
+                      (item) =>
+                        item.serials?.length > 0 && (
+                          <div
+                            key={item.item_id}
+                            style={{
+                              padding: "10px 12px",
+                              borderBottom: "1px solid var(--border)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                color: "var(--text2)",
+                                marginBottom: 6,
+                              }}
+                            >
+                              {item.product_name}
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: 6,
+                              }}
+                            >
+                              {item.serials.map((sn, i) => (
+                                <span
+                                  key={i}
+                                  style={{
+                                    fontFamily: "'DM Mono',monospace",
+                                    fontSize: 11,
+                                    background: "var(--surface2)",
+                                    border: "1px solid var(--border)",
+                                    borderRadius: 5,
+                                    padding: "2px 8px",
+                                    color: "var(--text)",
+                                  }}
+                                >
+                                  {sn}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ),
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Serial entry / edit panel */}
               {serialOpen && (
                 <div
                   style={{
@@ -1051,54 +1330,50 @@ export default function OrderLightbox({
 
           {/* ── ACTION BAR ── */}
           <div className="lb-actions">
-            {localPayStatus !== "paid" ? (
-              <button
-                className="lb-btn lb-btn-success"
-                onClick={() => setUtrOpen((v) => !v)}
-              >
-                💳 Mark as Paid
-              </button>
-            ) : (
-              <span className="badge badge-green" style={{ fontSize: 11.5 }}>
-                ✓ Payment Received
-              </span>
+            {!isFulfilled && (
+              <>
+                {localPayStatus !== "paid" ? (
+                  <button
+                    className="lb-btn lb-btn-success"
+                    onClick={() => setUtrOpen((v) => !v)}
+                  >
+                    💳 Mark as Paid
+                  </button>
+                ) : (
+                  <span
+                    className="badge badge-green"
+                    style={{ fontSize: 11.5 }}
+                  >
+                    ✓ Payment Received
+                  </span>
+                )}
+
+                <button
+                  className="lb-btn lb-btn-secondary"
+                  onClick={
+                    serialOpen ? () => setSerialOpen(false) : openSerials
+                  }
+                  disabled={serialLoading}
+                >
+                  {serialLoading ? "…" : "🔢 Serials"}
+                </button>
+
+                <InvoiceButton
+                  orderId={order.order_id}
+                  invoiceNumber={order.invoice_number}
+                  detailsInvoice={currentInvoice}
+                  onGenerate={handleInvoice}
+                  loading={invoiceLoading}
+                  orderStatus={currentOrderStatus}
+                />
+              </>
             )}
 
-            <select
-              value={deliveryStatus}
-              onChange={(e) => cycleDelivery(e.target.value)}
-              style={{
-                padding: "7px 11px",
-                border: "1px solid var(--border2)",
-                borderRadius: "var(--radius)",
-                fontFamily: "inherit",
-                fontSize: 12.5,
-                background: "var(--surface)",
-                cursor: "pointer",
-              }}
-            >
-              <option value="NOT_SHIPPED">Not Shipped</option>
-              <option value="SHIPPED">Shipped</option>
-              <option value="READY">Ready</option>
-              <option value="COMPLETED">Completed</option>
-            </select>
-
-            <button
-              className="lb-btn lb-btn-secondary"
-              onClick={serialOpen ? () => setSerialOpen(false) : openSerials}
-              disabled={serialLoading}
-            >
-              {serialLoading ? "…" : "🔢 Serials"}
-            </button>
-
-            <InvoiceButton
-              orderId={order.order_id}
-              invoiceNumber={order.invoice_number}
-              detailsInvoice={currentInvoice}
-              onGenerate={handleInvoice}
-              loading={invoiceLoading}
-              orderStatus={currentOrderStatus}
-            />
+            {isFulfilled && (
+              <span className="badge badge-green" style={{ fontSize: 12 }}>
+                🔒 Order Fulfilled — editing disabled
+              </span>
+            )}
 
             <button
               className="lb-btn lb-btn-orange"
@@ -1115,31 +1390,35 @@ export default function OrderLightbox({
 
             <div style={{ flex: 1 }} />
 
-            {confirmReject ? (
-              <>
-                <span style={{ fontSize: 12, color: "var(--red)" }}>
-                  Reject this order?
-                </span>
-                <button className="lb-btn lb-btn-danger" onClick={handleReject}>
-                  Yes, Reject
-                </button>
-                <button
-                  className="lb-btn lb-btn-secondary"
-                  onClick={() => setConfirmReject(false)}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              currentOrderStatus !== "REJECTED" && (
-                <button
-                  className="lb-btn lb-btn-danger"
-                  onClick={() => setConfirmReject(true)}
-                >
-                  ⛔ Reject
-                </button>
-              )
-            )}
+            {!isFulfilled &&
+              (confirmReject ? (
+                <>
+                  <span style={{ fontSize: 12, color: "var(--red)" }}>
+                    Reject this order?
+                  </span>
+                  <button
+                    className="lb-btn lb-btn-danger"
+                    onClick={handleReject}
+                  >
+                    Yes, Reject
+                  </button>
+                  <button
+                    className="lb-btn lb-btn-secondary"
+                    onClick={() => setConfirmReject(false)}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                currentOrderStatus !== "REJECTED" && (
+                  <button
+                    className="lb-btn lb-btn-danger"
+                    onClick={() => setConfirmReject(true)}
+                  >
+                    ⛔ Reject
+                  </button>
+                )
+              ))}
           </div>
         </div>
       </div>

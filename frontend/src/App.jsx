@@ -29,30 +29,30 @@ import CustomerForm from "./components/forms/CustomerForm";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-// How many orders to fetch per batch. Larger = fewer round trips.
-const PAGE_SIZE = 300;
+// Orders per page — larger pages = fewer round-trips = faster total load.
+// 500 is safe for MySQL + FastAPI; bump to 1000 if your server handles it.
+const PAGE_SIZE = 500;
+
+// How many pages to fetch in parallel after the first page arrives.
+// 3 concurrent requests saturates a typical HTTP/1.1 connection pool without
+// overwhelming the DB. Increase to 4–5 if you use HTTP/2 or a connection pool
+// with more headroom.
+const PARALLEL_PAGES = 3;
 
 export default function App() {
   const { isLoaded, isSignedIn } = useAuth();
 
   // ── Orders state ──────────────────────────────────────────────────────────
   const [orders, setOrders] = useState([]);
-
-  // true only during the very first fetch after a filter change
   const [isInitialLoading, setIsInitialLoading] = useState(true);
-
-  // true while background pages are still streaming in
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-
-  // total row estimate from /count endpoint (optional, for progress hint)
   const [totalEstimate, setTotalEstimate] = useState(null);
-
   const [syncing, setSyncing] = useState(false);
 
+  // ── New unified filter shape (matches updated SearchBar) ──────────────────
   const [filters, setFilters] = useState({
     search: "",
-    payment_status: "",
-    delivery_status: "",
+    quick_status: "", // "payment_pending" | "shipping_pending" | "serial_pending" | "invoice_pending" | "complete" | ""
     channel: "",
     date_from: "",
     date_to: "",
@@ -71,8 +71,6 @@ export default function App() {
   const [selectedAddressId, setSelectedAddressId] = useState(null);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
 
-  const refreshTimer = useRef(null);
-
   // Keep a ref to the current fetch run so stale async chains can abort
   const fetchRunRef = useRef(0);
 
@@ -88,19 +86,27 @@ export default function App() {
     "device-entry": "Bulk Device In/Out",
   }[activePage];
 
-  // ── Core fetch: streams ALL pages, then clears the loading flags ONCE ─────
+  // ── Core fetch: page 0 + parallel remaining pages ─────────────────────────
   //
-  // Strategy:
-  //   1. Mark isInitialLoading=true  → BootScreen shows
-  //   2. Fetch page 0               → setOrders (replaces stale data)
-  //   3. Mark isInitialLoading=false, isLoadingMore=true
-  //      → BootScreen still shows because OrdersTable checks BOTH flags
-  //   4. Stream remaining pages     → accumulate in a local array, then
-  //      do ONE setOrders call at the end so React never re-renders mid-stream
-  //   5. Mark isLoadingMore=false   → table appears, fully loaded, zero flicker
+  // SPEED IMPROVEMENTS vs original sequential approach:
   //
+  // 1. PAGE_SIZE bumped 300 → 500: fewer pages to fetch, fewer round-trips.
+  //
+  // 2. Count and page-0 fire in PARALLEL (Promise.allSettled) instead of
+  //    sequentially — saves one full network round-trip before first render.
+  //
+  // 3. Remaining pages fetched CONCURRENTLY in sliding windows of PARALLEL_PAGES
+  //    instead of one-at-a-time. For 30k orders at 500/page = 60 pages total:
+  //      • Old: 60 sequential requests ≈ 60 × RTT overhead
+  //      • New: ceil(60/3) = 20 parallel batches ≈ 20 × RTT overhead
+  //    This alone is a 3× reduction in elapsed streaming time.
+  //
+  // 4. State is set once per parallel batch (not per page) to reduce re-renders.
+  //
+  // The API-level filters (channel, date_from, date_to) are still passed through.
+  // quick_status / search remain client-side only.
+  // ─────────────────────────────────────────────────────────────────────────
   const fetchAllOrders = useCallback(async (activeFilters) => {
-    // Stamp this run; any previous run that's still awaiting will bail out
     const run = ++fetchRunRef.current;
 
     setIsInitialLoading(true);
@@ -108,114 +114,146 @@ export default function App() {
     setOrders([]);
     setTotalEstimate(null);
 
-    // Fire a fast count query in parallel so the boot screen can show
-    // a realistic total (non-blocking — we don't await it before fetching)
-    api
-      .get("/orders/count", { params: activeFilters })
-      .then((r) => {
-        if (fetchRunRef.current === run)
-          setTotalEstimate(r.data?.count ?? null);
-      })
-      .catch(() => {});
+    // Build API-level params (omit client-side-only fields)
+    const apiParams = {
+      channel: activeFilters.channel || undefined,
+      date_from: activeFilters.date_from || undefined,
+      date_to: activeFilters.date_to || undefined,
+    };
 
-    try {
-      // ── Page 0 ──
-      const first = await api.get("/orders", {
-        params: { ...activeFilters, limit: PAGE_SIZE, offset: 0 },
-      });
-      if (fetchRunRef.current !== run) return; // stale, abort
+    // ── Fire count + page-0 in parallel ──────────────────────────────────
+    const [countResult, page0Result] = await Promise.allSettled([
+      api.get("/orders/count", { params: apiParams }),
+      api.get("/orders", {
+        params: { ...apiParams, limit: PAGE_SIZE, offset: 0 },
+      }),
+    ]);
 
-      const firstBatch = first.data || [];
-      const accumulated = [...firstBatch];
+    if (fetchRunRef.current !== run) return;
 
-      // Switch: initial done, background streaming starts
-      // Both flags are set in one synchronous block so React batches them
-      // and the BootScreen condition (isBusy = initial || loadingMore) stays
-      // true without a gap — the table never flashes.
+    // Apply count hint
+    if (countResult.status === "fulfilled") {
+      setTotalEstimate(countResult.value.data?.count ?? null);
+    }
+
+    // If page-0 failed, bail out
+    if (page0Result.status === "rejected") {
+      console.error("fetchAllOrders page-0 error:", page0Result.reason);
       setIsInitialLoading(false);
+      return;
+    }
 
-      if (firstBatch.length < PAGE_SIZE) {
-        // Got everything in one page — done
-        setOrders(accumulated);
-        setIsLoadingMore(false);
-        return;
-      }
+    const firstBatch = page0Result.value.data || [];
+    setIsInitialLoading(false);
 
-      setIsLoadingMore(true);
+    // All data arrived in one page — done
+    if (firstBatch.length < PAGE_SIZE) {
+      setOrders(firstBatch);
+      setIsLoadingMore(false);
+      return;
+    }
 
-      // ── Remaining pages ──
-      let offset = PAGE_SIZE;
-      while (true) {
-        if (fetchRunRef.current !== run) return; // filter changed, abort
+    setIsLoadingMore(true);
 
-        const res = await api.get("/orders", {
-          params: { ...activeFilters, limit: PAGE_SIZE, offset },
-        });
-        if (fetchRunRef.current !== run) return;
+    // ── Remaining pages — concurrent sliding window ───────────────────────
+    // We don't know total pages upfront, so we fetch PARALLEL_PAGES at a
+    // time, stop when any page returns fewer than PAGE_SIZE rows.
+    const accumulated = [...firstBatch];
+    let offset = PAGE_SIZE;
+    let done = false;
 
-        const batch = res.data || [];
-        accumulated.push(...batch);
-
-        // Update the count hint so the boot screen shows progress
-        // (We update orders here too so if the parent ever un-gates early
-        //  it shows real data — currently kept behind the boot screen)
-        setOrders([...accumulated]);
-
-        if (batch.length < PAGE_SIZE) break; // last page
-        offset += PAGE_SIZE;
-      }
-
+    while (!done) {
       if (fetchRunRef.current !== run) return;
 
-      // Final single commit — marks the table as ready
-      setOrders(accumulated);
-    } catch (err) {
-      console.error("fetchAllOrders error:", err);
-      if (fetchRunRef.current === run) {
-        setIsInitialLoading(false);
+      // Build a batch of up to PARALLEL_PAGES concurrent requests
+      const batch = [];
+      for (let i = 0; i < PARALLEL_PAGES; i++) {
+        batch.push(
+          api
+            .get("/orders", {
+              params: {
+                ...apiParams,
+                limit: PAGE_SIZE,
+                offset: offset + i * PAGE_SIZE,
+              },
+            })
+            .then((r) => ({ ok: true, data: r.data || [], pageIndex: i }))
+            .catch((err) => ({ ok: false, err, pageIndex: i })),
+        );
       }
-    } finally {
+
+      const results = await Promise.all(batch);
+      if (fetchRunRef.current !== run) return;
+
+      // Merge results in page-index order to keep created_at DESC ordering
+      for (const result of results) {
+        if (!result.ok) {
+          console.error("fetchAllOrders page error:", result.err);
+          done = true;
+          break;
+        }
+        accumulated.push(...result.data);
+        if (result.data.length < PAGE_SIZE) {
+          done = true;
+          break;
+        }
+      }
+
+      offset += PARALLEL_PAGES * PAGE_SIZE;
+
+      // Single state update per batch — much fewer re-renders
       if (fetchRunRef.current === run) {
-        setIsLoadingMore(false);
+        setOrders([...accumulated]);
       }
     }
-  }, []); // no deps — receives filters as argument to avoid stale closures
 
-  // Re-fetch whenever filters or page changes
+    if (fetchRunRef.current !== run) return;
+    setOrders(accumulated);
+    setIsLoadingMore(false);
+  }, []);
+
+  // Re-fetch when API-level filters or page change
+  // quick_status / search are client-side so DON'T trigger a re-fetch
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return;
     if (activePage !== "orders") return;
     fetchAllOrders(filters);
-  }, [filters, activePage, isLoaded, isSignedIn, fetchAllOrders]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    // Only API-level filter fields trigger a re-fetch
+    filters.channel,
+    filters.date_from,
+    filters.date_to,
+    activePage,
+    isLoaded,
+    isSignedIn,
+    fetchAllOrders,
+  ]);
 
-  // ── Background refresh (lightweight, doesn't affect loading flags) ────────
-  const backgroundRefresh = useCallback(async () => {
-    try {
-      const res = await api.get("/orders", {
-        params: { limit: PAGE_SIZE, offset: 0 },
-      });
-      // Merge only the first page silently — keeps the list fresh
-      // without triggering the boot screen
-      setOrders((prev) => {
-        const updated = res.data || [];
-        const updatedIds = new Set(updated.map((o) => o.order_id));
-        // Replace updated rows, keep the rest
-        const merged = prev.map((o) =>
-          updatedIds.has(o.order_id)
-            ? updated.find((u) => u.order_id === o.order_id)
-            : o,
-        );
-        return merged;
-      });
-    } catch (err) {
-      console.error("backgroundRefresh error:", err);
-    }
+  // ── Delta / optimistic merge ──────────────────────────────────────────────
+  const handleOrdersUpdate = useCallback((changedOrders) => {
+    setOrders((prev) => {
+      const map = new Map(prev.map((o) => [o.order_id, o]));
+      const newEntries = [];
+
+      for (const changed of changedOrders) {
+        if (map.has(changed.order_id)) {
+          map.set(changed.order_id, {
+            ...map.get(changed.order_id),
+            ...changed,
+          });
+        } else {
+          newEntries.push(changed);
+        }
+      }
+
+      if (newEntries.length === 0) {
+        return Array.from(map.values());
+      }
+
+      return [...newEntries, ...Array.from(map.values())];
+    });
   }, []);
-
-  const scheduleBackgroundRefresh = useCallback(() => {
-    clearTimeout(refreshTimer.current);
-    refreshTimer.current = setTimeout(backgroundRefresh, 1200);
-  }, [backgroundRefresh]);
 
   // ── Dropdowns ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -265,93 +303,131 @@ export default function App() {
     }
   };
 
-  // ── Local optimistic update ───────────────────────────────────────────────
-  const updateOrderLocal = (id, updater) => {
-    setOrders((prev) =>
-      prev.map((o) => (o.order_id === id ? { ...o, ...updater(o) } : o)),
-    );
-  };
-
   // ── Action handler ────────────────────────────────────────────────────────
   const handleAction = async (orderId, action, payload) => {
     try {
-      if (action === "mark-paid-utr") {
-        updateOrderLocal(orderId, () => ({
-          payment_status: "paid",
-          utr_number: payload,
-        }));
-        await api.put(`/orders/${encodeURIComponent(orderId)}/mark-paid-utr`, {
-          utr_number: payload,
-        });
-        scheduleBackgroundRefresh();
-        return;
-      }
+      switch (action) {
+        // ── Payment ──
+        case "mark-paid":
+          await api.put(`/orders/${encodeURIComponent(orderId)}/mark-paid`);
+          break;
 
-      if (action === "update-delivery") {
-        updateOrderLocal(orderId, () => ({ delivery_status: payload }));
-        await api.put(
-          `/orders/${encodeURIComponent(orderId)}/update-delivery`,
-          {
-            status: payload,
-          },
-        );
-        scheduleBackgroundRefresh();
-        return;
-      }
+        case "mark-paid-utr":
+          await api.put(
+            `/orders/${encodeURIComponent(orderId)}/mark-paid-utr`,
+            {
+              utr_number: payload,
+            },
+          );
+          break;
 
-      if (action === "toggle-payment") {
-        updateOrderLocal(orderId, (o) => ({
-          payment_status: o.payment_status === "paid" ? "pending" : "paid",
-        }));
-        await api.put(`/orders/${encodeURIComponent(orderId)}/toggle-payment`);
-        scheduleBackgroundRefresh();
-        return;
-      }
+        case "toggle-payment":
+          await api.put(
+            `/orders/${encodeURIComponent(orderId)}/toggle-payment`,
+          );
+          break;
 
-      if (action === "create-invoice") {
-        setInvoiceLoading((prev) => ({ ...prev, [orderId]: true }));
-        try {
-          await api.post(`/zoho/invoice/${encodeURIComponent(orderId)}`);
-          alert("✅ Invoice created successfully");
-          scheduleBackgroundRefresh();
-        } catch (err) {
-          console.error(err);
-          alert("❌ Invoice creation failed");
-        } finally {
-          setInvoiceLoading((prev) => ({ ...prev, [orderId]: false }));
-        }
-        return;
-      }
+        // ── Delivery ──
+        case "update-delivery":
+          await api.put(
+            `/orders/${encodeURIComponent(orderId)}/update-delivery`,
+            {
+              status: payload,
+            },
+          );
+          break;
 
-      if (action === "download-invoice") {
-        window.open(
-          `${API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`,
-        );
-        return;
-      }
+        case "mark-fulfilled":
+          await api.put(
+            `/orders/${encodeURIComponent(orderId)}/mark-fulfilled`,
+          );
+          break;
 
-      if (action === "update-remarks") {
-        updateOrderLocal(orderId, () => ({ remarks: payload }));
-        await api.put(`/orders/${encodeURIComponent(orderId)}/remarks`, {
-          remarks: payload,
-        });
-        scheduleBackgroundRefresh();
-        return;
-      }
+        case "mark-delhivery":
+          await api.put(
+            `/orders/${encodeURIComponent(orderId)}/mark-delhivery`,
+            {
+              awb: payload,
+            },
+          );
+          break;
 
-      if (action === "serial-status-updated") {
-        updateOrderLocal(orderId, () => ({ serial_status: payload }));
-        return;
-      }
+        // ── AWB / Invoice number ──
+        case "update-awb":
+          await api.put(`/orders/${encodeURIComponent(orderId)}/update-awb`, {
+            awb_number: payload,
+          });
+          break;
 
-      if (action === "delete-order") {
-        if (!window.confirm("Delete this order?")) return;
-        await api.delete(`/orders/${encodeURIComponent(orderId)}`);
-        setOrders((prev) => prev.filter((o) => o.order_id !== orderId));
-        return;
+        case "update-invoice-number":
+          await api.put(
+            `/orders/${encodeURIComponent(orderId)}/update-invoice-number`,
+            { invoice_number: payload },
+          );
+          break;
+
+        // ── Invoice create (Zoho) ──
+        case "create-invoice":
+          setInvoiceLoading((prev) => ({ ...prev, [orderId]: true }));
+          try {
+            const res = await api.post(
+              `/zoho/invoice/${encodeURIComponent(orderId)}`,
+            );
+            alert("✅ Invoice created successfully");
+            if (res.data?.invoice_number) {
+              handleOrdersUpdate([
+                { order_id: orderId, invoice_number: res.data.invoice_number },
+              ]);
+            }
+          } catch (err) {
+            console.error(err);
+            alert("❌ Invoice creation failed");
+          } finally {
+            setInvoiceLoading((prev) => ({ ...prev, [orderId]: false }));
+          }
+          return;
+
+        // ── Download ──
+        case "download-invoice":
+          window.open(
+            `${API_URL}/zoho/orders/${encodeURIComponent(orderId)}/invoice/print`,
+          );
+          return;
+
+        // ── Remarks ──
+        case "update-remarks":
+          await api.put(`/orders/${encodeURIComponent(orderId)}/remarks`, {
+            remarks: payload,
+          });
+          break;
+
+        // ── Serial status ──
+        case "serial-status-updated":
+          handleOrdersUpdate([{ order_id: orderId, serial_status: payload }]);
+          return;
+
+        // ── Reject ──
+        case "reject":
+          await api.put(`/orders/${encodeURIComponent(orderId)}/reject`);
+          break;
+
+        // ── Delete ──
+        case "delete-order":
+          if (!window.confirm("Delete this order?")) return;
+          await api.delete(`/orders/${encodeURIComponent(orderId)}`);
+          setOrders((prev) => prev.filter((o) => o.order_id !== orderId));
+          return;
+
+        // ── Refresh ──
+        case "refresh":
+          return;
+
+        default:
+          console.warn("Unknown action:", action);
+          return;
       }
     } catch (err) {
-      console.error(err);
+      console.error(`Action "${action}" failed for ${orderId}:`, err);
       alert("❌ Action failed");
     }
   };
@@ -372,9 +448,6 @@ export default function App() {
     }
     setCustomerModalOpen(false);
   };
-
-  // ── Derived count shown in the boot screen ────────────────────────────────
-  const loadedCount = orders.length;
 
   // ── UI ────────────────────────────────────────────────────────────────────
   return (
@@ -448,18 +521,14 @@ export default function App() {
 
                 <SearchBar filters={filters} setFilters={setFilters} />
 
-                {/*
-                  OrdersTable is ALWAYS mounted while on the orders page.
-                  It owns the boot screen internally — no CircularProgress
-                  wrapper here, which was the main source of flicker.
-                */}
                 <OrdersTable
                   orders={orders}
                   filters={filters}
                   onAction={handleAction}
+                  onOrdersUpdate={handleOrdersUpdate}
                   isInitialLoading={isInitialLoading}
                   isLoadingMore={isLoadingMore}
-                  loadedCount={loadedCount}
+                  loadedCount={orders.length}
                   totalEstimate={totalEstimate}
                   invoiceLoading={invoiceLoading}
                 />
