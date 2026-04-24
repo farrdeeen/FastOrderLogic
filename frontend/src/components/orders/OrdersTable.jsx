@@ -43,76 +43,178 @@ function useVirtualRows(rows) {
   };
 }
 
-/* ─── Skeleton loader ────────────────────────── */
-const SKEL_COLS = [110, "13%", 108, 90, 52, 88, 78, "10%", "17%", 90, 88];
-const SKEL_ROW_WIDTHS = [
-  [70, "80%", 80, 60, 20, 55, 48, 52, 110, 58, 52],
-  [80, "65%", 80, 60, 20, 60, 56, 52, 80, 58, 62],
-  [72, "75%", 80, 60, 20, 50, 48, 52, 130, 58, 40],
-  [68, "70%", 80, 60, 20, 58, 56, 52, 90, 58, 52],
-  [78, "60%", 80, 60, 20, 54, 48, 52, 110, 58, 62],
-  [74, "72%", 80, 60, 20, 52, 56, 52, 100, 58, 48],
-  [80, "68%", 80, 60, 20, 60, 48, 52, 120, 58, 56],
-  [70, "78%", 80, 60, 20, 56, 56, 52, 85, 58, 44],
-];
+/* ─── Boot / Splash screen ───────────────────────
+   Shown while ALL pages are still streaming in.
+   Replaced by the real table only once isLoadingMore
+   AND isInitialLoading are both false.
+   ─────────────────────────────────────────────── */
+const BOOT_STYLES = `
+  @keyframes bt-bar {
+    0%   { width: 0% }
+    15%  { width: 22% }
+    35%  { width: 45% }
+    55%  { width: 62% }
+    75%  { width: 80% }
+    90%  { width: 91% }
+    100% { width: 100% }
+  }
+  @keyframes bt-fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes bt-pulse-dot {
+    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+    40%           { opacity: 1;   transform: scale(1.2); }
+  }
+  @keyframes bt-spin-ring {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes bt-count-up {
+    from { opacity: 0.4; }
+    to   { opacity: 1; }
+  }
 
-function TableSkeleton({ loadedCount = 0, totalEstimate = null }) {
+  .bt-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f4f5f7;
+    z-index: 900;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .bt-card {
+    background: #ffffff;
+    border: 1px solid #e4e7ec;
+    border-radius: 16px;
+    padding: 40px 48px;
+    box-shadow: 0 20px 24px -4px rgba(16,24,40,.08), 0 8px 8px -4px rgba(16,24,40,.03);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    min-width: 340px;
+    animation: bt-fade-in 0.3s ease both;
+  }
+  .bt-icon-ring {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 3px solid #e4e7ec;
+    border-top-color: #1570ef;
+    animation: bt-spin-ring 0.9s linear infinite;
+  }
+  .bt-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #101828;
+    text-align: center;
+    line-height: 1.4;
+  }
+  .bt-subtitle {
+    font-size: 12.5px;
+    color: #98a2b3;
+    text-align: center;
+    margin-top: -18px;
+    font-family: 'DM Mono', monospace;
+  }
+  .bt-bar-track {
+    width: 260px;
+    height: 4px;
+    background: #e4e7ec;
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .bt-bar-fill {
+    height: 100%;
+    border-radius: 99px;
+    background: linear-gradient(90deg, #1570ef 0%, #60a5fa 100%);
+    animation: bt-bar var(--bt-duration, 8s) cubic-bezier(.4,0,.2,1) both;
+    will-change: width;
+  }
+  .bt-dots {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .bt-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #1570ef;
+    animation: bt-pulse-dot 1.4s ease-in-out infinite;
+  }
+  .bt-dot:nth-child(2) { animation-delay: 0.2s; }
+  .bt-dot:nth-child(3) { animation-delay: 0.4s; }
+  .bt-count {
+    font-size: 13px;
+    color: #475467;
+    font-family: 'DM Mono', monospace;
+    animation: bt-count-up 0.3s ease;
+  }
+  .bt-count strong {
+    color: #101828;
+    font-weight: 700;
+  }
+`;
+
+function injectBootStyles() {
+  if (document.getElementById("bt-styles")) return;
+  const s = document.createElement("style");
+  s.id = "bt-styles";
+  s.textContent = BOOT_STYLES;
+  document.head.appendChild(s);
+}
+
+function BootScreen({ loadedCount, totalEstimate, durationHint }) {
+  injectBootStyles();
+
+  /* Estimate a sensible bar animation duration:
+     if we already know total, pace it to ~that many ms per order
+     otherwise fall back to a slow 10s crawl */
+  const dur = durationHint
+    ? `${Math.max(3, Math.min(durationHint, 15))}s`
+    : "10s";
+
+  const pct =
+    totalEstimate && loadedCount
+      ? Math.min(Math.round((loadedCount / totalEstimate) * 100), 95)
+      : null;
+
   return (
-    <div className="ot-skeleton-wrap">
-      {/* animated top bar */}
-      <div className="ot-skeleton-loading-bar" />
+    <div className="bt-overlay">
+      <div className="bt-card">
+        <div className="bt-icon-ring" />
 
-      {/* fake header */}
-      <div className="ot-skeleton-header">
-        {[
-          "Order ID",
-          "Customer",
-          "Mobile",
-          "Date",
-          "Qty",
-          "Amount",
-          "Channel",
-          "Payment",
-          "Delivery",
-          "Fulfillment",
-          "Invoice",
-        ].map((label) => (
-          <div
-            key={label}
-            className="ot-skeleton-header-cell"
-            style={{ width: 60 + label.length * 3 }}
-          />
-        ))}
-      </div>
-
-      {/* fake rows */}
-      {SKEL_ROW_WIDTHS.map((widths, ri) => (
-        <div
-          key={ri}
-          className="ot-skeleton-row"
-          style={{ animationDelay: `${ri * 0.06}s` }}
-        >
-          {widths.map((w, ci) =>
-            ci === 7 || ci === 8 ? (
-              /* badge-shaped skeletons for payment / delivery */
-              <div
-                key={ci}
-                className="ot-skeleton-badge"
-                style={{ width: ci === 8 ? 90 : 58 }}
-              />
-            ) : (
-              <div key={ci} className="ot-skeleton-cell" style={{ width: w }} />
-            ),
-          )}
+        <div>
+          <div className="bt-title">Loading your orders…</div>
+          <div className="bt-subtitle" style={{ marginTop: 4 }}>
+            Please wait while we fetch everything
+          </div>
         </div>
-      ))}
 
-      {/* status line */}
-      <div className="ot-skeleton-status">
-        <div className="ot-skeleton-spinner" />
-        {loadedCount > 0
-          ? `Loaded ${loadedCount.toLocaleString()} orders${totalEstimate ? ` of ~${totalEstimate.toLocaleString()}` : ""}…`
-          : "Fetching orders…"}
+        <div
+          className="bt-bar-track"
+          title={pct != null ? `${pct}% loaded` : "Loading…"}
+        >
+          <div className="bt-bar-fill" style={{ "--bt-duration": dur }} />
+        </div>
+
+        {loadedCount > 0 ? (
+          <div className="bt-count" key={loadedCount}>
+            <strong>{loadedCount.toLocaleString()}</strong>
+            {totalEstimate
+              ? ` / ~${totalEstimate.toLocaleString()} orders`
+              : " orders loaded so far…"}
+          </div>
+        ) : (
+          <div className="bt-dots">
+            <span className="bt-dot" />
+            <span className="bt-dot" />
+            <span className="bt-dot" />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -126,9 +228,9 @@ export default function OrdersTable({
   onLoadMore,
   hasMore = true,
   isLoadingMore = false,
-  isInitialLoading = false, // ← NEW: true while first fetch is in flight
-  loadedCount = 0, // ← NEW: how many orders have arrived so far
-  totalEstimate = null, // ← NEW: optional total hint (e.g. from a count endpoint)
+  isInitialLoading = false,
+  loadedCount = 0,
+  totalEstimate = null,
   invoiceLoading = {},
 }) {
   injectStyles();
@@ -137,6 +239,19 @@ export default function OrdersTable({
   const [detailsCache, setDetailsCache] = useState({});
   const [loadingDetails, setLoadingDetails] = useState({});
   const [pushedAwbs, setPushedAwbs] = useState({});
+
+  /* ── Show boot screen while data is still streaming ──
+     We only switch to the real table once BOTH flags are false.
+     This prevents any flickering — the table appears exactly once,
+     fully loaded. */
+  const isBusy = isInitialLoading || isLoadingMore;
+
+  /* Estimate bar duration from total / rate */
+  const durationHint = useMemo(() => {
+    if (!totalEstimate) return null;
+    /* Assume ~300 orders/second as a rough throughput guess */
+    return Math.round(totalEstimate / 300);
+  }, [totalEstimate]);
 
   /* ── Client-side filter ── */
   const filtered = useMemo(() => {
@@ -251,48 +366,24 @@ export default function OrdersTable({
     [detailsCache],
   );
 
-  /* ── Show skeleton while initial load is in progress and no rows yet ── */
-  if (isInitialLoading && orders.length === 0) {
+  /* ── Boot screen: shown until ALL pages have arrived ── */
+  if (isBusy) {
     return (
-      <div className="ot-wrap">
+      <>
         <ToastContainer />
-        <TableSkeleton
+        <BootScreen
           loadedCount={loadedCount}
           totalEstimate={totalEstimate}
+          durationHint={durationHint}
         />
-      </div>
+      </>
     );
   }
 
+  /* ── Fully loaded: render table ── */
   return (
     <div className="ot-wrap">
       <ToastContainer />
-
-      {/* Thin progress bar while background pages are still loading */}
-      {isLoadingMore && (
-        <div style={{ marginBottom: 6 }}>
-          <div
-            className="ot-skeleton-loading-bar"
-            style={{ borderRadius: 4, height: 2 }}
-          />
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--text3)",
-              marginTop: 4,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            <span
-              className="ot-skeleton-spinner"
-              style={{ width: 10, height: 10, borderWidth: 1.5 }}
-            />
-            Loading more orders in background…
-          </div>
-        </div>
-      )}
 
       <div className="ot-table-wrap">
         {deduped.length === 0 ? (
@@ -434,11 +525,6 @@ export default function OrdersTable({
                 Loading more rows…
               </div>
             )}
-            {!hasMoreVirtual && hasMore && (
-              <div className="ot-load-more">
-                {isLoadingMore ? "Loading more orders…" : " "}
-              </div>
-            )}
           </>
         )}
       </div>
@@ -447,11 +533,6 @@ export default function OrdersTable({
         Showing {Math.min(visibleRows.length, deduped.length)} of{" "}
         {deduped.length} filtered
         {orders.length !== deduped.length ? ` (${orders.length} total)` : ""}
-        {isLoadingMore && (
-          <span style={{ marginLeft: 8, color: "var(--accent)" }}>
-            · fetching more…
-          </span>
-        )}
       </div>
 
       {activeOrder && (

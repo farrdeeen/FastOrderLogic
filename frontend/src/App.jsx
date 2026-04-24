@@ -3,7 +3,7 @@ import { SignedIn, SignedOut, SignIn, UserButton } from "@clerk/clerk-react";
 import { useEffect, useRef, useState, useCallback } from "react";
 import api from "./api/axiosInstance";
 import { useAuth } from "@clerk/clerk-react";
-import OrdersTable from "./components/OrdersTable";
+import OrdersTable from "./components/orders";
 import SearchBar from "./components/SearchBar";
 import CreateOrderForm from "./components/CreateOrderForm";
 import NavDrawer from "./components/NavDrawer";
@@ -29,11 +29,24 @@ import CustomerForm from "./components/forms/CustomerForm";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
+// How many orders to fetch per batch. Larger = fewer round trips.
+const PAGE_SIZE = 300;
+
 export default function App() {
-  // ---------------- STATE ----------------
   const { isLoaded, isSignedIn } = useAuth();
+
+  // ── Orders state ──────────────────────────────────────────────────────────
   const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
+
+  // true only during the very first fetch after a filter change
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // true while background pages are still streaming in
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  // total row estimate from /count endpoint (optional, for progress hint)
+  const [totalEstimate, setTotalEstimate] = useState(null);
+
   const [syncing, setSyncing] = useState(false);
 
   const [filters, setFilters] = useState({
@@ -46,33 +59,24 @@ export default function App() {
   });
 
   const [activePage, setActivePage] = useState("orders");
-
-  const PAGE_SIZE = 50;
-
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-
   const [invoiceLoading, setInvoiceLoading] = useState({});
 
-  // dropdown data
+  // dropdown / form state
   const [productList, setProductList] = useState([]);
   const [customerList, setCustomerList] = useState([]);
   const [statesList, setStatesList] = useState([]);
-
-  // selections
   const [selectedProduct, setSelectedProduct] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState("");
   const [addressList, setAddressList] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState(null);
-
-  // modals
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
 
-  // background refresh
   const refreshTimer = useRef(null);
 
-  // ---------------- FILTER HELPERS ----------------
+  // Keep a ref to the current fetch run so stale async chains can abort
+  const fetchRunRef = useRef(0);
+
+  // ── Filter helpers ────────────────────────────────────────────────────────
   const customerFilter = createFilterOptions({
     stringify: (o) => `${o.name} ${o.type} ${o.mobile ?? ""}`.toLowerCase(),
   });
@@ -84,78 +88,128 @@ export default function App() {
     "device-entry": "Bulk Device In/Out",
   }[activePage];
 
-  // ---------------- FETCH ORDERS ----------------
-  const fetchOrders = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await api.get("/orders", {
-        params: {
-          ...filters,
-          limit: PAGE_SIZE,
-          offset: 0,
-        },
-      });
-      const data = res.data || [];
-      setOrders(data);
-      setOffset(data.length);
-      setHasMore(data.length === PAGE_SIZE);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  }, [filters]);
+  // ── Core fetch: streams ALL pages, then clears the loading flags ONCE ─────
+  //
+  // Strategy:
+  //   1. Mark isInitialLoading=true  → BootScreen shows
+  //   2. Fetch page 0               → setOrders (replaces stale data)
+  //   3. Mark isInitialLoading=false, isLoadingMore=true
+  //      → BootScreen still shows because OrdersTable checks BOTH flags
+  //   4. Stream remaining pages     → accumulate in a local array, then
+  //      do ONE setOrders call at the end so React never re-renders mid-stream
+  //   5. Mark isLoadingMore=false   → table appears, fully loaded, zero flicker
+  //
+  const fetchAllOrders = useCallback(async (activeFilters) => {
+    // Stamp this run; any previous run that's still awaiting will bail out
+    const run = ++fetchRunRef.current;
 
-  const loadMoreOrders = useCallback(async () => {
-    if (!hasMore || loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const res = await api.get("/orders", {
-        params: {
-          ...filters,
-          limit: PAGE_SIZE,
-          offset,
-        },
-      });
-      const data = res.data || [];
-      setOrders((prev) => [...prev, ...data]);
-      setOffset((prev) => prev + data.length);
-      setHasMore(data.length === PAGE_SIZE);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [filters, hasMore, loadingMore, offset]);
+    setIsInitialLoading(true);
+    setIsLoadingMore(false);
+    setOrders([]);
+    setTotalEstimate(null);
 
+    // Fire a fast count query in parallel so the boot screen can show
+    // a realistic total (non-blocking — we don't await it before fetching)
+    api
+      .get("/orders/count", { params: activeFilters })
+      .then((r) => {
+        if (fetchRunRef.current === run)
+          setTotalEstimate(r.data?.count ?? null);
+      })
+      .catch(() => {});
+
+    try {
+      // ── Page 0 ──
+      const first = await api.get("/orders", {
+        params: { ...activeFilters, limit: PAGE_SIZE, offset: 0 },
+      });
+      if (fetchRunRef.current !== run) return; // stale, abort
+
+      const firstBatch = first.data || [];
+      const accumulated = [...firstBatch];
+
+      // Switch: initial done, background streaming starts
+      // Both flags are set in one synchronous block so React batches them
+      // and the BootScreen condition (isBusy = initial || loadingMore) stays
+      // true without a gap — the table never flashes.
+      setIsInitialLoading(false);
+
+      if (firstBatch.length < PAGE_SIZE) {
+        // Got everything in one page — done
+        setOrders(accumulated);
+        setIsLoadingMore(false);
+        return;
+      }
+
+      setIsLoadingMore(true);
+
+      // ── Remaining pages ──
+      let offset = PAGE_SIZE;
+      while (true) {
+        if (fetchRunRef.current !== run) return; // filter changed, abort
+
+        const res = await api.get("/orders", {
+          params: { ...activeFilters, limit: PAGE_SIZE, offset },
+        });
+        if (fetchRunRef.current !== run) return;
+
+        const batch = res.data || [];
+        accumulated.push(...batch);
+
+        // Update the count hint so the boot screen shows progress
+        // (We update orders here too so if the parent ever un-gates early
+        //  it shows real data — currently kept behind the boot screen)
+        setOrders([...accumulated]);
+
+        if (batch.length < PAGE_SIZE) break; // last page
+        offset += PAGE_SIZE;
+      }
+
+      if (fetchRunRef.current !== run) return;
+
+      // Final single commit — marks the table as ready
+      setOrders(accumulated);
+    } catch (err) {
+      console.error("fetchAllOrders error:", err);
+      if (fetchRunRef.current === run) {
+        setIsInitialLoading(false);
+      }
+    } finally {
+      if (fetchRunRef.current === run) {
+        setIsLoadingMore(false);
+      }
+    }
+  }, []); // no deps — receives filters as argument to avoid stale closures
+
+  // Re-fetch whenever filters or page changes
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return;
     if (activePage !== "orders") return;
-    setOffset(0);
-    setHasMore(true);
-    fetchOrders();
-  }, [filters, activePage, isLoaded, isSignedIn]); // fetchOrders intentionally excluded — it would cause a loop since it depends on filters too
+    fetchAllOrders(filters);
+  }, [filters, activePage, isLoaded, isSignedIn, fetchAllOrders]);
 
-  // ================= BACKGROUND PREFETCH =================
-  useEffect(() => {
-    if (activePage !== "orders") return;
-    if (!hasMore) return;
-    if (loadingMore) return;
-    if (loading) return;
-
-    const timer = setTimeout(() => {
-      loadMoreOrders();
-    }, 800);
-
-    return () => clearTimeout(timer);
-  }, [activePage, hasMore, loadingMore, loading, loadMoreOrders]);
-
-  // ---------------- BACKGROUND REFRESH ----------------
+  // ── Background refresh (lightweight, doesn't affect loading flags) ────────
   const backgroundRefresh = useCallback(async () => {
-    const res = await api.get("/orders", {
-      params: { limit: PAGE_SIZE, offset: 0 },
-    });
-    setOrders(res.data || []);
+    try {
+      const res = await api.get("/orders", {
+        params: { limit: PAGE_SIZE, offset: 0 },
+      });
+      // Merge only the first page silently — keeps the list fresh
+      // without triggering the boot screen
+      setOrders((prev) => {
+        const updated = res.data || [];
+        const updatedIds = new Set(updated.map((o) => o.order_id));
+        // Replace updated rows, keep the rest
+        const merged = prev.map((o) =>
+          updatedIds.has(o.order_id)
+            ? updated.find((u) => u.order_id === o.order_id)
+            : o,
+        );
+        return merged;
+      });
+    } catch (err) {
+      console.error("backgroundRefresh error:", err);
+    }
   }, []);
 
   const scheduleBackgroundRefresh = useCallback(() => {
@@ -163,7 +217,7 @@ export default function App() {
     refreshTimer.current = setTimeout(backgroundRefresh, 1200);
   }, [backgroundRefresh]);
 
-  // ---------------- DROPDOWNS ----------------
+  // ── Dropdowns ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (activePage !== "create-order") return;
     api
@@ -175,7 +229,7 @@ export default function App() {
     api.get("/states/list").then((r) => setStatesList(r.data || []));
   }, [activePage]);
 
-  // ---------------- CUSTOMER → ADDRESS ----------------
+  // ── Customer → Address ────────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedCustomer) {
       setAddressList([]);
@@ -195,7 +249,7 @@ export default function App() {
       });
   }, [selectedCustomer]);
 
-  // ---------------- SYNC WIX ----------------
+  // ── Sync Wix ──────────────────────────────────────────────────────────────
   const handleSyncWix = async () => {
     try {
       setSyncing(true);
@@ -203,7 +257,7 @@ export default function App() {
       alert(
         `Wix Sync Completed\nInserted: ${res.data.inserted}\nSkipped: ${res.data.skipped}`,
       );
-      fetchOrders();
+      fetchAllOrders(filters);
     } catch {
       alert("❌ Wix sync failed");
     } finally {
@@ -211,14 +265,14 @@ export default function App() {
     }
   };
 
-  // ---------------- LOCAL UPDATE ----------------
+  // ── Local optimistic update ───────────────────────────────────────────────
   const updateOrderLocal = (id, updater) => {
     setOrders((prev) =>
       prev.map((o) => (o.order_id === id ? { ...o, ...updater(o) } : o)),
     );
   };
 
-  // ---------------- ACTION HANDLER ----------------
+  // ── Action handler ────────────────────────────────────────────────────────
   const handleAction = async (orderId, action, payload) => {
     try {
       if (action === "mark-paid-utr") {
@@ -307,7 +361,7 @@ export default function App() {
     setActivePage(section);
   };
 
-  // ---------------- CUSTOMER CREATE ----------------
+  // ── Customer create ───────────────────────────────────────────────────────
   const refreshCustomersAfterCreate = async () => {
     const res = await api.get("/dropdowns/customers/list");
     const list = res.data || [];
@@ -319,7 +373,10 @@ export default function App() {
     setCustomerModalOpen(false);
   };
 
-  // ---------------- UI ----------------
+  // ── Derived count shown in the boot screen ────────────────────────────────
+  const loadedCount = orders.length;
+
+  // ── UI ────────────────────────────────────────────────────────────────────
   return (
     <>
       {/* ================= SIGNED OUT ================= */}
@@ -389,22 +446,23 @@ export default function App() {
                   Bulk in Out
                 </Button>
 
-                {/* SearchBar owns the toolbar UI; filters flow down to OrdersTable */}
                 <SearchBar filters={filters} setFilters={setFilters} />
 
-                {loading ? (
-                  <CircularProgress sx={{ mt: 4 }} />
-                ) : (
-                  <OrdersTable
-                    orders={orders}
-                    filters={filters}
-                    onAction={handleAction}
-                    onLoadMore={loadMoreOrders}
-                    hasMore={hasMore}
-                    isLoadingMore={loadingMore}
-                    invoiceLoading={invoiceLoading}
-                  />
-                )}
+                {/*
+                  OrdersTable is ALWAYS mounted while on the orders page.
+                  It owns the boot screen internally — no CircularProgress
+                  wrapper here, which was the main source of flicker.
+                */}
+                <OrdersTable
+                  orders={orders}
+                  filters={filters}
+                  onAction={handleAction}
+                  isInitialLoading={isInitialLoading}
+                  isLoadingMore={isLoadingMore}
+                  loadedCount={loadedCount}
+                  totalEstimate={totalEstimate}
+                  invoiceLoading={invoiceLoading}
+                />
               </Box>
             </Fade>
 
@@ -505,7 +563,7 @@ export default function App() {
                 <CreateOrderForm
                   onOrderCreated={() => {
                     setActivePage("orders");
-                    fetchOrders();
+                    fetchAllOrders(filters);
                   }}
                   selectedCustomer={selectedCustomer}
                   selectedProduct={selectedProduct}
