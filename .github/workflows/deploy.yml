@@ -21,45 +21,38 @@ jobs:
             echo "Connected to HOST"
 
             ssh -o StrictHostKeyChecking=no mtmdash@192.168.1.60 "
-              set -e
+                set -e
 
-              echo 'Inside VM'
+                echo 'Inside VM'
 
-              cd /var/www/FastOrderLogic
+                cd /var/www/FastOrderLogic
 
-              # 🔥 Always sync cleanly
-              git fetch origin
-              git reset --hard origin/main
-              git clean -fd
+                # 🔥 Inject token into remote (non-interactive)
+                git remote set-url origin https://${{ secrets.GIT_TOKEN }}@github.com/Faquib/mtm-fol.git
 
-              echo 'Repo synced'
+                git fetch origin
+                git reset --hard origin/main
+                git clean -fd
 
-              # -----------------------------
-              # FRONTEND
-              # -----------------------------
-              cd frontend
+                echo 'Repo synced'
 
-              npm install
-              npm run build -- --mode production
+                # FRONTEND
+                cd frontend
+                npm install
+                npm run build -- --mode production
 
-              echo 'Frontend built'
+                echo 'Frontend built'
 
-              # -----------------------------
-              # BACKEND
-              # -----------------------------
-              cd ../backend
+                # BACKEND
+                cd ../backend
+                source venv/bin/activate
+                pip install -r requirements.txt
 
-              source venv/bin/activate
-              pip install -r requirements.txt
+                sudo systemctl restart fastorderlogic-backend
 
-              sudo systemctl restart fastorderlogic-backend
+                echo 'Backend restarted'
 
-              echo 'Backend restarted'
+                sudo systemctl reload apache2
 
-              # -----------------------------
-              # APACHE RELOAD
-              # -----------------------------
-              sudo systemctl reload apache2
-
-              echo 'Deployment complete'
+                echo 'Deployment complete'
             "
