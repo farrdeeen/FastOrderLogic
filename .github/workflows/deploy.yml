@@ -1,0 +1,59 @@
+name: Deploy FastOrderLogic
+
+on:
+  push:
+    branches:
+      - main # or your branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to Host → VM
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST_IP }}
+          username: ${{ secrets.HOST_USER }}
+          key: ${{ secrets.HOST_SSH_KEY }}
+          script: |
+
+            echo "Connected to HOST"
+
+            ssh -o StrictHostKeyChecking=no mtmdash@192.168.1.60 << 'EOF'
+
+              echo "Inside VM"
+
+              # -----------------------------
+              # FRONTEND
+              # -----------------------------
+              cd /var/www/FastOrderLogic/frontend
+
+              git pull origin main
+              npm install
+              npm run build --mode production
+
+              echo "Frontend built (served from dist)"
+
+              # -----------------------------
+              # BACKEND
+              # -----------------------------
+              cd /var/www/FastOrderLogic/backend
+
+              git pull origin main
+
+              source venv/bin/activate
+              pip install -r requirements.txt
+
+              sudo systemctl restart fastapi
+
+              echo "Backend restarted"
+
+              # -----------------------------
+              # APACHE RELOAD (safe)
+              # -----------------------------
+              sudo systemctl reload apache2
+
+              echo "Deployment complete"
+
+            EOF
