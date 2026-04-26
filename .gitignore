@@ -4,6 +4,7 @@
 
 # Environment files (DO NOT COMMIT)
 .env
+.env.production
 backend/.env
 frontend/.env
 

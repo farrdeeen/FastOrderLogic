@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 from routes import orders
@@ -10,6 +13,8 @@ from routes import states
 from routes.wix_sync import start_wix_auto_sync
 from routes.device_transactions import router as device_transactions_router
 from routes.delhivery import router as delhivery_router
+from routes import chat as chat_router
+from routes import webhook as webhook_router
 
 
 app = FastAPI(title="FastOrderLogic Backend")
@@ -31,6 +36,8 @@ app.include_router(customers.router)
 app.include_router(states.router)
 app.include_router(device_transactions_router)
 app.include_router(delhivery_router)
+app.include_router(chat_router.router)
+app.include_router(webhook_router.router)
 
 @app.get("/")
 def home():

@@ -1,3 +1,4 @@
+import asyncio
 from email.mime import base
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from database import SessionLocal
 from models import Order
 from sqlalchemy import Table, MetaData
+from services.chat_service import notify_order_created, notify_order_shipped
 
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -221,7 +223,7 @@ def _row_to_dict(row):
 # CREATE ORDER
 # ================================
 @router.post("/create")
-def create_order(data: OrderCreate, db: Session = Depends(get_db)):
+async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     if not data.address_id:
         raise HTTPException(status_code=400, detail="Address not selected")
 
@@ -276,6 +278,29 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         """), {"item_id": item_id, "order_id": order_id, "product_id": it.product_id})
 
     db.commit()
+
+    # ── WhatsApp notification (non-blocking) ──────────────────────────────
+    try:
+        phone = None
+        address_line = ""
+        if data.customer_id:
+            cust = db.execute(text("SELECT mobile FROM customer WHERE customer_id = :cid"), {"cid": data.customer_id}).first()
+        elif data.offline_customer_id:
+            cust = db.execute(text("SELECT mobile FROM offline_customer WHERE customer_id = :cid"), {"cid": data.offline_customer_id}).first()
+        else:
+            cust = None
+        if cust:
+            phone = cust.mobile
+        addr = db.execute(text("SELECT address_line, city, pincode FROM address WHERE address_id = :aid"), {"aid": data.address_id}).first()
+        if addr:
+            address_line = f"{addr.address_line}, {addr.city} — {addr.pincode}"
+        if phone:
+            asyncio.create_task(notify_order_created(db, phone, order_id, address_line))
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("WA notify_order_created failed: %s", exc)
+    # ── END WhatsApp hook ─────────────────────────────────────────────────
+
     return {"success": True, "order_id": order_id}
 
 
@@ -1058,7 +1083,7 @@ def reject_order(order_id: str, db: Session = Depends(get_db)):
 # UPDATE AWB NUMBER MANUALLY
 # ================================
 @router.put("/{order_id}/update-awb")
-def update_awb_number(order_id: str, payload: AWBUpdate, db: Session = Depends(get_db)):
+async def update_awb_number(order_id: str, payload: AWBUpdate, db: Session = Depends(get_db)):
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -1069,6 +1094,26 @@ def update_awb_number(order_id: str, payload: AWBUpdate, db: Session = Depends(g
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
+
+    # ── WhatsApp notification (non-blocking) ──────────────────────────────
+    if awb:
+        try:
+            phone = None
+            if order.customer_id:
+                cust = db.execute(text("SELECT mobile FROM customer WHERE customer_id = :cid"), {"cid": order.customer_id}).first()
+            elif order.offline_customer_id:
+                cust = db.execute(text("SELECT mobile FROM offline_customer WHERE customer_id = :cid"), {"cid": order.offline_customer_id}).first()
+            else:
+                cust = None
+            if cust:
+                phone = cust.mobile
+            if phone:
+                asyncio.create_task(notify_order_shipped(db, phone, order_id, awb))
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("WA notify_order_shipped failed: %s", exc)
+    # ── END WhatsApp hook ─────────────────────────────────────────────────
+
     return {
         "success": True,
         "order_id": order_id,
