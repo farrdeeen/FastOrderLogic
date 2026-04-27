@@ -307,7 +307,6 @@ export default function OrderLightbox({
     }
   };
 
-  // ── NEW: Save AWB manually ──
   const saveAwbField = async () => {
     try {
       await api.put(
@@ -324,7 +323,6 @@ export default function OrderLightbox({
     }
   };
 
-  // ── NEW: Save Invoice Number manually ──
   const saveInvoiceField = async () => {
     try {
       await api.put(
@@ -343,6 +341,10 @@ export default function OrderLightbox({
 
   const handleInvoice = () =>
     onAction && onAction(order.order_id, "create-invoice");
+
+  // ── Print invoice — opens the Zoho PDF in a new tab ──
+  const handlePrintInvoice = () =>
+    onAction && onAction(order.order_id, "download-invoice");
 
   const saveRemarks = async () => {
     try {
@@ -445,6 +447,16 @@ export default function OrderLightbox({
   const currentInvoice =
     invoiceFieldVal || details?.invoice_number || order.invoice_number;
   const currentOrderStatus = details?.order_status ?? localOrderStatus;
+
+  // Whether a printable Zoho invoice exists.
+  // We check the invoice number is a real value (not blank / "NA" / placeholder).
+  // We do NOT gate on invoice_id because it is typically not included in the
+  // orders list or lightbox details payload sent to the frontend.
+  const hasZohoInvoice = !!(
+    currentInvoice &&
+    currentInvoice.trim() !== "" &&
+    currentInvoice.trim().toUpperCase() !== "NA"
+  );
 
   /* ── Reusable inline field renderer ── */
   const InlineField = ({
@@ -1186,7 +1198,7 @@ export default function OrderLightbox({
                 </div>
               )}
 
-              {/* ── SERIAL NUMBERS READ VIEW (Point 4) ── */}
+              {/* ── SERIAL NUMBERS READ VIEW ── */}
               {details?.serial_items?.length > 0 && !serialOpen && (
                 <div>
                   <div className="lb-section-title">
@@ -1375,6 +1387,7 @@ export default function OrderLightbox({
               </span>
             )}
 
+            {/* ── POD buttons ── */}
             <button
               className="lb-btn lb-btn-orange"
               onClick={handlePrintOfflinePOD}
@@ -1387,6 +1400,33 @@ export default function OrderLightbox({
             >
               ⬇️ Download POD
             </button>
+
+            {/*
+              ── PRINT INVOICE ──
+              Only shown when a Zoho invoice has been generated for this order
+              (i.e. invoice_id is present on the order record). Calls the
+              /zoho/orders/{order_id}/invoice/print route which streams the PDF.
+            */}
+            {hasZohoInvoice && (
+              <button
+                className="lb-btn lb-btn-primary"
+                onClick={handlePrintInvoice}
+                title={`Print invoice ${currentInvoice}`}
+                style={{ display: "flex", alignItems: "center", gap: 5 }}
+              >
+                🧾 Print Invoice
+                <span
+                  style={{
+                    fontFamily: "'DM Mono',monospace",
+                    fontSize: 10,
+                    opacity: 0.8,
+                    fontWeight: 400,
+                  }}
+                >
+                  {currentInvoice}
+                </span>
+              </button>
+            )}
 
             <div style={{ flex: 1 }} />
 

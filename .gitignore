@@ -7,6 +7,7 @@
 .env.production
 backend/.env
 frontend/.env
+.zoho_tokens.json
 
 # Logs and debug files
 *.log
