@@ -1,7 +1,7 @@
 // src/chat/ChatInfoPanel.jsx
 import { useState } from "react";
 import { Box, Typography } from "@mui/material";
-import { resolveSession } from "./chatApi";
+import { resolveSession, sendOrderConfirmation } from "./chatApi";
 import { chatStyles, FLAG_ACTIONS, QUICK_REPLIES, avatarColor } from "./styles";
 
 // ── Small helper row ──────────────────────────────────────────────────────────
@@ -23,6 +23,162 @@ function PanelLabel({ children }) {
   );
 }
 
+// ── Order Confirmation Modal ──────────────────────────────────────────────────
+function OrderConfirmModal({ chat, onClose, onSent }) {
+  const [orderId, setOrderId] = useState(chat.linked_order_id || "");
+  const [amount, setAmount] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSend = async () => {
+    if (!orderId.trim() || !amount.trim()) {
+      setError("Order ID and amount are required.");
+      return;
+    }
+    setSending(true);
+    setError(null);
+    try {
+      await sendOrderConfirmation({
+        phone: chat.phone,
+        customerName: chat.name,
+        orderId: orderId.trim(),
+        amount: amount.trim(),
+        sessionId: chat.id,
+      });
+      onSent();
+      onClose();
+    } catch (err) {
+      setError(
+        err?.response?.data?.detail ||
+          "Failed to send. Check phone number and template approval.",
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Box
+      sx={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.35)",
+        zIndex: 1300,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      onClick={onClose}
+    >
+      <Box
+        sx={{
+          background: "var(--color-background-primary)",
+          borderRadius: "var(--border-radius-lg)",
+          border: "0.5px solid var(--color-border-secondary)",
+          padding: "20px",
+          width: 300,
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Typography sx={{ fontSize: 13, fontWeight: 500 }}>
+          Send order confirmation
+        </Typography>
+
+        <Typography sx={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+          Sends the approved <strong>order_confirmation</strong> WhatsApp
+          template to <strong>{chat.name}</strong> ({chat.phone}).
+        </Typography>
+
+        <Box sx={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <label style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+            Order ID
+          </label>
+          <input
+            value={orderId}
+            onChange={(e) => setOrderId(e.target.value)}
+            placeholder="e.g. ORD-1001"
+            style={{
+              fontSize: 12,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "0.5px solid var(--color-border-secondary)",
+              background: "var(--color-background-secondary)",
+              color: "var(--color-text-primary)",
+              outline: "none",
+            }}
+          />
+        </Box>
+
+        <Box sx={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <label style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+            Amount
+          </label>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="e.g. ₹999"
+            style={{
+              fontSize: 12,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "0.5px solid var(--color-border-secondary)",
+              background: "var(--color-background-secondary)",
+              color: "var(--color-text-primary)",
+              outline: "none",
+            }}
+          />
+        </Box>
+
+        {error && (
+          <Typography
+            sx={{ fontSize: 11, color: "var(--color-text-danger, #c0392b)" }}
+          >
+            {error}
+          </Typography>
+        )}
+
+        <Box sx={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+          <button
+            onClick={onClose}
+            style={{
+              fontSize: 12,
+              padding: "6px 14px",
+              borderRadius: 6,
+              border: "0.5px solid var(--color-border-secondary)",
+              background: "transparent",
+              color: "var(--color-text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSend}
+            disabled={sending}
+            style={{
+              fontSize: 12,
+              padding: "6px 14px",
+              borderRadius: 6,
+              border: "none",
+              background: sending
+                ? "var(--color-border-secondary)"
+                : "var(--color-text-info, #1a73e8)",
+              color: "#fff",
+              cursor: sending ? "not-allowed" : "pointer",
+              opacity: sending ? 0.7 : 1,
+            }}
+          >
+            {sending ? "Sending…" : "Send"}
+          </button>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ChatInfoPanel({
   chat,
@@ -32,6 +188,8 @@ export default function ChatInfoPanel({
 }) {
   const [resolving, setResolving] = useState(false);
   const [activeFlag, setActiveFlag] = useState(null);
+  const [showOrderModal, setShowOrderModal] = useState(false);
+  const [orderSentFor, setOrderSentFor] = useState(null); // session id of last sent
 
   // Keep local flag state in sync when chat changes
   const currentFlag = activeFlag ?? chat?.flag ?? null;
@@ -97,8 +255,19 @@ export default function ChatInfoPanel({
     }
   };
 
+  const alreadySentThisSession = orderSentFor === chat.id;
+
   return (
     <Box sx={{ ...chatStyles.panel, height: "100%" }}>
+      {/* ── Order Confirmation Modal ── */}
+      {showOrderModal && (
+        <OrderConfirmModal
+          chat={chat}
+          onClose={() => setShowOrderModal(false)}
+          onSent={() => setOrderSentFor(chat.id)}
+        />
+      )}
+
       {/* ── Customer info ── */}
       <Box sx={chatStyles.panelSection}>
         {/* Avatar + name */}
@@ -218,6 +387,35 @@ export default function ChatInfoPanel({
           </Typography>
         </Box>
       )}
+
+      {/* ── WhatsApp actions ── */}
+      <Box sx={chatStyles.panelSection}>
+        <PanelLabel>WhatsApp actions</PanelLabel>
+        <button
+          onClick={() => setShowOrderModal(true)}
+          disabled={alreadySentThisSession}
+          style={{
+            width: "100%",
+            fontSize: 12,
+            padding: "7px 12px",
+            borderRadius: 6,
+            border: "0.5px solid var(--color-border-secondary)",
+            background: alreadySentThisSession
+              ? "var(--color-background-secondary)"
+              : "var(--color-background-primary)",
+            color: alreadySentThisSession
+              ? "var(--color-text-tertiary)"
+              : "var(--color-text-primary)",
+            cursor: alreadySentThisSession ? "default" : "pointer",
+            textAlign: "left",
+            marginBottom: "6px",
+          }}
+        >
+          {alreadySentThisSession
+            ? "✓ Order confirmation sent"
+            : "📦 Send order confirmation"}
+        </button>
+      </Box>
 
       {/* ── Flag this chat ── */}
       <Box sx={chatStyles.panelSection}>

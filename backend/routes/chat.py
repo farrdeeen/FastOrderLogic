@@ -3,15 +3,18 @@ routers/chat.py
 ───────────────
 REST endpoints consumed by the React frontend dashboard.
 
-POST /chat/send                     — agent sends a manual message from dashboard
-GET  /chat/conversations            — list all sessions (for sidebar)
-GET  /chat/messages/{session_id}    — messages in a session (for chat window)
-POST /chat/sessions/{session_id}/resolve  — mark session resolved
+POST /chat/send                          — agent sends a manual message
+POST /chat/send-order-confirmation       — trigger order_confirmation template
+GET  /chat/conversations                 — list all sessions (sidebar)
+GET  /chat/messages/{session_id}         — messages in a session (chat window)
+POST /chat/sessions/{session_id}/resolve — mark session resolved
+GET  /chat/conversations/count           — total session count
 """
 
 import logging
 from datetime import datetime
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -20,7 +23,7 @@ from sqlalchemy import text
 from database import SessionLocal
 from auth.clerk_auth import get_current_user as require_user
 from services.chat_service import save_message, get_or_create_session
-from services.whatsapp_service import send_text_message
+from services.whatsapp_service import send_text_message, send_order_confirmation
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,18 @@ def get_db():
 class SendMessagePayload(BaseModel):
     session_id: int
     message: str
+
+
+class OrderConfirmationPayload(BaseModel):
+    """
+    Trigger the 'order_confirmation' WhatsApp template for a customer.
+    phone must be E.164 without '+', e.g. '919311886444'.
+    """
+    phone: str
+    customer_name: str
+    order_id: str
+    amount: str                  # e.g. "₹999"
+    session_id: Optional[int] = None   # if provided, message is saved to that session
 
 
 # ─── GET /chat/conversations ─────────────────────────────────────────────────
@@ -63,9 +78,9 @@ def list_conversations(
 
     if search:
         conditions.append("""(
-            cs.phone_number       LIKE :search OR
-            cs.wa_contact_name    LIKE :search OR
-            cs.last_message       LIKE :search
+            cs.phone_number    LIKE :search OR
+            cs.wa_contact_name LIKE :search OR
+            cs.last_message    LIKE :search
         )""")
         params["search"] = f"%{search}%"
 
@@ -81,7 +96,6 @@ def list_conversations(
             cs.status,
             cs.created_at,
             cs.updated_at,
-            -- unread count: messages from 'user' with no subsequent 'ai' reply
             (
                 SELECT COUNT(*) FROM chat_messages cm
                 WHERE cm.session_id = cs.id AND cm.sender = 'user'
@@ -109,7 +123,7 @@ def get_messages(
     before_id: Optional[int] = Query(None, description="Cursor for pagination"),
     db: Session = Depends(get_db),
 ):
-    """Return messages for a session, newest-first (frontend reverses for display)."""
+    """Return messages for a session, oldest-first."""
     params: dict = {"sid": session_id, "lim": limit}
     cursor_clause = ""
     if before_id:
@@ -137,10 +151,7 @@ async def send_message(
     _=Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Dashboard agent manually sends a WhatsApp message to a customer.
-    Saved as sender='ai' so it shows on the agent side.
-    """
+    """Dashboard agent manually sends a WhatsApp message to a customer."""
     session = db.execute(
         text("SELECT * FROM chat_sessions WHERE id = :sid"),
         {"sid": payload.session_id},
@@ -156,17 +167,81 @@ async def send_message(
 
     save_message(db, payload.session_id, "ai", msg)
 
-    # send WhatsApp in background
+    # Dispatch WhatsApp in background so the dashboard doesn't block
     background.add_task(_dispatch_wa, phone, msg)
 
     return {"success": True, "phone": phone}
 
 
-async def _dispatch_wa(phone: str, msg: str):
+async def _dispatch_wa(phone: str, msg: str) -> None:
     try:
         await send_text_message(phone, msg)
     except Exception:
         logger.exception("Failed to dispatch manual WA message to %s", phone)
+
+
+# ─── POST /chat/send-order-confirmation ──────────────────────────────────────
+
+@router.post("/send-order-confirmation")
+async def send_order_confirmation_endpoint(
+    payload: OrderConfirmationPayload,
+    background: BackgroundTasks,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Send the 'order_confirmation' WhatsApp template to a customer.
+    Can be called from the order management UI after an order is placed.
+
+    Example request body:
+    {
+        "phone": "919311886444",
+        "customer_name": "Ashfaq",
+        "order_id": "ORD-1001",
+        "amount": "₹999",
+        "session_id": 12          ← optional
+    }
+    """
+    # If a session_id is provided, log the template send in chat history
+    if payload.session_id:
+        session = db.execute(
+            text("SELECT id FROM chat_sessions WHERE id = :sid"),
+            {"sid": payload.session_id},
+        ).fetchone()
+        if session:
+            save_message(
+                db, payload.session_id, "system",
+                f"[template:order_confirmation] {payload.customer_name} / {payload.order_id} / {payload.amount}",
+                meta={
+                    "flow": "order_confirmation_template",
+                    "order_id": payload.order_id,
+                },
+            )
+
+    background.add_task(
+        _dispatch_order_confirmation,
+        payload.phone,
+        payload.customer_name,
+        payload.order_id,
+        payload.amount,
+    )
+
+    return {"success": True, "phone": payload.phone, "order_id": payload.order_id}
+
+
+async def _dispatch_order_confirmation(
+    phone: str, customer_name: str, order_id: str, amount: str
+) -> None:
+    try:
+        await send_order_confirmation(
+            to=phone,
+            customer_name=customer_name,
+            order_id=order_id,
+            amount=amount,
+        )
+        logger.info("order_confirmation template sent to %s for %s", phone, order_id)
+    except Exception:
+        logger.exception("Failed to send order_confirmation template to %s", phone)
 
 
 # ─── POST /chat/sessions/{session_id}/resolve ────────────────────────────────
@@ -193,7 +268,7 @@ def count_conversations(
     status: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    q = "SELECT COUNT(*) FROM chat_sessions"
+    q      = "SELECT COUNT(*) FROM chat_sessions"
     params = {}
     if status:
         q += " WHERE status = :status"

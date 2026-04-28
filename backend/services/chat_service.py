@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from services.ai_service import generate_reply, extract_order_json, is_address_confirmed
-from services.whatsapp_service import send_text_message
+from services.whatsapp_service import (
+    send_text_message,
+    send_order_confirmation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +50,16 @@ def get_or_create_session(db: Session, phone: str, contact_name: str = "") -> di
     return dict(row._mapping)
 
 
-def save_message(db: Session, session_id: int, sender: str,
-                 message: str, wa_message_id: Optional[str] = None,
-                 meta: Optional[dict] = None) -> int:
+def save_message(
+    db: Session,
+    session_id: int,
+    sender: str,
+    message: str,
+    wa_message_id: Optional[str] = None,
+    meta: Optional[dict] = None,
+) -> int:
     import json as _json
+
     result = db.execute(
         text("""
             INSERT INTO chat_messages (session_id, wa_message_id, sender, message, meta, timestamp)
@@ -67,7 +76,6 @@ def save_message(db: Session, session_id: int, sender: str,
     )
     db.commit()
 
-    # update session last_message
     db.execute(
         text("""
             UPDATE chat_sessions
@@ -81,7 +89,7 @@ def save_message(db: Session, session_id: int, sender: str,
 
 
 def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> list[dict]:
-    """Return last `limit` messages formatted for OpenRouter (role / content)."""
+    """Return last `limit` messages formatted for the LLM (role / content)."""
     rows = db.execute(
         text("""
             SELECT sender, message FROM chat_messages
@@ -93,7 +101,7 @@ def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> l
     ).fetchall()
 
     history = []
-    for r in reversed(rows):  # oldest-first for the LLM
+    for r in reversed(rows):   # oldest-first for the LLM
         role = "user" if r.sender == "user" else "assistant"
         history.append({"role": role, "content": r.message})
     return history
@@ -120,7 +128,7 @@ async def handle_inbound_message(
       6. Send reply via WhatsApp
       7. Return AI reply text
     """
-    session = get_or_create_session(db, phone, contact_name)
+    session    = get_or_create_session(db, phone, contact_name)
     session_id = session["id"]
 
     # ── dedup: ignore if we already processed this WA message ──
@@ -138,7 +146,7 @@ async def handle_inbound_message(
 
     # ── build history & call AI ──
     history = get_conversation_history(db, session_id, limit=18)
-    # remove last entry — it's the user message we just saved, will be passed separately
+    # drop last entry — it's the user msg we just saved, passed separately below
     if history and history[-1]["role"] == "user":
         history = history[:-1]
 
@@ -169,26 +177,63 @@ async def handle_inbound_message(
 # Outbound helpers  (called by order router hooks)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def notify_order_created(db: Session, phone: str, order_id: str, address_line: str = "") -> None:
-    """Send order-created notification + ask for address confirmation."""
-    session = get_or_create_session(db, phone)
+async def notify_order_created(
+    db: Session,
+    phone: str,
+    order_id: str,
+    customer_name: str = "",
+    amount: str = "",
+    address_line: str = "",
+) -> None:
+    """
+    Send order-confirmation via the approved WA template, then follow up
+    with a plain-text address-confirmation ask.
+
+    Parameters
+    ----------
+    customer_name : used as template param 1  (e.g. "Ashfaq")
+    order_id      : used as template param 2  (e.g. "ORD-1001")
+    amount        : used as template param 3  (e.g. "₹999")
+    address_line  : shown in the follow-up plain-text nudge
+    """
+    session    = get_or_create_session(db, phone)
     session_id = session["id"]
 
-    body = (
-        f"🛒 *Order Created* — `{order_id}`\n\n"
-        f"Delivery address on file:\n_{address_line}_\n\n"
-        "Please reply *YES* to confirm, or send your corrected address."
-    )
-    save_message(db, session_id, "system", body, meta={"order_id": order_id, "flow": "address_confirm"})
+    # 1️⃣  Send the approved template (works even before 24-h window opens)
     try:
-        await send_text_message(phone, body)
+        await send_order_confirmation(
+            to=phone,
+            customer_name=customer_name or "Customer",
+            order_id=order_id,
+            amount=amount or "—",
+        )
+        save_message(
+            db, session_id, "system",
+            f"[template:order_confirmation] customer={customer_name} order={order_id} amount={amount}",
+            meta={"order_id": order_id, "flow": "order_confirmation_template"},
+        )
     except Exception as exc:
-        logger.error("notify_order_created failed for %s: %s", phone, exc)
+        logger.error("notify_order_created template failed for %s: %s", phone, exc)
+
+    # 2️⃣  If we have an address, ask for confirmation in a plain-text follow-up
+    if address_line:
+        body = (
+            f"📦 Delivery address on file:\n_{address_line}_\n\n"
+            "Reply *YES* to confirm, or send your corrected address."
+        )
+        save_message(
+            db, session_id, "system", body,
+            meta={"order_id": order_id, "flow": "address_confirm"},
+        )
+        try:
+            await send_text_message(phone, body)
+        except Exception as exc:
+            logger.error("notify_order_created address nudge failed for %s: %s", phone, exc)
 
 
 async def notify_order_shipped(db: Session, phone: str, order_id: str, awb: str) -> None:
     """Send dispatch notification."""
-    session = get_or_create_session(db, phone)
+    session    = get_or_create_session(db, phone)
     session_id = session["id"]
 
     body = (

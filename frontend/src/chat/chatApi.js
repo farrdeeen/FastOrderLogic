@@ -33,11 +33,30 @@ export async function fetchMessages(
   return res.data || [];
 }
 
-// POST /chat/send
+// POST /chat/send  (plain text — manual agent message)
 export async function sendChatMessage(sessionId, message) {
   const res = await api.post("/chat/send", {
     session_id: sessionId,
     message,
+  });
+  return res.data;
+}
+
+// POST /chat/send-order-confirmation  (sends the approved WA template)
+// phone must be E.164 without '+', e.g. "919311886444"
+export async function sendOrderConfirmation({
+  phone,
+  customerName,
+  orderId,
+  amount,
+  sessionId = null,
+}) {
+  const res = await api.post("/chat/send-order-confirmation", {
+    phone,
+    customer_name: customerName,
+    order_id: orderId,
+    amount,
+    session_id: sessionId,
   });
   return res.data;
 }
