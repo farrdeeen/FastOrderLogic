@@ -15,6 +15,7 @@ from routes.device_transactions import router as device_transactions_router
 from routes.delhivery import router as delhivery_router
 from routes import chat as chat_router
 from routes import webhook as webhook_router
+from routes import dashboard as dashboard_router   # ← NEW
 
 
 app = FastAPI(title="FastOrderLogic Backend")
@@ -38,10 +39,13 @@ app.include_router(device_transactions_router)
 app.include_router(delhivery_router)
 app.include_router(chat_router.router)
 app.include_router(webhook_router.router)
+app.include_router(dashboard_router.router)        # ← NEW
+
 
 @app.get("/")
 def home():
     return {"message": "Backend running"}
+
 
 @app.on_event("startup")
 def on_startup():

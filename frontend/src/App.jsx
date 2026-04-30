@@ -8,6 +8,7 @@ import SearchBar from "./components/SearchBar";
 import NavDrawer from "./components/NavDrawer";
 import ChatPage from "./chat/ChatPage";
 import DeviceTransactionForm from "./components/DeviceTransactionForm";
+import DashboardPage from "./dashboard/DashboardPage";
 
 // ── Forms now live in components/forms/ ──────────────────────────────────────
 import CreateOrderForm from "./components/forms/CreateOrderForm";
@@ -46,12 +47,13 @@ export default function App() {
     date_to: "",
   });
 
-  const [activePage, setActivePage] = useState("orders");
+  const [activePage, setActivePage] = useState("dashboard");
   const [invoiceLoading, setInvoiceLoading] = useState({});
 
   const fetchRunRef = useRef(0);
 
   const pageTitle = {
+    dashboard: "📊 Dashboard",
     orders: "📦 Orders Management",
     chat: "💬 Chat Support",
     "create-order": "🆕 Create New Order",
@@ -443,6 +445,13 @@ export default function App() {
                   </Button>
                   <DeviceTransactionForm />
                 </Paper>
+              </div>
+            </Fade>
+            {/* ═══════════ DASHBOARD PAGE ═══════════ */}
+
+            <Fade in={activePage === "dashboard"} mountOnEnter unmountOnExit>
+              <div>
+                <DashboardPage />
               </div>
             </Fade>
           </Box>

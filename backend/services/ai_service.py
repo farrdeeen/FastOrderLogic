@@ -1,8 +1,8 @@
 """
 services/ai_service.py
 ──────────────────────
-Sales-focused AI agent powered by OpenRouter (mistral-7b-instruct:free).
-Keeps full conversation history per session so the LLM has context.
+Sales-focused AI agent powered by NVIDIA Nemotron 3 Nano Omni (free).
+Supports dynamic system-prompt injection from uploaded training documents.
 """
 
 import os
@@ -10,14 +10,21 @@ import json
 import httpx
 import logging
 from typing import Optional
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# ── NVIDIA NIM / Nemotron config ──────────────────────────────────────────────
 _OR_KEY   = os.getenv("OPENROUTER_API_KEY", "")
-_OR_MODEL = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
+_OR_MODEL = os.getenv(
+    "OPENROUTER_MODEL",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+)
 _OR_BASE  = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+# Training docs are stored as plain text in this path (written by the dashboard upload endpoint)
+_TRAINING_DOC_PATH = Path(os.getenv("TRAINING_DOC_PATH", "data/training_doc.txt"))
 
-_SYSTEM_PROMPT = """You are Aria, an enthusiastic and helpful AI sales assistant for an electronics store.
+_BASE_SYSTEM_PROMPT = """You are Aria, an enthusiastic and helpful AI sales assistant for an electronics store.
 You communicate over WhatsApp, so keep replies SHORT (under 120 words) and conversational.
 
 Your goals:
@@ -35,49 +42,100 @@ Rules:
 """
 
 
+def _build_system_prompt() -> str:
+    """
+    Builds the full system prompt.
+    If a training document has been uploaded via the dashboard, its content
+    is appended so the AI has product/policy knowledge.
+    """
+    prompt = _BASE_SYSTEM_PROMPT
+
+    if _TRAINING_DOC_PATH.exists():
+        try:
+            doc_text = _TRAINING_DOC_PATH.read_text(encoding="utf-8").strip()
+            if doc_text:
+                prompt += f"\n\n--- PRODUCT & POLICY KNOWLEDGE (from training document) ---\n{doc_text}\n---"
+                logger.debug("Training doc injected (%d chars)", len(doc_text))
+        except Exception as exc:
+            logger.warning("Could not read training doc: %s", exc)
+
+    return prompt
+
+
 async def generate_reply(conversation_history: list[dict], user_message: str) -> str:
     """
-    Call OpenRouter chat-completions endpoint.
+    Call NVIDIA NIM chat-completions endpoint (OpenAI-compatible).
 
     conversation_history: list of {"role": "user"|"assistant", "content": str}
-    user_message: the latest incoming message (will be appended internally)
+    user_message: the latest incoming message (appended internally)
 
     Returns the AI's reply string.
     """
     if not _OR_KEY:
+
+        logger.error("OPENROUTER_API_KEY is not set.")
+
         return "AI service is not configured. Please contact support."
 
-    messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    system_prompt = _build_system_prompt()
+
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": user_message})
 
     payload = {
-        "model": _OR_MODEL,
+        "model": _OR_MODEL,   # ✅ FIXED
         "messages": messages,
         "max_tokens": 300,
-        "temperature": 0.7,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {_OR_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": os.getenv("INTERNAL_API_BASE", "http://localhost:8000"),
-        "X-Title": "SalesBot",
+        "temperature": 0.5,   # ✅ better for Nemotron
+        "top_p": 0.95,
+        "stream": False,
+        "response_format": {"type": "text"}
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(f"{_OR_BASE}/chat/completions", json=payload, headers=headers)
-            resp.raise_for_status()
+        async with httpx.AsyncClient(timeout=45) as client:
+            resp = await client.post(
+                f"{_OR_BASE}/chat/completions",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {_OR_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "http://localhost:5173",
+                    "X-Title": "FastOrderLogic AI",
+                },
+
+            )
+
+            if resp.status_code != 200:
+                logger.error(
+                    "OpenRouter API error %s: %s", resp.status_code, resp.text
+                )
+                resp.raise_for_status()
+
             data = resp.json()
-            reply = data["choices"][0]["message"]["content"].strip()
+            message = data["choices"][0]["message"]
+
+            reply = message.get("content")      # Fallback for reasoning models
+            if not reply:
+                reply = message.get("reasoning") or ""
+            if not reply:
+                logger.error("Empty AI response: %s", data)
+                return "Sorry, I couldn't generate a reply. Please try again."
+
+            reply = reply.strip()
             logger.debug("AI reply (model=%s): %s", _OR_MODEL, reply[:80])
             return reply
+
     except httpx.HTTPStatusError as exc:
-        logger.error("OpenRouter HTTP error: %s — %s", exc.response.status_code, exc.response.text)
+        logger.error(
+            "NVIDIA HTTP error: %s — %s",
+            exc.response.status_code,
+            exc.response.text,
+        )
         return "Sorry, I'm having trouble connecting right now. Please try again in a moment."
     except Exception as exc:
-        logger.exception("OpenRouter unexpected error: %s", exc)
+        logger.exception("NVIDIA unexpected error: %s", exc)
         return "Something went wrong on my end. Please try again."
 
 
