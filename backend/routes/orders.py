@@ -14,6 +14,7 @@ from database import SessionLocal
 from models import Order
 from sqlalchemy import Table, MetaData
 from services.chat_service import notify_order_created, notify_order_shipped
+from services.chat_service import normalize_phone
 
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -279,25 +280,85 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # ── WhatsApp notification (non-blocking) ──────────────────────────────
+        # ── WhatsApp notification (non-blocking) ──────────────────────────────
     try:
+
         phone = None
+
+        customer_name = ""
+
         address_line = ""
+
         if data.customer_id:
-            cust = db.execute(text("SELECT mobile FROM customer WHERE customer_id = :cid"), {"cid": data.customer_id}).first()
+
+            cust = db.execute(
+
+                text("SELECT name, mobile FROM customer WHERE customer_id = :cid"),
+
+                {"cid": data.customer_id}
+
+            ).first()
+
         elif data.offline_customer_id:
-            cust = db.execute(text("SELECT mobile FROM offline_customer WHERE customer_id = :cid"), {"cid": data.offline_customer_id}).first()
+
+            cust = db.execute(
+
+                text("SELECT name, mobile FROM offline_customer WHERE customer_id = :cid"),
+
+                {"cid": data.offline_customer_id}
+
+            ).first()
+
         else:
+
             cust = None
+
         if cust:
-            phone = cust.mobile
-        addr = db.execute(text("SELECT address_line, city, pincode FROM address WHERE address_id = :aid"), {"aid": data.address_id}).first()
+
+            phone = normalize_phone(cust.mobile)
+
+            customer_name = cust.name or ""
+
+        addr = db.execute(
+
+            text("SELECT address_line, city, pincode FROM address WHERE address_id = :aid"),
+
+            {"aid": data.address_id}
+
+        ).first()
+
         if addr:
+
             address_line = f"{addr.address_line}, {addr.city} — {addr.pincode}"
+
         if phone:
-            asyncio.create_task(notify_order_created(db, phone, order_id, address_line))
+
+            asyncio.create_task(
+
+                notify_order_created(
+
+                    db,
+
+                    phone,
+
+                    order_id,
+
+                    customer_name=customer_name,
+
+                    amount=f"₹{data.total_amount:,.0f}",
+
+                    address_line=address_line,
+
+                    payment_status=data.payment_type,
+
+                )
+
+            )
+
     except Exception as exc:
+
         import logging
+
         logging.getLogger(__name__).warning("WA notify_order_created failed: %s", exc)
     # ── END WhatsApp hook ─────────────────────────────────────────────────
 
@@ -1106,7 +1167,7 @@ async def update_awb_number(order_id: str, payload: AWBUpdate, db: Session = Dep
             else:
                 cust = None
             if cust:
-                phone = cust.mobile
+                phone = normalize_phone(cust.mobile)
             if phone:
                 asyncio.create_task(notify_order_shipped(db, phone, order_id, awb))
         except Exception as exc:

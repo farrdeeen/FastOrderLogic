@@ -48,5 +48,13 @@ def home():
 
 
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
     start_wix_auto_sync()
+
+    # Pre-warm the product catalogue so first WhatsApp message is fast
+    try:
+        from services.product_catalogue import get_catalogue
+        await get_catalogue()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Catalogue pre-warm failed: %s", exc)

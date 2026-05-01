@@ -1120,6 +1120,20 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
 
             try:
                 db.commit()
+                try:
+                    from services.chat_service import notify_order_created as _notify
+                    import asyncio
+                    phone = str(phone_digits or "")
+                    if phone and len(phone) >= 10:
+                        amount_str = f"₹{payment_due:,.0f}"
+                        asyncio.create_task(_notify(
+                            db=db, phone=phone, order_id=wix_order_id,
+                            customer_name=name or "", amount=amount_str,
+                            address_line=addr_line_raw,
+                            payment_status=payment_status,   # already "paid" or "pending"
+                        ))
+                except Exception as _e:
+                    logger.warning("WA notify failed for %s: %s", wix_order_id, _e)
             except Exception as e:
                 try:
                     db.rollback()

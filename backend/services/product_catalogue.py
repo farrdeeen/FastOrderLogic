@@ -1,0 +1,396 @@
+"""
+services/product_catalogue.py
+──────────────────────────────
+In-memory Wix product catalogue for the AI sales agent.
+
+Features:
+- Fetches products from Wix Stores API (no DB)
+- Auto-refreshes every CATALOGUE_REFRESH_MINUTES (default 60)
+- Provides search/filter helpers for the AI
+- Formats product cards for WhatsApp (text + link)
+- Thread-safe using asyncio.Lock for async callers
+- FIX: Sale price (discountedPrice) now takes priority over regular price
+"""
+
+import os
+import re
+import asyncio
+import logging
+import httpx
+from datetime import datetime, timedelta
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+_WIX_API_KEY   = os.getenv("WIX_API_KEY", "")
+_WIX_SITE_ID   = os.getenv("WIX_SITE_ID", "")
+_REFRESH_MINS  = int(os.getenv("CATALOGUE_REFRESH_MINUTES", "60"))
+
+# Your Wix store URL — used for product links sent to customers
+_WIX_STORE_URL = os.getenv("WIX_STORE_URL", "")   # e.g. https://www.yourstore.com
+
+_PRODUCTS_API  = "https://www.wixapis.com/stores/v1/products/query"
+
+# ── In-memory store ───────────────────────────────────────────────────────────
+_catalogue: list[dict] = []           # list of normalised product dicts
+_last_fetched: Optional[datetime] = None
+_lock = asyncio.Lock()
+
+
+# ─── Public API ───────────────────────────────────────────────────────────────
+
+async def get_catalogue(force_refresh: bool = False) -> list[dict]:
+    """
+    Return the in-memory catalogue, refreshing from Wix if stale or empty.
+    Thread-safe for async callers.
+    """
+    global _catalogue, _last_fetched
+
+    needs_refresh = (
+        force_refresh
+        or not _catalogue
+        or _last_fetched is None
+        or datetime.now() - _last_fetched > timedelta(minutes=_REFRESH_MINS)
+    )
+
+    if needs_refresh:
+        async with _lock:
+            # Double-check after acquiring lock
+            still_needs = (
+                force_refresh
+                or not _catalogue
+                or _last_fetched is None
+                or datetime.now() - _last_fetched > timedelta(minutes=_REFRESH_MINS)
+            )
+            if still_needs:
+                await _fetch_from_wix()
+
+    return _catalogue
+
+
+async def search_products(query: str, limit: int = 5) -> list[dict]:
+    """
+    Search catalogue by name, SKU, or description.
+    Returns up to `limit` matching products.
+    """
+    catalogue = await get_catalogue()
+    if not query:
+        return catalogue[:limit]
+
+    q = query.lower().strip()
+    scored = []
+    for p in catalogue:
+        name  = (p.get("name") or "").lower()
+        sku   = (p.get("sku") or "").lower()
+        desc  = (p.get("description") or "").lower()
+        score = 0
+        if q in name:
+            score += 3
+        if q in sku:
+            score += 2
+        if q in desc:
+            score += 1
+        # partial word match
+        for word in q.split():
+            if word in name:
+                score += 1
+        if score > 0:
+            scored.append((score, p))
+
+    scored.sort(key=lambda x: -x[0])
+    return [p for _, p in scored[:limit]]
+
+
+def format_product_card(product: dict) -> str:
+    """
+    Format a single product as a WhatsApp-friendly text card.
+    Shows sale price + original price when a discount is active.
+    Returns a multi-line string suitable for a WA text message.
+    """
+    name           = product.get("name") or "Product"
+    sale_price     = product.get("sale_price_display")
+    regular_price  = product.get("price_display") or "—"
+    sku            = product.get("sku") or ""
+    desc           = (product.get("description") or "").strip()
+    link           = product.get("link") or ""
+    stock          = product.get("in_stock")
+    on_sale        = product.get("on_sale", False)
+
+    lines = [f"📦 *{name}*"]
+
+    # Price display — show sale price prominently, regular price struck through
+    if on_sale and sale_price:
+        lines.append(f"💰 Price: {sale_price} ~~{regular_price}~~")
+    else:
+        lines.append(f"💰 Price: {regular_price}")
+
+    if sku:
+        lines.append(f"SKU: {sku}")
+    if desc:
+        short_desc = desc[:120] + ("…" if len(desc) > 120 else "")
+        lines.append(short_desc)
+    if stock is not None:
+        lines.append("✅ In Stock" if stock else "❌ Out of Stock")
+    if link:
+        lines.append(f"🔗 {link}")
+
+    return "\n".join(lines)
+
+
+def format_product_list_for_whatsapp(products: list[dict], intro: str = "") -> str:
+    """
+    Format multiple products as a single WhatsApp message.
+    Max 3 products per message to keep it readable.
+    """
+    if not products:
+        return (
+            "I couldn't find any matching products right now. "
+            "Please try a different search or visit our store."
+        )
+
+    products = products[:3]  # WA messages should stay short
+    parts = []
+    if intro:
+        parts.append(intro)
+    for p in products:
+        parts.append(format_product_card(p))
+    if len(products) == 3 and _WIX_STORE_URL:
+        parts.append(f"👉 See full catalogue: {_WIX_STORE_URL}")
+
+    return "\n\n".join(parts)
+
+
+def get_catalogue_summary_for_prompt() -> str:
+    """
+    Return a compact text summary of the catalogue for injection into the AI system prompt.
+    Shows the effective selling price (sale price if discounted, else regular price).
+    Keeps token count low — names, SKUs, prices only.
+    """
+    if not _catalogue:
+        return "Product catalogue not loaded yet."
+
+    lines = ["PRODUCT CATALOGUE (use this to answer product questions):"]
+    for p in _catalogue[:60]:   # cap at 60 to keep prompt lean
+        name  = p.get("name") or "?"
+        sku   = p.get("sku") or "?"
+        stock = "In Stock" if p.get("in_stock") else "Out of Stock"
+
+        # Always show the effective customer-facing price
+        on_sale    = p.get("on_sale", False)
+        sale_price = p.get("sale_price_display")
+        reg_price  = p.get("price_display") or "?"
+        price_str  = sale_price if (on_sale and sale_price) else reg_price
+
+        lines.append(f"- {name} | SKU: {sku} | {price_str} | {stock}")
+
+    if len(_catalogue) > 60:
+        lines.append(f"... and {len(_catalogue) - 60} more products.")
+
+    return "\n".join(lines)
+
+
+async def refresh_catalogue() -> dict:
+    """Force a refresh. Returns summary dict."""
+    await get_catalogue(force_refresh=True)
+    return {
+        "product_count": len(_catalogue),
+        "last_fetched":  _last_fetched.isoformat() if _last_fetched else None,
+    }
+
+
+# ─── Internal Wix fetch ───────────────────────────────────────────────────────
+
+async def _fetch_from_wix() -> None:
+    """
+    Fetch all products from Wix Stores v1 API using pagination.
+    Normalises each product and stores in _catalogue.
+    """
+    global _catalogue, _last_fetched
+
+    if not _WIX_API_KEY or not _WIX_SITE_ID:
+        logger.warning("Wix credentials not set — catalogue not loaded.")
+        return
+
+    headers = {
+        "Authorization": _WIX_API_KEY,
+        "wix-site-id":   _WIX_SITE_ID,
+        "Content-Type":  "application/json",
+    }
+
+    all_products = []
+    offset = 0
+    limit  = 100
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            while True:
+                body = {
+                    "query": {
+                        "paging": {"limit": limit, "offset": offset},
+                        "filter": '{"productType": "physical"}',
+                    }
+                }
+                resp = await client.post(_PRODUCTS_API, json=body, headers=headers)
+
+                if resp.status_code != 200:
+                    logger.error(
+                        "Wix Products API error %s: %s",
+                        resp.status_code, resp.text[:300],
+                    )
+                    break
+
+                data = resp.json()
+                products = data.get("products") or []
+                all_products.extend(products)
+
+                metadata = data.get("metadata") or data.get("query", {}).get("paging", {})
+                total = (
+                    metadata.get("total")
+                    or data.get("totalResults")
+                    or len(all_products)
+                )
+
+                if len(products) < limit or len(all_products) >= total:
+                    break
+                offset += limit
+
+    except Exception as exc:
+        logger.exception("Failed to fetch Wix catalogue: %s", exc)
+        return
+
+    if not all_products:
+        logger.warning("Wix catalogue returned 0 products.")
+        return
+
+    _catalogue    = [_normalise_product(p) for p in all_products]
+    _last_fetched = datetime.now()
+    logger.info(
+        "Wix catalogue refreshed: %d products loaded at %s",
+        len(_catalogue), _last_fetched.strftime("%H:%M:%S"),
+    )
+
+
+def _normalise_product(raw: dict) -> dict:
+    """
+    Convert a raw Wix product dict into a clean flat dict for the catalogue.
+
+    Wix price structure (v1 Stores API):
+    {
+      "price": {
+        "price":             <regular price as string/float>,
+        "discountedPrice":   <sale/discounted price — LOWER than price when on sale>,
+        "formatted": {
+          "price":           "₹X,XXX",
+          "discountedPrice": "₹X,XXX"
+        },
+        "currency": "INR"
+      }
+    }
+
+    We ALWAYS show discountedPrice as the selling price when it is lower than
+    price (i.e. a sale is active). The original `price` is shown as the
+    crossed-out "was" price.
+    """
+    product_id = raw.get("id") or raw.get("_id") or ""
+    name       = raw.get("name") or ""
+    sku        = raw.get("sku") or (raw.get("variants") or [{}])[0].get("sku") or ""
+    slug       = raw.get("slug") or ""
+
+    # ── Price parsing ─────────────────────────────────────────────────────────
+    price_data = raw.get("price") or {}
+    currency   = "INR"
+
+    regular_amount:  Optional[float] = None
+    sale_amount:     Optional[float] = None
+
+    if isinstance(price_data, dict):
+        currency = price_data.get("currency") or "INR"
+
+        # Regular (list) price
+        raw_reg = price_data.get("price")
+        if raw_reg is not None:
+            try:
+                regular_amount = float(raw_reg)
+            except (TypeError, ValueError):
+                pass
+
+        # Discounted / sale price — Wix sets this even when there's no discount
+        # (in that case it equals the regular price). Only treat it as a sale
+        # price when it is strictly LESS THAN the regular price.
+        raw_disc = price_data.get("discountedPrice")
+        if raw_disc is not None:
+            try:
+                disc_val = float(raw_disc)
+                if regular_amount is not None and disc_val < regular_amount:
+                    sale_amount = disc_val
+                elif regular_amount is None:
+                    # No regular price found — use discounted as regular
+                    regular_amount = disc_val
+            except (TypeError, ValueError):
+                pass
+
+        # Prefer formatted strings from Wix when available (already locale-formatted)
+        formatted = price_data.get("formatted") or {}
+        fmt_reg  = formatted.get("price") or ""
+        fmt_disc = formatted.get("discountedPrice") or ""
+
+    elif isinstance(price_data, (int, float)):
+        regular_amount = float(price_data)
+        fmt_reg = fmt_disc = ""
+    else:
+        fmt_reg = fmt_disc = ""
+
+    def _fmt(amount: Optional[float], fmt_hint: str = "") -> Optional[str]:
+        """Return a display string for an amount, using Wix formatted hint when available."""
+        if fmt_hint:
+            return fmt_hint
+        if amount is None:
+            return None
+        return f"₹{amount:,.0f}" if currency == "INR" else f"{currency} {amount:,.2f}"
+
+    on_sale           = sale_amount is not None
+    regular_display   = _fmt(regular_amount, fmt_reg)
+    sale_display      = _fmt(sale_amount, fmt_disc) if on_sale else None
+
+    # Effective price shown to customers = sale price if available, else regular
+    effective_display = sale_display if on_sale else regular_display
+
+    # ── Stock ─────────────────────────────────────────────────────────────────
+    stock_info = raw.get("stock") or {}
+    in_stock   = stock_info.get("inStock") if isinstance(stock_info, dict) else None
+
+    # ── Description — strip HTML tags ─────────────────────────────────────────
+    desc_raw    = raw.get("description") or ""
+    description = re.sub(r"<[^>]+>", " ", desc_raw).strip()
+    description = re.sub(r"\s+", " ", description)
+
+    # ── Product page link ─────────────────────────────────────────────────────
+    link = ""
+    if slug and _WIX_STORE_URL:
+        link = f"{_WIX_STORE_URL.rstrip('/')}/product-page/{slug}"
+
+    # ── Main image URL ────────────────────────────────────────────────────────
+    media      = raw.get("media") or {}
+    main_media = media.get("mainMedia") or {}
+    image_url  = (main_media.get("image") or {}).get("url") or ""
+
+    return {
+        "id":                 product_id,
+        "name":               name,
+        "sku":                sku,
+        "slug":               slug,
+        # Amounts (numeric)
+        "price_amount":       regular_amount,
+        "sale_price_amount":  sale_amount,
+        # Display strings
+        "price_display":      regular_display,
+        "sale_price_display": sale_display,
+        "effective_price":    effective_display,   # what the customer actually pays
+        "on_sale":            on_sale,
+        "currency":           currency,
+        # Other fields
+        "in_stock":           in_stock,
+        "description":        description[:500],   # cap for prompt injection
+        "link":               link,
+        "image_url":          image_url,
+    }

@@ -357,3 +357,23 @@ def _extract_docx_text(content: bytes, filename: str) -> str:
     except Exception as exc:
         logger.error("docx extraction failed for %s: %s", filename, exc)
         return content.decode("utf-8", errors="replace")
+    
+@router.get("/catalogue")
+async def get_catalogue_status(_=Depends(require_user)):
+    """Returns in-memory catalogue info and first 20 products."""
+    from services.product_catalogue import _catalogue, _last_fetched
+    return {
+        "product_count": len(_catalogue),
+        "last_fetched":  _last_fetched.isoformat() if _last_fetched else None,
+        "products":      _catalogue[:20],
+    }
+ 
+ 
+# ─── POST /dashboard/catalogue/refresh ───────────────────────────────────────
+ 
+@router.post("/catalogue/refresh")
+async def refresh_catalogue_endpoint(_=Depends(require_user)):
+    """Force a full re-fetch of the Wix product catalogue into memory."""
+    from services.product_catalogue import refresh_catalogue
+    result = await refresh_catalogue()
+    return {"success": True, **result}

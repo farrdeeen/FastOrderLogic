@@ -2,9 +2,11 @@
 services/chat_service.py
 ────────────────────────
 Orchestrates: DB session/message management, AI calls, WhatsApp dispatch.
-All DB interactions use raw SQL via SQLAlchemy (consistent with existing codebase).
+Order placement delegates entirely to ai_order_service.place_ai_order
+— no duplicate DB logic here.
 """
 
+import re
 import logging
 from datetime import datetime
 from typing import Optional
@@ -12,14 +14,46 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from services.ai_service import generate_reply, extract_order_json, is_address_confirmed
+from services.ai_service import (
+    generate_reply,
+    generate_product_reply,
+    get_order_status_text,
+    extract_order_json,
+    is_address_confirmed,
+)
 from services.whatsapp_service import (
     send_text_message,
     send_order_confirmation,
+    send_template_message,
+)
+from services.ai_order_service import (
+    place_ai_order,
+    build_order_confirmation_message,
 )
 
 logger = logging.getLogger(__name__)
 
+_TEMPLATE_ORDER_CONFIRMED = "order_confirmation"
+_TEMPLATE_PAYMENT_PENDING = "payment_pending"
+
+def normalize_phone(phone: str) -> str:
+    """
+    Ensure phone is in E.164 format for WhatsApp.
+    Default country: India (+91)
+    """
+    if not phone:
+        return ""
+    # remove spaces, +, -, etc
+    digits = re.sub(r"\D", "", phone)
+    # Already correct (91XXXXXXXXXX)
+    if digits.startswith("91") and len(digits) == 12:
+        return digits
+    # Local 10 digit → add 91
+    if len(digits) == 10:
+        return "91" + digits
+    # Fallback: return as-is (but log it)
+    logger.warning("Phone normalization fallback used: %s", phone)
+    return digits
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Session helpers
@@ -89,7 +123,6 @@ def save_message(
 
 
 def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> list[dict]:
-    """Return last `limit` messages formatted for the LLM (role / content)."""
     rows = db.execute(
         text("""
             SELECT sender, message FROM chat_messages
@@ -101,14 +134,14 @@ def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> l
     ).fetchall()
 
     history = []
-    for r in reversed(rows):   # oldest-first for the LLM
+    for r in reversed(rows):
         role = "user" if r.sender == "user" else "assistant"
         history.append({"role": role, "content": r.message})
     return history
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Inbound message handler  (called by webhook router)
+# Inbound message handler
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def handle_inbound_message(
@@ -118,20 +151,11 @@ async def handle_inbound_message(
     contact_name: str = "",
     wa_message_id: Optional[str] = None,
 ) -> str:
-    """
-    Full pipeline:
-      1. Get/create session
-      2. Dedup by wa_message_id
-      3. Save user message
-      4. Build history & call AI
-      5. Save AI reply
-      6. Send reply via WhatsApp
-      7. Return AI reply text
-    """
-    session    = get_or_create_session(db, phone, contact_name)
+    phone = normalize_phone(phone)   # 🔥 ADD THIS
+    session = get_or_create_session(db, phone)
     session_id = session["id"]
 
-    # ── dedup: ignore if we already processed this WA message ──
+    # Dedup
     if wa_message_id:
         existing = db.execute(
             text("SELECT id FROM chat_messages WHERE wa_message_id = :wid"),
@@ -141,27 +165,80 @@ async def handle_inbound_message(
             logger.info("Duplicate WA message %s — skipping", wa_message_id)
             return ""
 
-    # ── save user message ──
     save_message(db, session_id, "user", text_body, wa_message_id=wa_message_id)
 
-    # ── build history & call AI ──
+    # ── Order-status shortcut (supports WIX#, ORD-, AI- formats) ─────────────
+    order_id_match = re.search(
+        r"\b(\d{5}#\d{5}|WIX#\d+|ORD-\d+|AI-\d{5})\b",
+        text_body,
+        re.IGNORECASE,
+    )
+    if order_id_match:
+        order_id    = order_id_match.group(1)
+        status_text = get_order_status_text(order_id, db)
+        if status_text:
+            save_message(db, session_id, "ai", status_text)
+            try:
+                await send_text_message(phone, status_text)
+            except Exception as exc:
+                logger.error("Failed to send order status to %s: %s", phone, exc)
+            return status_text
+
+    # ── Product catalogue shortcut ────────────────────────────────────────────
+    product_reply = await generate_product_reply(text_body)
+    if product_reply:
+        save_message(db, session_id, "ai", product_reply)
+        try:
+            await send_text_message(phone, product_reply)
+        except Exception as exc:
+            logger.error("Failed to send product reply to %s: %s", phone, exc)
+        return product_reply
+
+    # ── AI reply ──────────────────────────────────────────────────────────────
     history = get_conversation_history(db, session_id, limit=18)
-    # drop last entry — it's the user msg we just saved, passed separately below
+    # Drop last entry if it's the user message we just saved
     if history and history[-1]["role"] == "user":
         history = history[:-1]
 
     ai_reply = await generate_reply(history, text_body)
 
-    # ── check if AI returned a parseable order JSON ──
+    # ── Order JSON detected → place order via ai_order_service ───────────────
     order_data = extract_order_json(ai_reply)
     if order_data:
         logger.info("AI collected order data for session %s: %s", session_id, order_data)
-        save_message(db, session_id, "ai", ai_reply, meta={"order_data": order_data})
-    else:
-        save_message(db, session_id, "ai", ai_reply)
 
-    # ── send reply via WhatsApp ──
-    clean_reply = ai_reply.replace("```json", "").replace("```", "").strip()
+        # Fill mobile from caller's phone if AI didn't capture it
+        if not order_data.get("mobile"):
+            order_data["mobile"] = re.sub(r"\D", "", phone)[-10:]
+
+        result        = place_ai_order(order_data, db)
+        customer_name = order_data.get("name", "Customer")
+        confirm_msg   = build_order_confirmation_message(result, customer_name)
+
+        save_message(
+            db, session_id, "ai", ai_reply,
+            meta={
+                "order_data":       order_data,
+                "created_order_id": result.get("order_id"),
+                "order_success":    result.get("success"),
+            },
+        )
+        save_message(
+            db, session_id, "system", confirm_msg,
+            meta={"order_id": result.get("order_id"), "flow": "ai_order_placed"},
+        )
+
+        try:
+            await send_text_message(phone, confirm_msg)
+        except Exception as exc:
+            logger.error("Failed to send order confirmation to %s: %s", phone, exc)
+
+        return ai_reply
+
+    # ── Normal reply ──────────────────────────────────────────────────────────
+    save_message(db, session_id, "ai", ai_reply)
+
+    clean_reply = ai_reply.strip()
     if "CONFIRMED_ADDRESS" in clean_reply:
         clean_reply = "✅ Address confirmed! Your order is being processed."
 
@@ -174,7 +251,7 @@ async def handle_inbound_message(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Outbound helpers  (called by order router hooks)
+# Outbound notification helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def notify_order_created(
@@ -184,55 +261,65 @@ async def notify_order_created(
     customer_name: str = "",
     amount: str = "",
     address_line: str = "",
+    payment_status: str = "pending",
 ) -> None:
-    """
-    Send order-confirmation via the approved WA template, then follow up
-    with a plain-text address-confirmation ask.
-
-    Parameters
-    ----------
-    customer_name : used as template param 1  (e.g. "Ashfaq")
-    order_id      : used as template param 2  (e.g. "ORD-1001")
-    amount        : used as template param 3  (e.g. "₹999")
-    address_line  : shown in the follow-up plain-text nudge
-    """
     session    = get_or_create_session(db, phone)
     session_id = session["id"]
+    is_paid    = payment_status.lower() in ("paid", "success", "accepted")
 
-    # 1️⃣  Send the approved template (works even before 24-h window opens)
-    try:
-        await send_order_confirmation(
-            to=phone,
-            customer_name=customer_name or "Customer",
-            order_id=order_id,
-            amount=amount or "—",
-        )
-        save_message(
-            db, session_id, "system",
-            f"[template:order_confirmation] customer={customer_name} order={order_id} amount={amount}",
-            meta={"order_id": order_id, "flow": "order_confirmation_template"},
-        )
-    except Exception as exc:
-        logger.error("notify_order_created template failed for %s: %s", phone, exc)
-
-    # 2️⃣  If we have an address, ask for confirmation in a plain-text follow-up
-    if address_line:
-        body = (
-            f"📦 Delivery address on file:\n_{address_line}_\n\n"
-            "Reply *YES* to confirm, or send your corrected address."
-        )
-        save_message(
-            db, session_id, "system", body,
-            meta={"order_id": order_id, "flow": "address_confirm"},
-        )
+    if is_paid:
         try:
-            await send_text_message(phone, body)
+            await send_order_confirmation(
+                to=phone,
+                customer_name=customer_name or "Customer",
+                order_id=order_id,
+                amount=amount or "—",
+            )
+            save_message(
+                db, session_id, "system",
+                f"[template:order_confirmation] {customer_name} / {order_id} / {amount}",
+                meta={"order_id": order_id, "flow": "order_confirmation_template", "payment": "paid"},
+            )
         except Exception as exc:
-            logger.error("notify_order_created address nudge failed for %s: %s", phone, exc)
+            logger.error("order_confirmation template failed for %s: %s", phone, exc)
+
+        if address_line:
+            body = (
+                f"📦 Delivery address on file:\n{address_line}\n\n"
+                "Reply *YES* to confirm, or send your corrected address."
+            )
+            save_message(db, session_id, "system", body,
+                         meta={"order_id": order_id, "flow": "address_confirm"})
+            try:
+                await send_text_message(phone, body)
+            except Exception as exc:
+                logger.error("Address nudge failed for %s: %s", phone, exc)
+    else:
+        try:
+            await send_template_message(
+                to=normalize_phone(phone),
+                template_name=_TEMPLATE_PAYMENT_PENDING,
+                language="en",
+                components=[{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": customer_name or "Customer"},  # {{1}}
+                        {"type": "text", "text": order_id},                     # {{2}}
+                        {"type": "text", "text": "your order"},                 # {{3}} ✅ ADD THIS
+                        {"type": "text", "text": amount or "—"},                # {{4}}
+                    ],
+                }],
+            )
+            save_message(
+                db, session_id, "system",
+                f"[template:payment_pending] {customer_name} / {order_id} / {amount}",
+                meta={"order_id": order_id, "flow": "payment_pending_template", "payment": "pending"},
+            )
+        except Exception as exc:
+            logger.error("payment_pending template failed for %s: %s", phone, exc)
 
 
 async def notify_order_shipped(db: Session, phone: str, order_id: str, awb: str) -> None:
-    """Send dispatch notification."""
     session    = get_or_create_session(db, phone)
     session_id = session["id"]
 
@@ -240,7 +327,7 @@ async def notify_order_shipped(db: Session, phone: str, order_id: str, awb: str)
         f"🚚 *Your order has been shipped!*\n\n"
         f"Order ID: `{order_id}`\n"
         f"AWB / Tracking: *{awb}*\n\n"
-        "You can track your shipment with the AWB number. Reply here if you need help."
+        "Track your shipment with the AWB number above. Reply here if you need help."
     )
     save_message(db, session_id, "system", body, meta={"order_id": order_id, "awb": awb})
     try:
