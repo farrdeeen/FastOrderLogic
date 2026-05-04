@@ -17,6 +17,7 @@ import os
 import logging
 from fastapi import APIRouter, Request, Response, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
+from typing import Optional
 
 from database import SessionLocal
 from services.whatsapp_service import extract_incoming_message, mark_message_read
@@ -74,17 +75,21 @@ async def receive_webhook(
     logger.debug("WA webhook payload: %s", body)
 
     incoming = extract_incoming_message(body)
-    if not incoming:
-        # Status update (delivered / read) or unsupported message type — ignore
+ 
+    # Text message
+    if incoming:
+        background.add_task(mark_message_read, incoming["wa_message_id"])
+        background.add_task(_process_inbound, incoming)
         return {"status": "ok"}
 
-    # Fire-and-forget: mark as read (uses its own client, no DB needed)
-    background.add_task(mark_message_read, incoming["wa_message_id"])
-
-    # Process in background with a fresh DB session
-    background.add_task(_process_inbound, incoming)
+    # Media message (image / PDF)
+    media = extract_incoming_media(body)
+    if media:
+        background.add_task(mark_message_read, media["wa_message_id"])
+        background.add_task(_process_inbound_media, media)
 
     return {"status": "ok"}
+
 
 
 async def _process_inbound(incoming: dict):
@@ -105,3 +110,50 @@ async def _process_inbound(incoming: dict):
         logger.exception("Error processing inbound WA message from %s", incoming.get("phone"))
     finally:
         db.close()
+
+async def _process_inbound_media(media: dict):
+    from services.chat_service import handle_inbound_media
+    db = SessionLocal()
+    try:
+        await handle_inbound_media(
+            db=db,
+            phone=media["phone"],
+            media_url=media["media_url"],
+            media_type=media["media_type"],
+            contact_name=media.get("contact_name", ""),
+            wa_message_id=media["wa_message_id"],
+        )
+    except Exception:
+        logger.exception("Error processing media from %s", media.get("phone"))
+    finally:
+        db.close()
+
+def extract_incoming_media(webhook_body: dict) -> Optional[dict]:
+    """
+    Extract media (image/document) from a WhatsApp webhook payload.
+    Returns dict with phone, wa_message_id, media_url, media_type, contact_name
+    or None if not a media message.
+    """
+    try:
+        value    = webhook_body["entry"][0]["changes"][0]["value"]
+        messages = value.get("messages", [])
+        if not messages:
+            return None
+        msg      = messages[0]
+        msg_type = msg.get("type", "")
+        if msg_type not in ("image", "document", "audio"):
+            return None
+        media_obj  = msg.get(msg_type) or {}
+        media_url  = media_obj.get("url") or media_obj.get("link") or ""
+        media_mime = media_obj.get("mime_type") or msg_type
+        contacts   = value.get("contacts", [{}])
+        return {
+            "phone":        msg["from"],
+            "wa_message_id": msg["id"],
+            "media_url":    media_url,
+            "media_type":   media_mime,
+            "contact_name": contacts[0].get("profile", {}).get("name", ""),
+            "timestamp":    int(msg.get("timestamp", 0)),
+        }
+    except (KeyError, IndexError, TypeError):
+        return None

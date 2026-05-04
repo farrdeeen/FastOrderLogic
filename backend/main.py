@@ -13,9 +13,12 @@ from routes import states
 from routes.wix_sync import start_wix_auto_sync
 from routes.device_transactions import router as device_transactions_router
 from routes.delhivery import router as delhivery_router
-from routes import chat as chat_router
 from routes import webhook as webhook_router
-from routes import dashboard as dashboard_router   # ← NEW
+from routes import dashboard as dashboard_router 
+from routes.chat import router as chat_api_router
+from routes.chat_router import router as chat_control_router
+from routes.razorpay_webhook import router as razorpay_router
+
 
 
 app = FastAPI(title="FastOrderLogic Backend")
@@ -37,9 +40,12 @@ app.include_router(customers.router)
 app.include_router(states.router)
 app.include_router(device_transactions_router)
 app.include_router(delhivery_router)
-app.include_router(chat_router.router)
+app.include_router(chat_api_router)
 app.include_router(webhook_router.router)
-app.include_router(dashboard_router.router)        # ← NEW
+app.include_router(dashboard_router.router) 
+app.include_router(chat_control_router)
+app.include_router(razorpay_router)
+       # ← NEW
 
 
 @app.get("/")

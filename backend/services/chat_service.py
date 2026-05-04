@@ -10,10 +10,13 @@ import re
 import logging
 from datetime import datetime
 from typing import Optional
+from services.ai_service import analyze_media
+import asyncio
+import os
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
+from services.payment_service import create_payment_link
 from services.ai_service import (
     generate_reply,
     generate_product_reply,
@@ -25,6 +28,7 @@ from services.whatsapp_service import (
     send_text_message,
     send_order_confirmation,
     send_template_message,
+    send_image_message
 )
 from services.ai_order_service import (
     place_ai_order,
@@ -35,6 +39,16 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATE_ORDER_CONFIRMED = "order_confirmation"
 _TEMPLATE_PAYMENT_PENDING = "payment_pending"
+_RAZORPAY_BASE = os.getenv("RAZORPAY_BASE_URL", "https://rzp.io/l")
+
+def parse_amount(amount):
+    if not amount:
+        return 0.0
+    clean = re.sub(r"[^\d.]", "", str(amount))  # remove ₹, commas, spaces
+    try:
+        return float(clean)
+    except:
+        return 0.0
 
 def normalize_phone(phone: str) -> str:
     """
@@ -139,7 +153,41 @@ def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> l
         history.append({"role": role, "content": r.message})
     return history
 
-
+async def handle_inbound_media(
+    db: Session,
+    phone: str,
+    media_url: str,
+    media_type: str,
+    contact_name: str = "",
+    wa_message_id: Optional[str] = None,
+) -> str:
+    """
+    Handle incoming WhatsApp media messages (images, PDFs).
+    Called from webhook.py when msg.type != 'text'.
+    """
+    phone      = normalize_phone(phone)
+    session    = get_or_create_session(db, phone, contact_name)
+    session_id = session["id"]
+ 
+    if wa_message_id:
+        existing = db.execute(
+            text("SELECT id FROM chat_messages WHERE wa_message_id = :wid"),
+            {"wid": wa_message_id},
+        ).fetchone()
+        if existing:
+            return ""
+ 
+    save_message(db, session_id, "user", f"[media:{media_type}]", wa_message_id=wa_message_id)
+ 
+    reply = await analyze_media(media_url, media_type)
+    save_message(db, session_id, "ai", reply)
+ 
+    try:
+        await send_text_message(phone, reply)
+    except Exception as exc:
+        logger.error("Media reply send failed %s: %s", phone, exc)
+ 
+    return reply
 # ─────────────────────────────────────────────────────────────────────────────
 # Inbound message handler
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,6 +214,9 @@ async def handle_inbound_message(
             return ""
 
     save_message(db, session_id, "user", text_body, wa_message_id=wa_message_id)
+    if session.get("is_human"):
+        logger.info("Human mode ON for session %s — skipping AI", session_id)
+        return ""
 
     # ── Order-status shortcut (supports WIX#, ORD-, AI- formats) ─────────────
     order_id_match = re.search(
@@ -185,54 +236,76 @@ async def handle_inbound_message(
             return status_text
 
     # ── Product catalogue shortcut ────────────────────────────────────────────
-    product_reply = await generate_product_reply(text_body)
-    if product_reply:
-        save_message(db, session_id, "ai", product_reply)
+    product_result = await generate_product_reply(text_body)
+    if product_result:
+        text_msg = product_result["text"]
+        images   = product_result.get("images") or []
+
+        save_message(db, session_id, "ai", text_msg)
         try:
-            await send_text_message(phone, product_reply)
+            await send_text_message(phone, text_msg)
         except Exception as exc:
-            logger.error("Failed to send product reply to %s: %s", phone, exc)
-        return product_reply
+            logger.error("Product text send failed %s: %s", phone, exc)
+
+        for img_url in images[:2]:   # max 2 images
+            try:
+                await asyncio.wait_for(
+                    send_image_message(phone, img_url),
+                    timeout=10.0,
+                )
+                await asyncio.sleep(0.3)   # avoid WA rate limit between sends
+            except asyncio.TimeoutError:
+                logger.warning("Image send timeout for %s url=%s", phone, img_url[:60])
+            except Exception as exc:
+                logger.error("Product image send failed %s: %s", phone, exc)
+
+        return text_msg
 
     # ── AI reply ──────────────────────────────────────────────────────────────
     history = get_conversation_history(db, session_id, limit=18)
-    # Drop last entry if it's the user message we just saved
     if history and history[-1]["role"] == "user":
         history = history[:-1]
-
+ 
     ai_reply = await generate_reply(history, text_body)
-
-    # ── Order JSON detected → place order via ai_order_service ───────────────
+ 
     order_data = extract_order_json(ai_reply)
     if order_data:
         logger.info("AI collected order data for session %s: %s", session_id, order_data)
-
-        # Fill mobile from caller's phone if AI didn't capture it
         if not order_data.get("mobile"):
             order_data["mobile"] = re.sub(r"\D", "", phone)[-10:]
-
         result        = place_ai_order(order_data, db)
         customer_name = order_data.get("name", "Customer")
         confirm_msg   = build_order_confirmation_message(result, customer_name)
-
-        save_message(
-            db, session_id, "ai", ai_reply,
-            meta={
-                "order_data":       order_data,
-                "created_order_id": result.get("order_id"),
-                "order_success":    result.get("success"),
-            },
-        )
-        save_message(
-            db, session_id, "system", confirm_msg,
-            meta={"order_id": result.get("order_id"), "flow": "ai_order_placed"},
-        )
-
+        order_id = result.get("order_id")
+        save_message(db, session_id, "ai", ai_reply,
+                     meta={"order_data": order_data,
+                           "created_order_id": result.get("order_id"),
+                           "order_success":    result.get("success")})
+        save_message(db, session_id, "system", confirm_msg,
+                     meta={"order_id": result.get("order_id"), "flow": "ai_order_placed"})
         try:
             await send_text_message(phone, confirm_msg)
+            await notify_order_created(
+                db=db,
+                phone=phone,
+                order_id=order_id,
+                customer_name=customer_name,
+                amount=result.get("total_amount"),
+                address_line=order_data.get("address", ""),
+                payment_status=result.get("payment_status", "pending")
+            )
         except Exception as exc:
-            logger.error("Failed to send order confirmation to %s: %s", phone, exc)
-
+            logger.error("Order confirm send failed %s: %s", phone, exc)
+        return ai_reply
+ 
+    save_message(db, session_id, "ai", ai_reply)
+    clean_reply = ai_reply.strip()
+    if "CONFIRMED_ADDRESS" in clean_reply:
+        clean_reply = "✅ Address confirmed! Your order is being processed."
+    try:
+        await send_text_message(phone, clean_reply)
+    except Exception as exc:
+        logger.error("WA reply send failed %s: %s", phone, exc)
         return ai_reply
 
     # ── Normal reply ──────────────────────────────────────────────────────────
@@ -317,6 +390,29 @@ async def notify_order_created(
             )
         except Exception as exc:
             logger.error("payment_pending template failed for %s: %s", phone, exc)
+    if not is_paid:
+        try:
+            pay_link = await create_payment_link(
+                order_id=order_id,
+                amount=parse_amount(amount),
+                name=customer_name or "Customer",
+                phone=normalize_phone(phone)
+            )
+
+            if not pay_link:
+                raise Exception("No payment link returned")
+            pay_msg = (
+                f"💳 Complete your payment to confirm shipment:\n{pay_link}\n\n"
+                "Once paid, we'll dispatch Today. Reply here if you need any help!"
+            )
+            await send_text_message(normalize_phone(phone), pay_msg)
+            save_message(
+                db, session_id, "system", pay_msg,
+                meta={"order_id": order_id, "flow": "payment_link"}
+            )
+        except Exception as exc:
+            logger.error("Payment link send failed for %s: %s", phone, exc)
+
 
 
 async def notify_order_shipped(db: Session, phone: str, order_id: str, awb: str) -> None:

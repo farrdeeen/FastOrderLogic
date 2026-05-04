@@ -203,3 +203,15 @@ def extract_incoming_message(webhook_body: dict) -> Optional[dict]:
         }
     except (KeyError, IndexError, TypeError):
         return None
+async def send_image_message(to: str, image_url: str, caption: str = "") -> dict:
+    """Send an image by URL via WhatsApp Cloud API."""
+    if not _check_credentials():
+        return {"status": "skipped", "reason": "credentials_missing"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": _normalise_phone(to),
+        "type": "image",
+        "image": {"link": image_url, "caption": caption},
+    }
+    return await _post(payload)

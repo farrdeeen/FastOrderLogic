@@ -293,7 +293,16 @@ def _normalise_product(raw: dict) -> dict:
     """
     product_id = raw.get("id") or raw.get("_id") or ""
     name       = raw.get("name") or ""
-    sku        = raw.get("sku") or (raw.get("variants") or [{}])[0].get("sku") or ""
+    _variants  = raw.get("variants") or []
+    _v0        = _variants[0] if _variants else {}
+    sku = (
+        raw.get("sku")
+        or _v0.get("sku")
+        or _v0.get("variantId", "")
+        or ""
+    )
+    sku = sku.strip()
+    logger.debug("_normalise_product: name=%r sku=%r", raw.get("name"), sku)
     slug       = raw.get("slug") or ""
 
     # ── Price parsing ─────────────────────────────────────────────────────────
@@ -394,3 +403,96 @@ def _normalise_product(raw: dict) -> dict:
         "link":               link,
         "image_url":          image_url,
     }
+
+async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[str]:
+    """
+    Fetch product image URLs from DB.
+    Lookup order:
+      1. DB via sku_id exact match
+      2. DB via product name LIKE match (if sku misses)
+      3. In-memory catalogue image_url
+    Returns max 2 absolute URLs.
+    """
+    from database import SessionLocal
+    from sqlalchemy import text
+
+    if not sku and not product_name:
+        logger.warning("get_product_images_by_sku: both sku and product_name are empty")
+        return []
+
+    db = SessionLocal()
+    try:
+        urls: list[str] = []
+
+        # ── 1. DB lookup by sku_id ─────────────────────────────────────────
+        if sku:
+            rows = db.execute(
+                text("""
+                    SELECT pi.image_url
+                    FROM product_images pi
+                    JOIN products p ON p.product_id = pi.product_id
+                    WHERE p.sku_id = :sku
+                      AND pi.image_url IS NOT NULL
+                      AND pi.image_url != ''
+                    ORDER BY pi.image_id ASC
+                    LIMIT 2
+                """),
+                {"sku": sku},
+            ).fetchall()
+            logger.debug("SKU DB lookup: sku=%s → %d rows", sku, len(rows))
+            urls = _to_absolute_urls([r.image_url for r in rows])
+
+        # ── 2. DB lookup by product name (fallback) ────────────────────────
+        if not urls and product_name:
+            rows = db.execute(
+                text("""
+                    SELECT pi.image_url
+                    FROM product_images pi
+                    JOIN products p ON p.product_id = pi.product_id
+                    WHERE LOWER(p.name) LIKE :name
+                      AND pi.image_url IS NOT NULL
+                      AND pi.image_url != ''
+                    ORDER BY pi.image_id ASC
+                    LIMIT 2
+                """),
+                {"name": f"%{product_name.lower()[:40]}%"},
+            ).fetchall()
+            logger.debug("Name DB lookup: name=%r → %d rows", product_name[:40], len(rows))
+            urls = _to_absolute_urls([r.image_url for r in rows])
+
+        if urls:
+            logger.info("Returning %d DB image(s) for sku=%r / name=%r", len(urls), sku, product_name)
+            return urls
+
+        # ── 3. In-memory catalogue fallback ───────────────────────────────
+        for p in _catalogue:
+            p_sku  = (p.get("sku") or "").lower()
+            p_name = (p.get("name") or "").lower()
+            if (sku and p_sku == sku.lower()) or (product_name and product_name.lower()[:20] in p_name):
+                img = (p.get("image_url") or "").strip()
+                if img:
+                    logger.info("Catalogue fallback image for sku=%r: %s", sku, img[:80])
+                    return [img]
+
+        logger.warning("No images found at all for sku=%r / name=%r", sku, product_name)
+        return []
+
+    except Exception as exc:
+        logger.error("get_product_images_by_sku error sku=%r: %s", sku, exc)
+        return []
+    finally:
+        db.close()
+
+
+def _to_absolute_urls(raw_urls: list[str]) -> list[str]:
+    """Ensure all URLs are absolute. Filter empty strings."""
+    result = []
+    store  = (_WIX_STORE_URL or "").rstrip("/")
+    for url in raw_urls:
+        url = (url or "").strip()
+        if not url:
+            continue
+        if not url.startswith("http"):
+            url = f"{store}/{url.lstrip('/')}" if store else url
+        result.append(url)
+    return result[:2]

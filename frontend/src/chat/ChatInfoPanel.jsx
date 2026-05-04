@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Box, Typography } from "@mui/material";
 import { resolveSession, sendOrderConfirmation } from "./chatApi";
 import { chatStyles, FLAG_ACTIONS, QUICK_REPLIES, avatarColor } from "./styles";
+import HumanTogglePanel from "./HumanTogglePanel";
 
 // ── Small helper row ──────────────────────────────────────────────────────────
 function InfoRow({ label, value }) {
@@ -415,6 +416,16 @@ export default function ChatInfoPanel({
             ? "✓ Order confirmation sent"
             : "📦 Send order confirmation"}
         </button>
+      </Box>
+      {/* ── Human / AI Mode Toggle ── */}
+      <Box sx={chatStyles.panelSection}>
+        <HumanTogglePanel
+          chat={chat}
+          onModeChange={(sessionId, isHuman) => {
+            // Optionally propagate up for list badge updates
+            if (onFlagChange) onFlagChange(sessionId, isHuman ? "human" : null);
+          }}
+        />
       </Box>
 
       {/* ── Flag this chat ── */}
