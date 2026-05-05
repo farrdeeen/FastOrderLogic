@@ -67,6 +67,16 @@ export async function resolveSession(sessionId) {
   return res.data;
 }
 
+// POST /chat/toggle-human
+export async function toggleHumanMode(sessionId, phone, isHuman) {
+  const res = await api.post("/chat/toggle-human", {
+    session_id: sessionId,
+    phone,
+    is_human: isHuman,
+  });
+  return res.data;
+}
+
 // GET /chat/conversations/count
 export async function fetchConversationCount(status = "") {
   const params = status ? { status } : {};

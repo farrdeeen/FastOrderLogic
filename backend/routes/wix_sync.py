@@ -12,6 +12,7 @@ Optimized Wix sync (Option C, final) - MERGED (Option A1 name/address extraction
 import os
 import re
 import json
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -108,6 +109,40 @@ def stop_wix_auto_sync():
             _sync_timer = None
             logger.info("[AutoSync] Background Wix sync stopped.")
 
+
+def _notify_order_created_sync(
+    phone: str,
+    order_id: str,
+    customer_name: str,
+    amount: str,
+    address_line: str,
+    payment_status: str,
+) -> None:
+    """Run the async WhatsApp order notification from this sync route/thread."""
+    if not phone or len(str(phone)) < 10:
+        return
+
+    notify_db = SessionLocal()
+    try:
+        from services.chat_service import notify_order_created
+
+        asyncio.run(
+            notify_order_created(
+                db=notify_db,
+                phone=phone,
+                order_id=order_id,
+                customer_name=customer_name,
+                amount=amount,
+                address_line=address_line,
+                payment_status=payment_status,
+            )
+        )
+        logger.info("WA order notification sent for %s", order_id)
+    except Exception as exc:
+        logger.warning("WA notify failed for %s: %s", order_id, exc)
+    finally:
+        notify_db.close()
+
 # DB dependency
 def get_db():
     db = SessionLocal()
@@ -123,6 +158,23 @@ def safe_str(v: Optional[Any]) -> str:
     if v is None:
         return ""
     return str(v)
+
+def normalize_mobile_10(value: Optional[Any]) -> str:
+    """Normalize Wix/contact numbers to the local 10-digit mobile stored in DB."""
+    digits = re.sub(r"\D", "", safe_str(value)).lstrip("0")
+    if digits.startswith("91") and len(digits) > 10:
+        digits = digits[-10:]
+    elif len(digits) > 10:
+        digits = digits[-10:]
+    return digits if len(digits) == 10 else ""
+
+def _notify_orders_table_changed(order_id: str, action: str = "changed") -> None:
+    try:
+        from routes.orders import notify_order_change
+
+        notify_order_change(order_id=order_id, action=action)
+    except Exception as exc:
+        logger.debug("Order websocket notify skipped for %s: %s", order_id, exc)
 
 def sanitize_scalar(value: Any):
     if value is None:
@@ -762,9 +814,7 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
             name_candidate = safe_str(contact.get("fullName") or contact.get("firstName") or (buyer.get("firstName") or buyer.get("lastName")) or "")
             name = name_candidate.strip() or None
             phone_raw = safe_str(contact.get("phone") or "")
-            phone_digits = re.sub(r'\D', '', phone_raw)
-            if phone_digits and len(phone_digits) < 7:
-                phone_digits = ""
+            phone_digits = normalize_mobile_10(phone_raw)
             email = safe_str(contact.get("email") or "")
 
             logger.debug("Extracted contact for wix order %s: %s", wix_order_id, contact)
@@ -1120,20 +1170,19 @@ def sync_wix_orders(request: Request, db: Session = Depends(get_db)):
 
             try:
                 db.commit()
-                try:
-                    from services.chat_service import notify_order_created as _notify
-                    import asyncio
-                    phone = str(phone_digits or "")
-                    if phone and len(phone) >= 10:
-                        amount_str = f"₹{payment_due:,.0f}"
-                        asyncio.create_task(_notify(
-                            db=db, phone=phone, order_id=wix_order_id,
-                            customer_name=name or "", amount=amount_str,
-                            address_line=addr_line_raw,
-                            payment_status=payment_status,   # already "paid" or "pending"
-                        ))
-                except Exception as _e:
-                    logger.warning("WA notify failed for %s: %s", wix_order_id, _e)
+                _notify_orders_table_changed(
+                    wix_order_id,
+                    "created" if not existing_order else "updated",
+                )
+                if not existing_order:
+                    _notify_order_created_sync(
+                        phone=str(phone_digits or ""),
+                        order_id=wix_order_id,
+                        customer_name=name or "",
+                        amount=f"₹{payment_due:,.0f}",
+                        address_line=addr_line_raw,
+                        payment_status=payment_status,
+                    )
             except Exception as e:
                 try:
                     db.rollback()

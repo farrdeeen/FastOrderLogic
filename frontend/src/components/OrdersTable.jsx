@@ -123,7 +123,6 @@ export default function OrdersTable({
   orders = [],
   filters = {},
   onAction,
-  onLoadMore,
   hasMore = true,
   isLoadingMore = false,
   isInitialLoading = false, // ← NEW: true while first fetch is in flight
@@ -159,6 +158,7 @@ export default function OrdersTable({
           cust.name,
           cust.mobile,
           o.awb_number,
+          o.utr_number,
           o.channel,
         ]
           .filter(Boolean)

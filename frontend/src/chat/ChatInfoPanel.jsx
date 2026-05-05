@@ -1,11 +1,22 @@
 // src/chat/ChatInfoPanel.jsx
+// Renders as a slide-over panel (inside the chat column) triggered by
+// clicking the avatar / name in ChatWindow header.
+// Business logic (sendOrderConfirmation, resolveSession, HumanTogglePanel) unchanged.
+
 import { useState } from "react";
 import { Box, Typography } from "@mui/material";
+import { X, ChevronRight, Package, Flag, Zap } from "lucide-react";
 import { resolveSession, sendOrderConfirmation } from "./chatApi";
-import { chatStyles, FLAG_ACTIONS, QUICK_REPLIES, avatarColor } from "./styles";
+import {
+  chatStyles,
+  FLAG_ACTIONS,
+  QUICK_REPLIES,
+  avatarColor,
+  WA,
+} from "./styles";
 import HumanTogglePanel from "./HumanTogglePanel";
 
-// ── Small helper row ──────────────────────────────────────────────────────────
+// ── Small helpers ─────────────────────────────────────────────────────────────
 function InfoRow({ label, value }) {
   return (
     <Box sx={chatStyles.infoRow}>
@@ -15,10 +26,9 @@ function InfoRow({ label, value }) {
   );
 }
 
-// ── Panel label ───────────────────────────────────────────────────────────────
-function PanelLabel({ children }) {
+function SectionLabel({ children }) {
   return (
-    <Typography component="span" sx={chatStyles.panelLabel}>
+    <Typography component="span" sx={chatStyles.infoPanelLabel}>
       {children}
     </Typography>
   );
@@ -30,6 +40,19 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
   const [amount, setAmount] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
+
+  const inputStyle = {
+    width: "100%",
+    fontSize: "14px",
+    padding: "9px 12px",
+    borderRadius: "8px",
+    border: `1px solid ${WA.borderMid}`,
+    background: WA.bgHeader,
+    color: WA.textPrimary,
+    outline: "none",
+    fontFamily: "inherit",
+    boxSizing: "border-box",
+  };
 
   const handleSend = async () => {
     if (!orderId.trim() || !amount.trim()) {
@@ -49,10 +72,7 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
       onSent();
       onClose();
     } catch (err) {
-      setError(
-        err?.response?.data?.detail ||
-          "Failed to send. Check phone number and template approval.",
-      );
+      setError(err?.response?.data?.detail || "Failed to send template.");
     } finally {
       setSending(false);
     }
@@ -60,83 +80,85 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
 
   return (
     <Box
+      onClick={onClose}
       sx={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.35)",
-        zIndex: 1300,
+        background: "rgba(0,0,0,0.45)",
+        zIndex: 1400,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        padding: "16px",
       }}
-      onClick={onClose}
     >
       <Box
+        onClick={(e) => e.stopPropagation()}
         sx={{
-          background: "var(--color-background-primary)",
-          borderRadius: "var(--border-radius-lg)",
-          border: "0.5px solid var(--color-border-secondary)",
+          background: "#fff",
+          borderRadius: "12px",
           padding: "20px",
-          width: 300,
+          width: "100%",
+          maxWidth: "340px",
           display: "flex",
           flexDirection: "column",
-          gap: "12px",
+          gap: "14px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.18)",
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        <Typography sx={{ fontSize: 13, fontWeight: 500 }}>
-          Send order confirmation
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <Typography
+            sx={{ fontSize: 15, fontWeight: 600, color: WA.textPrimary }}
+          >
+            Send Order Confirmation
+          </Typography>
+          <Box
+            component="button"
+            type="button"
+            onClick={onClose}
+            sx={{ ...chatStyles.iconCircleBtn, color: WA.textSub }}
+          >
+            <X size={16} />
+          </Box>
+        </Box>
+
+        <Typography sx={{ fontSize: 13, color: WA.textSub }}>
+          Sending <strong>order_confirmation</strong> template to{" "}
+          <strong>{chat.name}</strong>
         </Typography>
 
-        <Typography sx={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-          Sends the approved <strong>order_confirmation</strong> WhatsApp
-          template to <strong>{chat.name}</strong> ({chat.phone}).
-        </Typography>
-
-        <Box sx={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <label style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <label style={{ fontSize: 12, color: WA.textSub, fontWeight: 500 }}>
             Order ID
           </label>
           <input
             value={orderId}
             onChange={(e) => setOrderId(e.target.value)}
             placeholder="e.g. ORD-1001"
-            style={{
-              fontSize: 12,
-              padding: "6px 10px",
-              borderRadius: 6,
-              border: "0.5px solid var(--color-border-secondary)",
-              background: "var(--color-background-secondary)",
-              color: "var(--color-text-primary)",
-              outline: "none",
-            }}
+            style={inputStyle}
           />
         </Box>
 
-        <Box sx={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <label style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <label style={{ fontSize: 12, color: WA.textSub, fontWeight: 500 }}>
             Amount
           </label>
           <input
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder="e.g. ₹999"
-            style={{
-              fontSize: 12,
-              padding: "6px 10px",
-              borderRadius: 6,
-              border: "0.5px solid var(--color-border-secondary)",
-              background: "var(--color-background-secondary)",
-              color: "var(--color-text-primary)",
-              outline: "none",
-            }}
+            style={inputStyle}
           />
         </Box>
 
         {error && (
-          <Typography
-            sx={{ fontSize: 11, color: "var(--color-text-danger, #c0392b)" }}
-          >
+          <Typography sx={{ fontSize: 12, color: "#E53935" }}>
             {error}
           </Typography>
         )}
@@ -145,13 +167,14 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
           <button
             onClick={onClose}
             style={{
-              fontSize: 12,
-              padding: "6px 14px",
-              borderRadius: 6,
-              border: "0.5px solid var(--color-border-secondary)",
+              fontSize: 13,
+              padding: "8px 18px",
+              borderRadius: "8px",
+              border: `1px solid ${WA.borderMid}`,
               background: "transparent",
-              color: "var(--color-text-secondary)",
+              color: WA.textSub,
               cursor: "pointer",
+              fontFamily: "inherit",
             }}
           >
             Cancel
@@ -160,16 +183,15 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
             onClick={handleSend}
             disabled={sending}
             style={{
-              fontSize: 12,
-              padding: "6px 14px",
-              borderRadius: 6,
+              fontSize: 13,
+              padding: "8px 18px",
+              borderRadius: "8px",
               border: "none",
-              background: sending
-                ? "var(--color-border-secondary)"
-                : "var(--color-text-info, #1a73e8)",
+              background: sending ? WA.borderMid : WA.greenMid,
               color: "#fff",
               cursor: sending ? "not-allowed" : "pointer",
-              opacity: sending ? 0.7 : 1,
+              fontFamily: "inherit",
+              fontWeight: 600,
             }}
           >
             {sending ? "Sending…" : "Send"}
@@ -183,16 +205,17 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ChatInfoPanel({
   chat,
+  onClose,
   onResolved,
   onQuickReply,
   onFlagChange,
+  onModeChange,
 }) {
   const [resolving, setResolving] = useState(false);
   const [activeFlag, setActiveFlag] = useState(null);
   const [showOrderModal, setShowOrderModal] = useState(false);
-  const [orderSentFor, setOrderSentFor] = useState(null); // session id of last sent
+  const [orderSentFor, setOrderSentFor] = useState(null);
 
-  // Keep local flag state in sync when chat changes
   const currentFlag = activeFlag ?? chat?.flag ?? null;
   const isResolved = currentFlag === "resolved" || chat?.status === "resolved";
 
@@ -200,15 +223,17 @@ export default function ChatInfoPanel({
     return (
       <Box
         sx={{
-          height: "100%",
+          flex: 1,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "var(--color-text-tertiary)",
-          fontSize: 12,
+          color: WA.textSub,
+          fontSize: 13,
+          padding: "24px",
+          textAlign: "center",
         }}
       >
-        No user selected
+        Select a conversation to view details
       </Box>
     );
   }
@@ -229,7 +254,7 @@ export default function ChatInfoPanel({
       setActiveFlag("resolved");
       if (onResolved) onResolved(chat.id);
     } catch {
-      // silent — let user retry
+      /* silent */
     } finally {
       setResolving(false);
     }
@@ -251,16 +276,33 @@ export default function ChatInfoPanel({
       invoiceNumber: "—",
       amount: "—",
     });
-    if (onQuickReply) {
-      onQuickReply(text);
-    }
+    if (onQuickReply) onQuickReply(text);
   };
 
-  const alreadySentThisSession = orderSentFor === chat.id;
+  const alreadySent = orderSentFor === chat.id;
+
+  const statusPillStyle = {
+    display: "inline-block",
+    fontSize: "11px",
+    padding: "2px 10px",
+    borderRadius: "12px",
+    fontWeight: 600,
+    background:
+      chat.status === "active"
+        ? "#E8F5E9"
+        : chat.status === "waiting"
+          ? "#FFF8E1"
+          : WA.bgHeader,
+    color:
+      chat.status === "active"
+        ? "#2E7D32"
+        : chat.status === "waiting"
+          ? "#E65100"
+          : WA.textSub,
+  };
 
   return (
-    <Box sx={{ ...chatStyles.panel, height: "100%" }}>
-      {/* ── Order Confirmation Modal ── */}
+    <>
       {showOrderModal && (
         <OrderConfirmModal
           chat={chat}
@@ -269,84 +311,79 @@ export default function ChatInfoPanel({
         />
       )}
 
-      {/* ── Customer info ── */}
-      <Box sx={chatStyles.panelSection}>
-        {/* Avatar + name */}
+      {/* ── Panel header (green bar) ── */}
+      <Box sx={chatStyles.infoPanelHeader}>
+        <Box
+          component="button"
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          sx={chatStyles.infoPanelCloseBtn}
+        >
+          <X size={18} strokeWidth={2} />
+        </Box>
+        <Typography
+          sx={{ fontSize: 16, fontWeight: 600, color: "#fff", flex: 1 }}
+        >
+          Contact Info
+        </Typography>
+      </Box>
+
+      {/* ── Avatar + name block ── */}
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          padding: "24px 16px 20px",
+          borderBottom: `1px solid ${WA.border}`,
+          background: WA.bgHeader,
+          gap: "8px",
+        }}
+      >
         <Box
           sx={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            mb: "12px",
+            ...chatStyles.avatar(bg, textColor, 72),
+            fontSize: "26px",
+            mb: "4px",
           }}
         >
-          <Box
-            sx={{
-              ...chatStyles.avatar(bg, textColor, 44),
-              mb: "8px",
-              fontSize: 15,
-            }}
-          >
-            {initials}
-          </Box>
-          <Typography sx={{ fontSize: 13, fontWeight: 500 }}>
-            {chat.name}
-          </Typography>
-          <Typography
-            sx={{ fontSize: 11, color: "var(--color-text-tertiary)" }}
-          >
-            {chat.phone}
-          </Typography>
+          {initials}
         </Box>
+        <Typography
+          sx={{ fontSize: 18, fontWeight: 600, color: WA.textPrimary }}
+        >
+          {chat.name}
+        </Typography>
+        <Typography sx={{ fontSize: 13, color: WA.textSub }}>
+          {chat.phone}
+        </Typography>
+        <span style={statusPillStyle}>{chat.status || "active"}</span>
+      </Box>
 
-        <PanelLabel>Details</PanelLabel>
-        <InfoRow
-          label="Status"
-          value={
-            <span
-              style={{
-                fontSize: 10,
-                padding: "2px 7px",
-                borderRadius: 20,
-                fontWeight: 500,
-                background:
-                  chat.status === "active"
-                    ? "#EAF3DE"
-                    : chat.status === "waiting"
-                      ? "#FAEEDA"
-                      : "var(--color-background-secondary)",
-                color:
-                  chat.status === "active"
-                    ? "#27500A"
-                    : chat.status === "waiting"
-                      ? "#633806"
-                      : "var(--color-text-tertiary)",
-              }}
-            >
-              {chat.status || "active"}
-            </span>
-          }
-        />
+      {/* ── Details ── */}
+      <Box sx={chatStyles.infoPanelSection}>
+        <SectionLabel>Details</SectionLabel>
         <InfoRow
           label="Last message"
           value={
-            <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-              {chat.lastTime
-                ? new Date(chat.lastTime).toLocaleString([], {
-                    day: "numeric",
-                    month: "short",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : "—"}
-            </span>
+            chat.lastTime
+              ? new Date(chat.lastTime).toLocaleString([], {
+                  day: "numeric",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              : "—"
           }
         />
         {chat.unread > 0 && (
           <InfoRow
-            label="Unread"
+            label="Unread messages"
             value={
-              <span style={{ ...chatStyles.badge("new") }}>{chat.unread}</span>
+              <span style={{ ...chatStyles.badge("new"), fontSize: 11 }}>
+                {chat.unread}
+              </span>
             }
           />
         )}
@@ -354,32 +391,132 @@ export default function ChatInfoPanel({
 
       {/* ── Linked order ── */}
       {chat.linked_order_id && (
-        <Box sx={chatStyles.panelSection}>
-          <PanelLabel>Linked order</PanelLabel>
+        <Box sx={chatStyles.infoPanelSection}>
+          <SectionLabel>Linked Order</SectionLabel>
           <Box sx={chatStyles.orderCard}>
-            <p>
+            <p
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                marginBottom: "4px",
+              }}
+            >
+              <Package size={13} />
               <strong>#{chat.linked_order_id}</strong>
             </p>
-            <p>{chat.order_status || "pending"}</p>
+            <p style={{ margin: 0 }}>{chat.order_status || "pending"}</p>
           </Box>
         </Box>
       )}
 
+      {/* ── WhatsApp actions ── */}
+      <Box sx={chatStyles.infoPanelSection}>
+        <SectionLabel>WhatsApp Actions</SectionLabel>
+        <button
+          onClick={() => setShowOrderModal(true)}
+          disabled={alreadySent}
+          style={{
+            ...chatStyles.actionBtn,
+            opacity: alreadySent ? 0.6 : 1,
+            cursor: alreadySent ? "default" : "pointer",
+          }}
+        >
+          <Package size={15} />
+          {alreadySent
+            ? "✓ Order confirmation sent"
+            : "Send order confirmation"}
+          {!alreadySent && (
+            <ChevronRight
+              size={14}
+              style={{ marginLeft: "auto", color: WA.textSub }}
+            />
+          )}
+        </button>
+      </Box>
+
+      {/* ── AI / Human toggle ── */}
+      <Box sx={chatStyles.infoPanelSection}>
+        <HumanTogglePanel
+          chat={chat}
+          onModeChange={(sessionId, isHuman) => {
+            if (onModeChange) onModeChange(sessionId, isHuman);
+          }}
+        />
+      </Box>
+
+      {/* ── Flag ── */}
+      <Box sx={chatStyles.infoPanelSection}>
+        <SectionLabel>
+          <Flag
+            size={10}
+            style={{
+              display: "inline",
+              marginRight: "4px",
+              verticalAlign: "middle",
+            }}
+          />
+          Flag Conversation
+        </SectionLabel>
+        {FLAG_ACTIONS.map((action) => {
+          const isActive = currentFlag === action.id;
+          return (
+            <button
+              key={action.id}
+              onClick={() => handleFlag(action.id)}
+              disabled={action.id === "resolved" && isResolved && resolving}
+              style={chatStyles.flagBtn(action.type, isActive)}
+            >
+              {action.id === "resolved" && resolving
+                ? "Resolving…"
+                : action.label}
+              {isActive && (
+                <span style={{ marginLeft: "auto", fontSize: 11 }}>✓</span>
+              )}
+            </button>
+          );
+        })}
+      </Box>
+
+      {/* ── Quick replies ── */}
+      <Box sx={chatStyles.infoPanelSection}>
+        <SectionLabel>
+          <Zap
+            size={10}
+            style={{
+              display: "inline",
+              marginRight: "4px",
+              verticalAlign: "middle",
+            }}
+          />
+          Quick Replies
+        </SectionLabel>
+        {QUICK_REPLIES.map((reply) => (
+          <button
+            key={reply.id}
+            onClick={() => handleQuickReply(reply)}
+            style={chatStyles.quickActionBtn}
+          >
+            {reply.label}
+          </button>
+        ))}
+      </Box>
+
       {/* ── Last message preview ── */}
       {chat.lastMsg && (
-        <Box sx={chatStyles.panelSection}>
-          <PanelLabel>Last message</PanelLabel>
+        <Box sx={{ ...chatStyles.infoPanelSection, borderBottom: "none" }}>
+          <SectionLabel>Last Message</SectionLabel>
           <Typography
             sx={{
-              fontSize: 11,
-              color: "var(--color-text-secondary)",
-              background: "var(--color-background-secondary)",
-              borderRadius: "var(--border-radius-md)",
-              p: "8px",
-              border: "0.5px solid var(--color-border-tertiary)",
-              lineHeight: 1.5,
+              fontSize: 13,
+              color: WA.textSub,
+              background: WA.bgHeader,
+              borderRadius: "8px",
+              padding: "10px 12px",
+              lineHeight: 1.55,
+              border: `1px solid ${WA.border}`,
               display: "-webkit-box",
-              WebkitLineClamp: 4,
+              WebkitLineClamp: 5,
               WebkitBoxOrient: "vertical",
               overflow: "hidden",
             }}
@@ -388,81 +525,6 @@ export default function ChatInfoPanel({
           </Typography>
         </Box>
       )}
-
-      {/* ── WhatsApp actions ── */}
-      <Box sx={chatStyles.panelSection}>
-        <PanelLabel>WhatsApp actions</PanelLabel>
-        <button
-          onClick={() => setShowOrderModal(true)}
-          disabled={alreadySentThisSession}
-          style={{
-            width: "100%",
-            fontSize: 12,
-            padding: "7px 12px",
-            borderRadius: 6,
-            border: "0.5px solid var(--color-border-secondary)",
-            background: alreadySentThisSession
-              ? "var(--color-background-secondary)"
-              : "var(--color-background-primary)",
-            color: alreadySentThisSession
-              ? "var(--color-text-tertiary)"
-              : "var(--color-text-primary)",
-            cursor: alreadySentThisSession ? "default" : "pointer",
-            textAlign: "left",
-            marginBottom: "6px",
-          }}
-        >
-          {alreadySentThisSession
-            ? "✓ Order confirmation sent"
-            : "📦 Send order confirmation"}
-        </button>
-      </Box>
-      {/* ── Human / AI Mode Toggle ── */}
-      <Box sx={chatStyles.panelSection}>
-        <HumanTogglePanel
-          chat={chat}
-          onModeChange={(sessionId, isHuman) => {
-            // Optionally propagate up for list badge updates
-            if (onFlagChange) onFlagChange(sessionId, isHuman ? "human" : null);
-          }}
-        />
-      </Box>
-
-      {/* ── Flag this chat ── */}
-      <Box sx={chatStyles.panelSection}>
-        <PanelLabel>Flag this chat</PanelLabel>
-        {FLAG_ACTIONS.map((action) => {
-          const isActive = currentFlag === action.id;
-          return (
-            <button
-              key={action.id}
-              onClick={() => handleFlag(action.id)}
-              style={chatStyles.flagBtn(action.type, isActive)}
-              disabled={action.id === "resolved" && isResolved && resolving}
-            >
-              {action.id === "resolved" && resolving
-                ? "Resolving…"
-                : action.label}
-            </button>
-          );
-        })}
-      </Box>
-
-      {/* ── Quick replies ── */}
-      <Box sx={chatStyles.panelSection}>
-        <PanelLabel>Quick replies</PanelLabel>
-        <Box sx={chatStyles.quickActions}>
-          {QUICK_REPLIES.map((reply) => (
-            <button
-              key={reply.id}
-              onClick={() => handleQuickReply(reply)}
-              style={chatStyles.quickActionBtn}
-            >
-              {reply.label}
-            </button>
-          ))}
-        </Box>
-      </Box>
-    </Box>
+    </>
   );
 }

@@ -38,7 +38,7 @@ from services.ai_order_service import (
 logger = logging.getLogger(__name__)
 
 _TEMPLATE_ORDER_CONFIRMED = "order_confirmation"
-_TEMPLATE_PAYMENT_PENDING = "payment_pending"
+_TEMPLATE_PAYMENT_CONFIRMATION = "payment_pending"
 _RAZORPAY_BASE = os.getenv("RAZORPAY_BASE_URL", "https://rzp.io/l")
 
 def parse_amount(amount):
@@ -50,24 +50,35 @@ def parse_amount(amount):
     except:
         return 0.0
 
+def normalize_local_phone(phone: str) -> str:
+    """Return a clean 10-digit Indian mobile number when possible."""
+    if not phone:
+        return ""
+
+    digits = re.sub(r"\D", "", str(phone)).lstrip("0")
+    if digits.startswith("91") and len(digits) > 10:
+        digits = digits[-10:]
+    elif len(digits) > 10:
+        digits = digits[-10:]
+
+    if len(digits) == 10:
+        return digits
+
+    logger.warning("Local phone normalization fallback used: %s", phone)
+    return digits
+
+
 def normalize_phone(phone: str) -> str:
     """
     Ensure phone is in E.164 format for WhatsApp.
     Default country: India (+91)
     """
-    if not phone:
+    local_phone = normalize_local_phone(phone)
+    if not local_phone:
         return ""
-    # remove spaces, +, -, etc
-    digits = re.sub(r"\D", "", phone)
-    # Already correct (91XXXXXXXXXX)
-    if digits.startswith("91") and len(digits) == 12:
-        return digits
-    # Local 10 digit → add 91
-    if len(digits) == 10:
-        return "91" + digits
-    # Fallback: return as-is (but log it)
-    logger.warning("Phone normalization fallback used: %s", phone)
-    return digits
+    if len(local_phone) == 10:
+        return "91" + local_phone
+    return local_phone
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Session helpers
@@ -336,6 +347,11 @@ async def notify_order_created(
     address_line: str = "",
     payment_status: str = "pending",
 ) -> None:
+    phone = normalize_phone(phone)
+    if not phone:
+        logger.warning("notify_order_created skipped, missing phone for order %s", order_id)
+        return
+
     session    = get_or_create_session(db, phone)
     session_id = session["id"]
     is_paid    = payment_status.lower() in ("paid", "success", "accepted")
@@ -370,8 +386,8 @@ async def notify_order_created(
     else:
         try:
             await send_template_message(
-                to=normalize_phone(phone),
-                template_name=_TEMPLATE_PAYMENT_PENDING,
+                to=phone,
+                template_name=_TEMPLATE_PAYMENT_CONFIRMATION,
                 language="en",
                 components=[{
                     "type": "body",
@@ -386,7 +402,7 @@ async def notify_order_created(
             save_message(
                 db, session_id, "system",
                 f"[template:payment_pending] {customer_name} / {order_id} / {amount}",
-                meta={"order_id": order_id, "flow": "payment_pending_template", "payment": "pending"},
+                meta={"order_id": order_id, "flow": "payment_pending", "payment": "pending"},
             )
         except Exception as exc:
             logger.error("payment_pending template failed for %s: %s", phone, exc)
@@ -396,7 +412,7 @@ async def notify_order_created(
                 order_id=order_id,
                 amount=parse_amount(amount),
                 name=customer_name or "Customer",
-                phone=normalize_phone(phone)
+                phone=phone
             )
 
             if not pay_link:
@@ -405,7 +421,7 @@ async def notify_order_created(
                 f"💳 Complete your payment to confirm shipment:\n{pay_link}\n\n"
                 "Once paid, we'll dispatch Today. Reply here if you need any help!"
             )
-            await send_text_message(normalize_phone(phone), pay_msg)
+            await send_text_message(phone, pay_msg)
             save_message(
                 db, session_id, "system", pay_msg,
                 meta={"order_id": order_id, "flow": "payment_link"}
@@ -416,6 +432,11 @@ async def notify_order_created(
 
 
 async def notify_order_shipped(db: Session, phone: str, order_id: str, awb: str) -> None:
+    phone = normalize_phone(phone)
+    if not phone:
+        logger.warning("notify_order_shipped skipped, missing phone for order %s", order_id)
+        return
+
     session    = get_or_create_session(db, phone)
     session_id = session["id"]
 

@@ -1,10 +1,10 @@
 import asyncio
 from email.mime import base
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_, func, String
-from typing import Optional, List
+from typing import Optional, List, Set
 from datetime import datetime, timedelta
 from auth.clerk_auth import get_current_user as require_user
 from fastapi import Depends
@@ -23,6 +23,62 @@ metadata = MetaData()
 
 customer_tbl = Table("customer", metadata, autoload_with=SessionLocal().bind)
 offline_customer_tbl = Table("offline_customer", metadata, autoload_with=SessionLocal().bind)
+
+
+class OrderChangeHub:
+    def __init__(self):
+        self.clients: Set[WebSocket] = set()
+        self.loop = None
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.loop = asyncio.get_running_loop()
+        self.clients.add(websocket)
+        await websocket.send_json({"type": "orders_connected"})
+
+    def disconnect(self, websocket: WebSocket):
+        self.clients.discard(websocket)
+
+    async def broadcast(self, payload: dict):
+        dead_clients = []
+        for websocket in list(self.clients):
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                dead_clients.append(websocket)
+        for websocket in dead_clients:
+            self.disconnect(websocket)
+
+
+order_change_hub = OrderChangeHub()
+
+
+def notify_order_change(order_id: Optional[str] = None, action: str = "changed"):
+    """Fan out an order change to connected order tables."""
+    if not order_change_hub.clients:
+        return
+
+    payload = {
+        "type": "orders_changed",
+        "action": action,
+        "order_id": order_id,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    loop = order_change_hub.loop
+    if loop and loop.is_running():
+        asyncio.run_coroutine_threadsafe(order_change_hub.broadcast(payload), loop)
+
+
+@router.websocket("/ws")
+async def orders_ws(websocket: WebSocket):
+    await order_change_hub.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        order_change_hub.disconnect(websocket)
+    except Exception:
+        order_change_hub.disconnect(websocket)
 
 
 def get_global_suffix(db):
@@ -220,6 +276,18 @@ def _row_to_dict(row):
     return d
 
 
+def _get_order_summary(db: Session, order_id: str):
+    row = db.execute(
+        text(f"""
+            {_ORDER_SELECT_SQL}
+            WHERE o.order_id = :oid
+            LIMIT 1
+        """),
+        {"oid": order_id},
+    ).first()
+    return _row_to_dict(row) if row else None
+
+
 # ================================
 # CREATE ORDER
 # ================================
@@ -362,6 +430,7 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         logging.getLogger(__name__).warning("WA notify_order_created failed: %s", exc)
     # ── END WhatsApp hook ─────────────────────────────────────────────────
 
+    notify_order_change(order_id, "created")
     return {"success": True, "order_id": order_id}
 
 
@@ -410,9 +479,7 @@ def recent_changes(
     db: Session = Depends(get_db),
 ):
     """
-    Lightweight delta-sync endpoint.
-    The frontend calls this every 20 s; for a 10-person team the result
-    set will almost always be empty or contain a handful of rows.
+    Lightweight delta-sync endpoint kept as a manual/fallback refresh path.
     Uses the same optimised _ORDER_SELECT_SQL so serial_status is consistent.
     """
     try:
@@ -428,6 +495,14 @@ def recent_changes(
     """)
     rows = db.execute(sql, {"since": since_dt}).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+@router.get("/summary/{order_id:path}")
+def order_summary(order_id: str, _=Depends(require_user), db: Session = Depends(get_db)):
+    row = _get_order_summary(db, order_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return row
 
 
 # ================================
@@ -498,6 +573,7 @@ def list_orders(
             LOWER(o.payment_status)  LIKE :search OR
             LOWER(o.delivery_status) LIKE :search OR
             LOWER(CAST(o.awb_number AS CHAR)) LIKE :search OR
+            LOWER(CAST(o.utr_number AS CHAR)) LIKE :search OR
             LOWER(COALESCE(c.name,  '')) LIKE :search OR
             LOWER(CAST(COALESCE(c.mobile, '') AS CHAR)) LIKE :search OR
             LOWER(COALESCE(oc.name, ''))  LIKE :search OR
@@ -574,6 +650,7 @@ def add_item_to_order(order_id: str, payload: AddOrderItem, db: Session = Depend
     order.total_items = totals.items or 0
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
 
     return {"success": True, "item_id": item_id, "product_id": payload.product_id,
             "product_name": product.name, "quantity": payload.quantity,
@@ -609,6 +686,7 @@ def remove_item_from_order(order_id: str, item_id: int, db: Session = Depends(ge
     order.total_items = totals.items or 0
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
 
     return {"success": True, "message": "Item removed", "order_total": float(order.total_amount), "order_total_items": order.total_items}
 
@@ -663,6 +741,7 @@ def update_utr_number(order_id: str, payload: UTRUpdate, db: Session = Depends(g
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
+    notify_order_change(order_id, "updated")
     return {"success": True, "order_id": order_id, "utr_number": order.utr_number}
 
 
@@ -677,6 +756,7 @@ def mark_as_paid(order_id: str, db: Session = Depends(get_db)):
     order.payment_status = "paid"
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"message": "Marked as paid"}
 
 
@@ -694,6 +774,7 @@ def mark_paid_with_utr(order_id: str, payload: UTRPayload, db: Session = Depends
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
+    notify_order_change(order_id, "updated")
     return {"message": f"Order {order_id} marked as paid", "payment_status": order.payment_status,
             "utr_number": order.utr_number, "order_status": order.order_status}
 
@@ -706,6 +787,7 @@ def mark_as_fulfilled(order_id: str, db: Session = Depends(get_db)):
     order.delivery_status = "READY"
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"message": "Marked as fulfilled"}
 
 
@@ -718,6 +800,7 @@ def mark_as_delhivery(order_id: str, awb: Optional[str] = None, db: Session = De
     order.awb_number = awb or "To be assigned"
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"message": "Marked as shipped", "awb": order.awb_number}
 
 
@@ -729,6 +812,7 @@ def mark_as_invoiced(order_id: str, db: Session = Depends(get_db)):
     order.order_status = "COMPLETED"
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"message": "Marked as invoiced"}
 
 
@@ -789,6 +873,7 @@ def save_serial_numbers(order_id: str, data: dict, db: Session = Depends(get_db)
                {"now": datetime.now(), "oid": order_id})
 
     db.commit()
+    notify_order_change(order_id, "updated")
     order_skus = [row.sku_id for row in order_items]
     serial_counts = db.execute(text("SELECT sku_id, COUNT(*) AS count FROM device_transaction WHERE order_id = :oid AND in_out = 2 GROUP BY sku_id"), {"oid": order_id}).fetchall()
     serial_map = {row.sku_id: row.count for row in serial_counts}
@@ -815,6 +900,7 @@ def toggle_payment(order_id: str, db: Session = Depends(get_db)):
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
+    notify_order_change(order_id, "updated")
     return {"message": f"Payment toggled for {order_id}", "payment_status": order.payment_status, "order_status": order.order_status}
 
 
@@ -829,6 +915,7 @@ def update_delivery_status(order_id: str, status: str, db: Session = Depends(get
     order.delivery_status = status
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"message": "Delivery status updated", "delivery_status": status}
 
 
@@ -841,6 +928,7 @@ def create_local_invoice(order_id: str, db: Session = Depends(get_db)):
     order.invoice_number = invoice_number
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"message": "Invoice created", "invoice_number": invoice_number}
 
 
@@ -860,6 +948,7 @@ def update_delivery(order_id: str, payload: DeliveryUpdate, db: Session = Depend
     order.delivery_status = payload.status
     order.updated_at = datetime.now()
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"message": "Delivery updated", "delivery_status": payload.status}
 
 
@@ -871,6 +960,7 @@ def update_order_remarks(order_id: str, data: dict, db: Session = Depends(get_db
     db.execute(text("UPDATE orders SET remarks = :remarks, updated_at = :now WHERE order_id = :oid"),
                {"remarks": remarks, "oid": order_id, "now": datetime.now()})
     db.commit()
+    notify_order_change(order_id, "updated")
     return {"success": True, "order_id": order_id, "remarks": remarks}
 
 
@@ -883,6 +973,7 @@ def search_suggestions(q: str, db: Session = Depends(get_db)):
         SELECT DISTINCT result FROM (
             SELECT order_id AS result FROM orders WHERE LOWER(order_id) LIKE :q
             UNION SELECT CAST(awb_number AS CHAR) FROM orders WHERE LOWER(awb_number) LIKE :q
+            UNION SELECT CAST(utr_number AS CHAR) FROM orders WHERE LOWER(utr_number) LIKE :q
             UNION SELECT name FROM customer WHERE LOWER(name) LIKE :q
             UNION SELECT mobile FROM customer WHERE LOWER(mobile) LIKE :q
             UNION SELECT name FROM offline_customer WHERE LOWER(name) LIKE :q
@@ -906,6 +997,7 @@ def delete_order(order_id: str, db: Session = Depends(get_db)):
         db.execute(text("DELETE FROM device_transaction WHERE order_id = :oid"), {"oid": order_id})
         db.delete(order)
         db.commit()
+        notify_order_change(order_id, "deleted")
         return {"success": True, "message": "Order deleted successfully"}
     except Exception as e:
         db.rollback()
@@ -1019,6 +1111,7 @@ def update_customer_email(order_id: str, payload: EmailUpdate, db: Session = Dep
         else:
             raise HTTPException(status_code=400, detail="No customer associated with order")
         db.commit()
+        notify_order_change(order_id, "updated")
         return {"success": True, "email": email}
     except Exception as e:
         db.rollback()
@@ -1041,6 +1134,7 @@ def update_customer_mobile(order_id: str, payload: MobileUpdate, db: Session = D
         else:
             raise HTTPException(status_code=400, detail="No customer associated with order")
         db.commit()
+        notify_order_change(order_id, "updated")
         return {"success": True, "mobile": mobile}
     except Exception as e:
         db.rollback()
@@ -1066,6 +1160,7 @@ def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Dep
         db.execute(text("UPDATE orders SET total_amount = :t, updated_at = :now WHERE order_id = :oid"),
                    {"t": new_order_total, "oid": order_id, "now": datetime.now()})
         db.commit()
+        notify_order_change(order_id, "updated")
         return {"success": True, "item_id": payload.item_id, "unit_price": payload.unit_price, "total_price": new_total_price, "order_total": new_order_total}
     except Exception as e:
         db.rollback()
@@ -1084,6 +1179,7 @@ def update_order_address(order_id: str, payload: AddressUpdate, db: Session = De
         order.address_id = payload.address_id
         order.updated_at = datetime.now()
         db.commit()
+        notify_order_change(order_id, "updated")
         return {"success": True, "address_id": payload.address_id}
     except Exception as e:
         db.rollback()
@@ -1118,6 +1214,7 @@ def update_item_product(order_id: str, payload: ProductUpdate, db: Session = Dep
                    {"pid": payload.product_id, "iid": payload.item_id, "oid": order_id})
         order.updated_at = datetime.now()
         db.commit()
+        notify_order_change(order_id, "updated")
         return {"success": True, "item_id": payload.item_id, "product_id": payload.product_id, "product_name": product.name}
     except Exception as e:
         db.rollback()
@@ -1134,6 +1231,7 @@ def reject_order(order_id: str, db: Session = Depends(get_db)):
         order.invoice_number = "NA"
         order.updated_at = datetime.now()
         db.commit()
+        notify_order_change(order_id, "updated")
         return {"success": True, "message": "Order rejected successfully", "order_status": "REJECTED", "invoice_number": "NA"}
     except Exception as e:
         db.rollback()
@@ -1155,6 +1253,7 @@ async def update_awb_number(order_id: str, payload: AWBUpdate, db: Session = Dep
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
+    notify_order_change(order_id, "updated")
 
     # ── WhatsApp notification (non-blocking) ──────────────────────────────
     if awb:
@@ -1196,6 +1295,7 @@ def update_invoice_number(order_id: str, payload: InvoiceNumberUpdate, db: Sessi
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
+    notify_order_change(order_id, "updated")
     return {
         "success": True,
         "order_id": order_id,

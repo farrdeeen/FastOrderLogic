@@ -208,7 +208,7 @@ export default function SearchBar({ filters, setFilters }) {
         </svg>
         <input
           className="sb-search"
-          placeholder="Search order ID, customer, mobile…"
+          placeholder="Search order ID, customer, mobile, UTR…"
           value={localSearch}
           onChange={(e) => setLocalSearch(e.target.value)}
         />

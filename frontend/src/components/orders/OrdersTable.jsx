@@ -213,11 +213,28 @@ function SyncIndicator({ syncing, lastSync }) {
       </span>
     );
   if (!lastSync) return null;
+  if (lastSync === "live") {
+    return (
+      <span style={{ fontSize: 11, color: "var(--text3)" }}>
+        Live updates on
+      </span>
+    );
+  }
   return (
     <span style={{ fontSize: 11, color: "var(--text3)" }}>
       ↻ Synced {lastSync}
     </span>
   );
+}
+
+function getOrdersWsUrl() {
+  const base = api.defaults.baseURL || window.location.origin;
+  const url = new URL(base, window.location.origin);
+  const rootPath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${rootPath}/orders/ws`;
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.search = "";
+  return url.toString();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -242,7 +259,14 @@ function applyFilters(orders, filters) {
     // ── Text search ──
     if (search) {
       const q = search.toLowerCase().trim();
-      const hay = [o.order_id, cust.name, cust.mobile, o.awb_number, o.channel]
+      const hay = [
+        o.order_id,
+        cust.name,
+        cust.mobile,
+        o.awb_number,
+        o.utr_number,
+        o.channel,
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -330,6 +354,7 @@ export default function OrdersTable({
   filters = {},
   onAction,
   onOrdersUpdate, // NEW: callback so parent can merge delta orders
+  onOrdersDelete,
   isInitialLoading = false,
   isLoadingMore = false,
   loadedCount = 0,
@@ -343,11 +368,11 @@ export default function OrdersTable({
   const [loadingDetails, setLoadingDetails] = useState({});
   const [pushedAwbs, setPushedAwbs] = useState({});
 
-  // ── Delta sync state ──
+  // ── Live order-change state ──
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
-  const lastSyncTs = useRef(null); // ISO timestamp of last successful sync
-  const syncTimer = useRef(null);
+  const wsRef = useRef(null);
+  const wsReconnectRef = useRef(null);
 
   const isBusy = isInitialLoading || isLoadingMore;
 
@@ -356,50 +381,91 @@ export default function OrdersTable({
     return Math.round(totalEstimate / 300);
   }, [totalEstimate]);
 
-  /* ── Delta sync: poll /orders/recent-changes every 20 s ─────────────────
-     Only fetches rows where updated_at > last sync timestamp.
-     For 30k orders with ≤10 operators, this keeps traffic minimal.
-     ─────────────────────────────────────────────────────────────────────── */
-  const runDeltaSync = useCallback(async () => {
-    if (!lastSyncTs.current) {
-      // On first run, just set the baseline timestamp and skip fetching
-      lastSyncTs.current = new Date().toISOString();
-      return;
-    }
-    try {
-      setSyncing(true);
-      const res = await api.get("/orders/recent-changes", {
-        params: { since: lastSyncTs.current },
-      });
-      const changed = res.data || [];
-      if (changed.length > 0 && onOrdersUpdate) {
-        onOrdersUpdate(changed);
-      }
-      lastSyncTs.current = new Date().toISOString();
-      const now = new Date();
-      setLastSync(
-        now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      );
-    } catch (e) {
-      // Silent fail — don't disrupt UX for background sync errors
-      console.warn("Delta sync failed:", e?.message);
-    } finally {
-      setSyncing(false);
-    }
-  }, [onOrdersUpdate]);
+  const markSyncedNow = useCallback(() => {
+    const now = new Date();
+    setLastSync(
+      now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    );
+  }, []);
 
-  // Start polling once the table is fully loaded
+  const refreshOrderFromServer = useCallback(
+    async (orderId) => {
+      if (!orderId || !onOrdersUpdate) return;
+      try {
+        setSyncing(true);
+        const res = await api.get(
+          `/orders/summary/${encodeURIComponent(orderId)}`,
+        );
+        if (res.data?.order_id) onOrdersUpdate([res.data]);
+        markSyncedNow();
+      } catch (e) {
+        console.warn("Order live refresh failed:", e?.message);
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [markSyncedNow, onOrdersUpdate],
+  );
+
+  /* ── Live refresh: websocket event → fetch only the changed order row ───── */
   useEffect(() => {
     if (isBusy) return;
 
-    // Set baseline timestamp when data finishes loading
-    if (!lastSyncTs.current) {
-      lastSyncTs.current = new Date().toISOString();
-    }
+    let stopped = false;
 
-    syncTimer.current = setInterval(runDeltaSync, 20_000); // every 20s
-    return () => clearInterval(syncTimer.current);
-  }, [isBusy, runDeltaSync]);
+    const connect = () => {
+      if (stopped) return;
+
+      const ws = new WebSocket(getOrdersWsUrl());
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setLastSync("live");
+      };
+
+      ws.onmessage = (event) => {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (payload.type !== "orders_changed") return;
+
+        if (payload.action === "deleted" && payload.order_id) {
+          onOrdersDelete && onOrdersDelete(payload.order_id);
+          markSyncedNow();
+          return;
+        }
+
+        refreshOrderFromServer(payload.order_id);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      ws.onclose = () => {
+        if (stopped) return;
+        wsReconnectRef.current = window.setTimeout(connect, 5000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      if (wsReconnectRef.current) {
+        window.clearTimeout(wsReconnectRef.current);
+        wsReconnectRef.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [isBusy, markSyncedNow, onOrdersDelete, refreshOrderFromServer]);
 
   /* ── Client-side filter + enrichment ── */
   const filtered = useMemo(

@@ -4,6 +4,8 @@ routers/chat_router.py
 Chat session management endpoints.
 """
 import logging
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -23,7 +25,8 @@ def get_db():
 
 
 class HumanTogglePayload(BaseModel):
-    phone: str
+    phone: Optional[str] = None
+    session_id: Optional[int] = None
     is_human: bool
 
 
@@ -31,12 +34,26 @@ class HumanTogglePayload(BaseModel):
 def toggle_human_mode(payload: HumanTogglePayload, db: Session = Depends(get_db)):
     """Switch a chat session between AI mode and Human mode."""
     from services.chat_service import normalize_phone
-    phone = normalize_phone(payload.phone)
 
-    row = db.execute(
-        text("SELECT id FROM chat_sessions WHERE phone_number = :ph"),
-        {"ph": phone},
-    ).fetchone()
+    if payload.session_id:
+        row = db.execute(
+            text("SELECT id, phone_number FROM chat_sessions WHERE id = :sid"),
+            {"sid": payload.session_id},
+        ).fetchone()
+    elif payload.phone:
+        phone = normalize_phone(payload.phone)
+        row = db.execute(
+            text("""
+                SELECT id, phone_number
+                FROM chat_sessions
+                WHERE phone_number = :ph
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+            """),
+            {"ph": phone},
+        ).fetchone()
+    else:
+        raise HTTPException(status_code=400, detail="session_id or phone is required")
 
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -52,15 +69,16 @@ def toggle_human_mode(payload: HumanTogglePayload, db: Session = Depends(get_db)
         pass  # Column already exists
 
     db.execute(
-        text("UPDATE chat_sessions SET is_human = :val, updated_at = NOW() WHERE phone_number = :ph"),
-        {"val": payload.is_human, "ph": phone},
+        text("UPDATE chat_sessions SET is_human = :val, updated_at = NOW() WHERE id = :sid"),
+        {"val": payload.is_human, "sid": row.id},
     )
     db.commit()
 
-    logger.info("Human mode set to %s for phone=%s", payload.is_human, phone)
+    logger.info("Human mode set to %s for session=%s", payload.is_human, row.id)
     return {
         "success": True,
-        "phone": phone,
+        "session_id": row.id,
+        "phone": row.phone_number,
         "is_human": payload.is_human,
         "mode": "human" if payload.is_human else "ai",
     }

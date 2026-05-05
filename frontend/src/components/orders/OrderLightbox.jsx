@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import api from "../../api/axiosInstance";
 import {
   PaymentBadge,
@@ -46,6 +46,8 @@ const STATUS_BADGE = {
   PENDING: { label: "Pending", cls: "badge-gray" },
 };
 
+const serialInputKey = (itemId, index) => `${itemId}-${index}`;
+
 export default function OrderLightbox({
   order,
   details,
@@ -59,6 +61,7 @@ export default function OrderLightbox({
   const [serialOpen, setSerialOpen] = useState(false);
   const [serialItems, setSerialItems] = useState([]);
   const [serialLoading, setSerialLoading] = useState(false);
+  const serialInputRefs = useRef({});
 
   const [remarksVal, setRemarksVal] = useState(details?.remarks || "");
   const [remarksEditing, setRemarksEditing] = useState(false);
@@ -261,6 +264,74 @@ export default function OrderLightbox({
       setSerialLoading(false);
     }
   };
+
+  const updateSerialAt = useCallback((itemIndex, serialIndex, value) => {
+    setSerialItems((prev) =>
+      prev.map((item, idx) =>
+        idx === itemIndex
+          ? {
+              ...item,
+              serials: item.serials.map((serial, sIdx) =>
+                sIdx === serialIndex ? value : serial,
+              ),
+            }
+          : item,
+      ),
+    );
+  }, []);
+
+  const handleSerialAdvance = useCallback((itemIndex, serialIndex, rawValue) => {
+    const parts = String(rawValue || "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (parts.length === 0) return;
+
+    let nextFocusKey = null;
+
+    setSerialItems((prev) => {
+      const next = prev.map((item) => ({
+        ...item,
+        serials: [...item.serials],
+      }));
+      const positions = next.flatMap((item, idx) =>
+        item.serials.map((_, sIdx) => ({
+          itemIndex: idx,
+          serialIndex: sIdx,
+          key: serialInputKey(item.item_id, sIdx),
+        })),
+      );
+      const start = positions.findIndex(
+        (pos) =>
+          pos.itemIndex === itemIndex && pos.serialIndex === serialIndex,
+      );
+
+      if (start === -1) return prev;
+
+      parts.forEach((part, offset) => {
+        const pos = positions[start + offset];
+        if (!pos) return;
+        next[pos.itemIndex].serials[pos.serialIndex] = part;
+      });
+
+      nextFocusKey = positions[start + parts.length]?.key || null;
+      return next;
+    });
+
+    window.setTimeout(() => {
+      if (nextFocusKey) serialInputRefs.current[nextFocusKey]?.focus();
+    }, 50);
+  }, []);
+
+  const handleSerialKeyDown = useCallback(
+    (event, itemIndex, serialIndex) => {
+      if (event.key !== "Enter" && event.key !== "Tab") return;
+      event.preventDefault();
+      handleSerialAdvance(itemIndex, serialIndex, event.currentTarget.value);
+    },
+    [handleSerialAdvance],
+  );
 
   const saveSerials = async () => {
     try {
@@ -1283,35 +1354,36 @@ export default function OrderLightbox({
                     Assign Serial Numbers
                   </div>
                   <div style={{ padding: 14 }}>
-                    {serialItems.map((item) => (
+                    {serialItems.map((item, itemIndex) => (
                       <div className="serial-item" key={item.item_id}>
                         <h4>
                           {item.product_name} — Qty {item.quantity}
                         </h4>
-                        {item.serials.map((sn, i) => (
-                          <input
-                            key={`${item.item_id}-${i}`}
-                            className="serial-input"
-                            type="text"
-                            value={sn}
-                            placeholder={`Serial ${i + 1}`}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSerialItems((prev) =>
-                                prev.map((it) =>
-                                  it.item_id === item.item_id
-                                    ? {
-                                        ...it,
-                                        serials: it.serials.map((s, idx) =>
-                                          idx === i ? val : s,
-                                        ),
-                                      }
-                                    : it,
-                                ),
-                              );
-                            }}
-                          />
-                        ))}
+                        {item.serials.map((sn, i) => {
+                          const inputKey = serialInputKey(item.item_id, i);
+                          return (
+                            <input
+                              key={inputKey}
+                              ref={(el) => {
+                                if (el) serialInputRefs.current[inputKey] = el;
+                                else delete serialInputRefs.current[inputKey];
+                              }}
+                              className="serial-input"
+                              type="text"
+                              value={sn}
+                              placeholder={`Serial ${i + 1}`}
+                              autoComplete="off"
+                              spellCheck={false}
+                              autoFocus={itemIndex === 0 && i === 0}
+                              onChange={(e) =>
+                                updateSerialAt(itemIndex, i, e.target.value)
+                              }
+                              onKeyDown={(e) =>
+                                handleSerialKeyDown(e, itemIndex, i)
+                              }
+                            />
+                          );
+                        })}
                       </div>
                     ))}
                     <div

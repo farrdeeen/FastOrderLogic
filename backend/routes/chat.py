@@ -94,6 +94,7 @@ def list_conversations(
             cs.last_message,
             cs.last_message_at,
             cs.status,
+            cs.is_human,
             cs.created_at,
             cs.updated_at,
             (
@@ -131,12 +132,17 @@ def get_messages(
         params["before_id"] = before_id
 
     rows = db.execute(text(f"""
-        SELECT cm.id, cm.session_id, cm.wa_message_id, cm.sender,
-               cm.message, cm.meta, cm.status, cm.timestamp
-        FROM chat_messages cm
-        WHERE cm.session_id = :sid {cursor_clause}
-        ORDER BY cm.timestamp ASC
-        LIMIT :lim
+        SELECT latest.id, latest.session_id, latest.wa_message_id, latest.sender,
+               latest.message, latest.meta, latest.status, latest.timestamp
+        FROM (
+            SELECT cm.id, cm.session_id, cm.wa_message_id, cm.sender,
+                   cm.message, cm.meta, cm.status, cm.timestamp
+            FROM chat_messages cm
+            WHERE cm.session_id = :sid {cursor_clause}
+            ORDER BY cm.timestamp DESC, cm.id DESC
+            LIMIT :lim
+        ) latest
+        ORDER BY latest.timestamp ASC, latest.id ASC
     """), params).fetchall()
 
     return [dict(r._mapping) for r in rows]

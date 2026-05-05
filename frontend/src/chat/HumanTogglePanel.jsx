@@ -1,17 +1,7 @@
 // src/chat/HumanTogglePanel.jsx
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Box, Typography, CircularProgress } from "@mui/material";
-import axios from "axios";
-
-const API_BASE = import.meta.env.VITE_API_URL || "";
-
-async function apiToggleHuman(phone, isHuman) {
-  const resp = await axios.post(`${API_BASE}/chat/toggle-human`, {
-    phone,
-    is_human: isHuman,
-  });
-  return resp.data;
-}
+import { toggleHumanMode } from "./chatApi";
 
 // ── Mode badge ────────────────────────────────────────────────────────────────
 function ModeBadge({ isHuman }) {
@@ -46,13 +36,19 @@ export default function HumanTogglePanel({ chat, onModeChange }) {
   const [error, setError] = useState(null);
   const [lastToggled, setLastToggled] = useState(null);
 
+  useEffect(() => {
+    setIsHuman(Boolean(chat?.is_human));
+    setLastToggled(null);
+    setError(null);
+  }, [chat?.id, chat?.is_human]);
+
   const handleToggle = useCallback(async () => {
-    if (!chat?.phone || loading) return;
+    if (!chat?.id || loading) return;
     const next = !isHuman;
     setLoading(true);
     setError(null);
     try {
-      await apiToggleHuman(chat.phone, next);
+      await toggleHumanMode(chat.id, chat.phone, next);
       setIsHuman(next);
       setLastToggled(new Date());
       if (onModeChange) onModeChange(chat.id, next);

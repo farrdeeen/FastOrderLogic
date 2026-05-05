@@ -18,6 +18,7 @@ from routes import dashboard as dashboard_router
 from routes.chat import router as chat_api_router
 from routes.chat_router import router as chat_control_router
 from routes.razorpay_webhook import router as razorpay_router
+from routes.serial_search import router as serial_search_router
 
 
 
@@ -45,6 +46,7 @@ app.include_router(webhook_router.router)
 app.include_router(dashboard_router.router) 
 app.include_router(chat_control_router)
 app.include_router(razorpay_router)
+app.include_router(serial_search_router)
        # ← NEW
 
 

@@ -1,8 +1,15 @@
 // src/chat/ConversationsList.jsx
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Typography } from "@mui/material";
+import { Bell, Menu, Search, MessageCirclePlus } from "lucide-react";
 import { fetchConversations } from "./chatApi";
-import { chatStyles, CHAT_FILTERS, FLAG_COLORS, avatarColor } from "./styles";
+import {
+  chatStyles,
+  CHAT_FILTERS,
+  FLAG_COLORS,
+  avatarColor,
+  WA,
+} from "./styles";
 
 function formatTime(iso) {
   if (!iso) return "";
@@ -15,10 +22,8 @@ function formatTime(iso) {
   return d.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
-// Derive badge types from a conversation object
 function getBadges(conv) {
   const badges = [];
-  if (conv.unread_count > 0) badges.push("new");
   if (conv.flag === "flagged") badges.push("flagged");
   if (conv.flag === "urgent") badges.push("urgent");
   if (conv.linked_order_id) badges.push("order");
@@ -26,7 +31,6 @@ function getBadges(conv) {
   return badges;
 }
 
-// Match a conversation against an active filter id
 function matchesFilter(conv, filterId) {
   if (filterId === "all") return true;
   if (filterId === "flagged") return conv.flag === "flagged";
@@ -37,26 +41,106 @@ function matchesFilter(conv, filterId) {
   return true;
 }
 
-export default function ConversationsList({ onSelectChat, activeId }) {
+function toChat(conv) {
+  return {
+    id: conv.id,
+    name: conv.wa_contact_name || conv.phone_number,
+    phone: conv.phone_number,
+    lastMsg: conv.last_message,
+    lastTime: conv.last_message_at,
+    status: conv.status,
+    flag: conv.flag,
+    unread: conv.unread_count,
+    linked_order_id: conv.linked_order_id,
+    is_human: Boolean(conv.is_human),
+  };
+}
+
+export default function ConversationsList({ onSelectChat, activeId, onOpenNav }) {
   const [conversations, setConversations] = useState([]);
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notificationPermission, setNotificationPermission] = useState(() => {
+    if (typeof window === "undefined" || !("Notification" in window))
+      return "unsupported";
+    return Notification.permission;
+  });
+
+  const latestRef = useRef(new Map());
+  const loadedOnce = useRef(false);
+  const activeIdRef = useRef(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  const requestNotifications = useCallback(async () => {
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+    const p = await Notification.requestPermission();
+    setNotificationPermission(p);
+  }, []);
+
+  const notifyConv = useCallback(
+    (conv) => {
+      if (!("Notification" in window) || Notification.permission !== "granted")
+        return;
+      if (
+        document.visibilityState === "visible" &&
+        activeIdRef.current === conv.id
+      )
+        return;
+      const name = conv.wa_contact_name || conv.phone_number || "Customer";
+      let n;
+      try {
+        n = new Notification(`New message from ${name}`, {
+          body: conv.last_message || "New message",
+          tag: `chat-${conv.id}`,
+          renotify: true,
+        });
+      } catch {
+        return;
+      }
+      n.onclick = () => {
+        window.focus();
+        onSelectChat(toChat(conv));
+        n.close();
+      };
+    },
+    [onSelectChat],
+  );
 
   const load = useCallback(async () => {
     try {
       const data = await fetchConversations({ search, limit: 100 });
+      data.forEach((conv) => {
+        const key = [
+          conv.last_message_at || "",
+          conv.last_message || "",
+          conv.unread_count || 0,
+        ].join("|");
+        const prev = latestRef.current.get(conv.id);
+        if (
+          loadedOnce.current &&
+          prev !== key &&
+          Number(conv.unread_count || 0) > 0
+        )
+          notifyConv(conv);
+        latestRef.current.set(conv.id, key);
+      });
+      loadedOnce.current = true;
       setConversations(data);
       setError(null);
     } catch {
-      setError("Failed to load conversations");
+      setError("Failed to load conversations.");
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [notifyConv, search]);
 
-  // Initial load + poll every 20 s
   useEffect(() => {
     load();
     const t = setInterval(load, 20000);
@@ -66,71 +150,117 @@ export default function ConversationsList({ onSelectChat, activeId }) {
   const visible = conversations.filter((c) => matchesFilter(c, activeFilter));
 
   return (
-    <Box sx={chatStyles.convList}>
-      {/* Search */}
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        width: "100%",
+        minWidth: 0,
+        maxWidth: "100%",
+        boxSizing: "border-box",
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
+      {/* ── Header ── */}
       <Box sx={chatStyles.sidebarHeader}>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search conversations..."
-          style={chatStyles.searchInput}
-        />
+        {onOpenNav && (
+          <Box
+            component="button"
+            type="button"
+            onClick={onOpenNav}
+            aria-label="Open navigation"
+            sx={chatStyles.mobileMenuButton}
+          >
+            <Menu size={20} strokeWidth={2} />
+          </Box>
+        )}
+        <Box component="span" sx={chatStyles.sidebarTitle}>
+          Chats
+        </Box>
+        <Box sx={chatStyles.sidebarActions}>
+          {notificationPermission !== "granted" &&
+            notificationPermission !== "unsupported" && (
+              <Box
+                component="button"
+                type="button"
+                onClick={requestNotifications}
+                title="Enable notifications"
+                aria-label="Enable notifications"
+                sx={chatStyles.iconCircleBtn}
+              >
+                <Bell size={17} strokeWidth={2} />
+              </Box>
+            )}
+          <Box
+            component="button"
+            type="button"
+            title="New chat"
+            aria-label="New chat"
+            sx={chatStyles.iconCircleBtn}
+          >
+            <MessageCirclePlus size={17} strokeWidth={2} />
+          </Box>
+        </Box>
       </Box>
 
-      {/* Filter pills */}
+      {/* ── Search ── */}
+      <Box sx={chatStyles.searchBox}>
+        <Box sx={chatStyles.searchWrap}>
+          <Box sx={chatStyles.searchIcon}>
+            <Search size={14} strokeWidth={2} />
+          </Box>
+          <Box
+            component="input"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search or start new chat"
+            sx={chatStyles.searchInput}
+          />
+        </Box>
+      </Box>
+
+      {/* ── Filter pills ── */}
       <Box sx={chatStyles.filterRow}>
         {CHAT_FILTERS.map((f) => {
           const isActive = activeFilter === f.id;
-          const activeStyle = isActive
+          const active = isActive
             ? chatStyles.pillActive[f.activeVariant] ||
               chatStyles.pillActive.all
             : {};
           return (
-            <button
+            <Box
+              component="button"
+              type="button"
               key={f.id}
               onClick={() => setActiveFilter(f.id)}
-              style={{ ...chatStyles.pill, ...activeStyle }}
+              sx={{ ...chatStyles.pill, ...active }}
             >
               {f.label}
-            </button>
+            </Box>
           );
         })}
       </Box>
 
-      {/* List */}
-      <Box sx={{ overflowY: "auto", flex: 1 }}>
+      {/* ── List ── */}
+      <Box sx={chatStyles.convList}>
         {loading && (
           <Typography
-            sx={{
-              p: 2,
-              textAlign: "center",
-              fontSize: 12,
-              color: "var(--color-text-tertiary)",
-            }}
+            sx={{ p: 3, textAlign: "center", fontSize: 13, color: WA.textSub }}
           >
             Loading…
           </Typography>
         )}
         {error && (
           <Typography
-            sx={{
-              p: 2,
-              textAlign: "center",
-              fontSize: 12,
-              color: "var(--color-text-danger, #c0392b)",
-            }}
+            sx={{ p: 3, textAlign: "center", fontSize: 13, color: "#E53935" }}
           >
             {error}
           </Typography>
         )}
         {!loading && visible.length === 0 && (
           <Typography
-            sx={{
-              p: 2,
-              textAlign: "center",
-              fontSize: 12,
-              color: "var(--color-text-tertiary)",
-            }}
+            sx={{ p: 3, textAlign: "center", fontSize: 13, color: WA.textSub }}
           >
             No conversations found
           </Typography>
@@ -148,71 +278,72 @@ export default function ConversationsList({ onSelectChat, activeId }) {
             .join("")
             .toUpperCase();
           const badges = getBadges(conv);
-          const hasUnread = conv.unread_count > 0;
+          const unread = Number(conv.unread_count || 0);
+          const hasUnread = unread > 0;
 
           return (
             <Box
               key={conv.id}
-              onClick={() =>
-                onSelectChat({
-                  id: conv.id,
-                  name: conv.wa_contact_name || conv.phone_number,
-                  phone: conv.phone_number,
-                  lastMsg: conv.last_message,
-                  lastTime: conv.last_message_at,
-                  status: conv.status,
-                  flag: conv.flag,
-                  unread: conv.unread_count,
-                  linked_order_id: conv.linked_order_id,
-                })
-              }
-              sx={{
-                ...chatStyles.convItem(isActive),
-                cursor: "pointer",
-              }}
+              onClick={() => onSelectChat(toChat(conv))}
+              sx={chatStyles.convItem(isActive)}
             >
-              {/* Unread dot */}
-              {hasUnread ? (
-                <Box sx={chatStyles.unreadDot} />
-              ) : (
-                <Box sx={{ width: "7px", flexShrink: 0 }} />
-              )}
-
               {/* Avatar */}
-              <Box sx={chatStyles.avatar(bg, text, 34)}>{initials}</Box>
+              <Box sx={chatStyles.avatar(bg, text, 46)}>{initials}</Box>
 
-              {/* Text content */}
+              {/* Content */}
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Box
-                  sx={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    mb: "2px",
-                  }}
-                >
-                  <Typography sx={chatStyles.convName}>
+                {/* Row 1: name + time */}
+                <Box sx={chatStyles.convMeta}>
+                  <Typography
+                    sx={{
+                      ...chatStyles.convName,
+                      fontWeight: hasUnread ? 600 : 500,
+                    }}
+                  >
                     {conv.wa_contact_name || conv.phone_number}
                   </Typography>
-                  <Typography sx={chatStyles.convTime}>
+                  <Typography
+                    sx={{
+                      ...chatStyles.convTime,
+                      color: hasUnread ? WA.greenAccent : WA.textSub,
+                      fontWeight: hasUnread ? 600 : 400,
+                    }}
+                  >
                     {formatTime(conv.last_message_at)}
                   </Typography>
                 </Box>
 
-                <Typography sx={chatStyles.convPreview}>
-                  {conv.last_message || "No messages yet"}
-                </Typography>
+                {/* Row 2: preview + unread badge */}
+                <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Typography
+                    sx={{
+                      ...chatStyles.convPreview,
+                      fontWeight: hasUnread ? 500 : 400,
+                      color: hasUnread ? WA.textPrimary : WA.textSub,
+                    }}
+                  >
+                    {conv.last_message || "No messages yet"}
+                  </Typography>
+                  {hasUnread && (
+                    <Box sx={chatStyles.unreadBadge}>
+                      {unread > 99 ? "99+" : unread}
+                    </Box>
+                  )}
+                </Box>
 
-                {/* Badges */}
+                {/* Badges row */}
                 {badges.length > 0 && (
                   <Box sx={chatStyles.convBadges}>
                     {badges.map((b) => (
                       <span key={b} style={chatStyles.badge(b)}>
                         {b === "order" && conv.linked_order_id
-                          ? `order #${conv.linked_order_id}`
+                          ? `#${conv.linked_order_id}`
                           : b}
                       </span>
                     ))}
+                    {conv.is_human && (
+                      <span style={chatStyles.badge("flagged")}>👨 human</span>
+                    )}
                   </Box>
                 )}
               </Box>

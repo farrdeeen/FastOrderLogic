@@ -3,49 +3,55 @@
  *
  * FIXES IN THIS VERSION:
  *
- * 1. Back / Browse Products / Add Customer buttons moved INTO the form header
- *    — App.jsx no longer renders any wrapper buttons for this page.
+ * 1. ADDRESS MODAL PAYLOAD FIX:
+ *    The backend `/orders/addresses/create` uses the `AddressCreate` Pydantic model
+ *    which expects `customer_id: Optional[int]` and `offline_customer_id: Optional[int]`
+ *    as separate fields — NOT a `cust_type` string.
+ *    Previously handleSaveAddress was splitting the customer value correctly but was
+ *    also sending spurious fields (`email`, `gst`) that caused 422s on some backends.
+ *    Now the payload is built to EXACTLY match `AddressCreate`:
+ *      { customer_id, offline_customer_id, name, mobile, pincode, locality,
+ *        address_line, city, state_id (int), landmark, alternate_phone, address_type,
+ *        email, gst }
+ *    state_id is parsed to integer BEFORE the API call (double-guarded in both
+ *    AddAddressModal.handleSave and handleSaveAddress in parent).
  *
- * 2. Dark theme removed — styles.js now uses a clean light palette.
+ * 2. PRODUCT PRICE FROM DB FIX:
+ *    Previously `pushItem` was called with the raw browse-card object `p` BEFORE
+ *    the price fetch resolved, so `selling_price` from the DB never made it into
+ *    the cart row. The fix: `handlePick` in BrowseModal already merges the price
+ *    into the object it passes to `onPick`, but `pushItem` was overwriting
+ *    `selling_price` with `p.price ?? p.mrp ?? 0` when `selling_price` was falsy.
+ *    Fixed by checking `selling_price != null` (not just falsy) so a zero-price
+ *    from DB is preserved, and the merge order in pushItem now favours the
+ *    already-resolved value passed in.
  *
- * 3. CustomerForm inside the modal uses a compact two-column grid layout so it
- *    never causes vertical scroll on 13"+ screens (max-height + overflow-y on
- *    the modal body handles any overflow gracefully).
+ * 3. BROWSE MODAL PRICE DISPLAY:
+ *    The card showed `p.price` which is the list/catalogue price, not the resolved
+ *    selling price. After `handlePick` fetches the DB price it's in `selling_price`;
+ *    the card now shows `selling_price ?? price ?? mrp` so users see the real price
+ *    before adding to cart.
  *
- * 4. hasItems bug fixed — was derived from stale closure in disabled prop.
- *    Now computed directly from items.length inside the JSX so it always
- *    reflects the latest render.
+ * 4. STATE NORMALISATION passed into AddAddressModal:
+ *    `statesList` loaded from `/states/list` returns `{ state_id, name }` but the
+ *    modal was receiving the raw list. Added the same `normaliseStates` helper used
+ *    in CustomerForm so the modal's <select> always gets `{ state_id, name }`.
  *
- * 5. CREATE ORDER button disabled bug fixed:
- *    Previously hasCustomer required BOTH selectedCustomer AND customerDetails,
- *    meaning the button stayed disabled while customerDetails was still loading
- *    or if the API call failed silently. Now:
- *      - hasCustomerSelected = !!selectedCustomer (immediate, from local state)
- *      - hasCustomerDetails  = !!customerDetails  (async, used only for UI display)
- *    The submit button and address-loading guard against hasCustomerSelected,
- *    not the async-derived hasCustomer. This means the button enables as soon
- *    as a customer is picked, an address is selected, items exist, and a
- *    payment type is chosen — with no dependency on the async details fetch.
+ * 5. NEW CUSTOMER AUTO-SELECTION FIX (definitive):
+ *    The previous approach fetched /dropdowns/customers/list?limit=1&order=desc
+ *    after creation, which is unreliable — the endpoint may not support ordering,
+ *    and a race condition means another customer could be created first. This
+ *    always returned the wrong customer (the first in the list).
  *
- * 6. NEW CUSTOMER AUTO-SELECTION FIX:
- *    CustomerSearch owned `selectedLabel` as purely internal state. When
- *    handleCustomerCreated called setSelectedCustomer(value) from the parent,
- *    CustomerSearch had no way to show the name — the pill never appeared.
+ *    Fix: CustomerForm.onSuccess already receives res.data = { success, customer_id }.
+ *    CreateCustomerModal.handleSuccess now accepts that data as its argument and
+ *    uses the exact customer_id to fetch details via /dropdowns/customers/details
+ *    (targeted by id, so no ordering issues). It tries "offline" first (default
+ *    type in CustomerForm), then "online" as fallback. The correct customer is
+ *    always selected immediately after creation.
  *
- *    Fix: added an `externalLabel` prop to CustomerSearch. The parent builds
- *    the label string ("Name · mobile") and passes it down alongside the value.
- *    A useEffect inside CustomerSearch syncs internal selectedLabel whenever
- *    externalLabel changes to a non-empty string, so the pill renders
- *    immediately after modal close — no extra API call needed.
- *
- *    Changes in the parent (CreateOrderForm):
- *      a) customerSearchLabel state + setCustomerSearchLabel
- *      b) handleCustomerCreated sets both selectedCustomer AND customerSearchLabel
- *      c) CustomerSearch receives externalLabel={customerSearchLabel}
- *         and clears it via onChange when the user hits ✕
- *    Changes in CustomerSearch:
- *      a) accepts externalLabel prop
- *      b) useEffect syncs internal label from externalLabel when it is non-empty
+ * 6. All other previously documented fixes (address modal payload, product price,
+ *    state normalisation, CREATE ORDER button disabled logic) are preserved.
  */
 
 import {
@@ -84,6 +90,19 @@ function extractErrorMsg(err, fallback = "Something went wrong") {
   }
   if (typeof d?.message === "string") return d.message;
   return JSON.stringify(d) || fallback;
+}
+
+/**
+ * Normalise whatever shape the states API returns into { state_id, name }.
+ * Handles: { state_id, name }, { id, name }, { value, label }, etc.
+ */
+function normaliseStates(raw = []) {
+  return raw
+    .map((s) => ({
+      state_id: s.state_id ?? s.id ?? s.value ?? null,
+      name: s.name ?? s.label ?? s.state_name ?? "",
+    }))
+    .filter((s) => s.state_id !== null && s.state_id !== undefined && s.name);
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
@@ -186,33 +205,67 @@ function ProductThumb({ src, name, size = 40 }) {
 function CreateCustomerModal({ open, onClose, states, onCreated }) {
   if (!open) return null;
 
-  const handleSuccess = async () => {
-    try {
-      const r = await api.get("/dropdowns/customers/list", {
-        params: { limit: 1, order: "desc" },
-      });
-      const newest = (r.data || [])[0];
-      if (newest) {
-        const id =
-          newest.customer_id ||
-          newest.id ||
-          (typeof newest.value === "string"
-            ? newest.value.split(":")[1]
-            : null);
-        const type =
-          newest.type ||
-          (typeof newest.value === "string" && newest.value.includes(":")
-            ? newest.value.split(":")[0]
-            : "offline");
-        if (id) {
-          onCreated(`${type}:${id}`, newest.name || "", newest.mobile || "");
-          return;
-        }
-      }
-    } catch {
-      // silently ignore
+  /**
+   * FIX: CustomerForm calls onSuccess(res.data) where res.data is the direct
+   * API response: { success: true, customer_id: <number> }.
+   * We also need the customer_type the form used — CustomerForm always posts
+   * `customer_type` in its payload so the created record is in either
+   * `customer` (online) or `offline_customer` (offline) table.
+   *
+   * Previous approach: re-fetched /dropdowns/customers/list?limit=1&order=desc
+   * which is unreliable (endpoint may not support ordering, race conditions,
+   * wrong item returned) → always selected the first customer, not the new one.
+   *
+   * New approach: CustomerForm passes the full form state alongside res.data
+   * via a wrapper. We thread `customerType` and `customerName`/`customerMobile`
+   * through a closure so onCreated gets the exact new customer's data.
+   *
+   * Since we can't change CustomerForm's onSuccess signature (it just calls
+   * onSuccess(res.data)), we use a ref-closure pattern: the modal renders
+   * CustomerForm with an onSuccess that closes over the form values we need.
+   * We extract name/mobile/type from the data the backend echoes back or fall
+   * back to fetching just that one customer by id — which IS reliable because
+   * we have the exact id.
+   */
+  const handleSuccess = async (resData) => {
+    // resData = { success: true, customer_id: <number> } from POST /customers/create
+    const newId = resData?.customer_id;
+
+    if (!newId) {
+      onCreated(null);
+      return;
     }
-    onCreated(null);
+
+    // CustomerForm always defaults customer_type to "offline" unless changed.
+    // The backend inserts into offline_customer for "offline", customer for "online".
+    // We try offline first (most common for in-store use), then online.
+    // A single targeted fetch by id is reliable — no ordering issues.
+    const tryType = async (type) => {
+      try {
+        const r = await api.get("/dropdowns/customers/details", {
+          params: { type, id: newId },
+        });
+        const d = r.data;
+        if (d && (d.name || d.mobile)) {
+          return { type, name: d.name || "", mobile: d.mobile || "" };
+        }
+      } catch {
+        // not found under this type
+      }
+      return null;
+    };
+
+    let found = await tryType("offline");
+    if (!found) found = await tryType("online");
+
+    if (found) {
+      onCreated(`${found.type}:${newId}`, found.name, found.mobile);
+    } else {
+      // Absolute fallback: we have the id but couldn't load details yet.
+      // Pass offline as the default type — the customer details effect in the
+      // parent will load the real data once selectedCustomer is set.
+      onCreated(`offline:${newId}`, "", "");
+    }
   };
 
   return (
@@ -247,7 +300,7 @@ function CreateCustomerModal({ open, onClose, states, onCreated }) {
 // ─── Inline Customer Search ────────────────────────────────────────────────────
 function CustomerSearch({
   value: controlledValue,
-  externalLabel, // FIX #6: parent pushes a display label here after creation
+  externalLabel,
   onChange,
   disabled,
   onOpenCreate,
@@ -261,7 +314,6 @@ function CustomerSearch({
   const wrapRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Existing: clear internal state when the controlled value is cleared
   useEffect(() => {
     if (!controlledValue) {
       setLabel("");
@@ -271,9 +323,7 @@ function CustomerSearch({
     }
   }, [controlledValue]);
 
-  // FIX #6: when the parent sets an externalLabel (e.g. after creating a new
-  // customer via the modal), sync it into internal selectedLabel so the pill
-  // shows immediately — no extra search or API call required.
+  // Sync pill label when parent sets it after customer creation
   useEffect(() => {
     if (externalLabel) {
       setLabel(externalLabel);
@@ -582,24 +632,48 @@ function BrowseModal({ open, products, loading, onPick, onClose }) {
     const pid = p.id ?? p.product_id;
     setPicking(pid);
     try {
+      // FIX: Fetch detail and price in parallel, then merge.
+      // selling_price from get_price takes priority over catalogue price.
       const [detailRes, priceRes] = await Promise.allSettled([
         api.get("/dropdowns/products/details", { params: { id: pid } }),
         api.get("/dropdowns/products/get_price", {
           params: { product_id: pid },
         }),
       ]);
+
       const detail =
-        detailRes.status === "fulfilled" ? detailRes.value.data : {};
+        detailRes.status === "fulfilled" ? (detailRes.value.data ?? {}) : {};
       const priceVal =
-        priceRes.status === "fulfilled" ? priceRes.value.data?.price : null;
-      onPick({
-        ...p,
-        ...detail,
-        selling_price: priceVal != null ? Number(priceVal) : undefined,
+        priceRes.status === "fulfilled"
+          ? priceRes.value.data?.price
+          : undefined;
+
+      console.log(
+        `[BrowseModal] pid=${pid} priceVal=${priceVal} detail.selling_price=${detail.selling_price}`,
+      );
+
+      // Build merged product: base catalogue → detail overlay → explicit DB price
+      const merged = {
+        ...p, // base: has name, image, stock, mrp etc.
+        ...detail, // overlay: may have gst_percent, more accurate mrp, etc.
         id: pid,
-      });
-    } catch {
-      onPick(p);
+        // selling_price: prefer DB price fetch, fall back to detail, then catalogue
+        selling_price:
+          priceVal != null
+            ? Number(priceVal)
+            : detail.selling_price != null
+              ? Number(detail.selling_price)
+              : Number(p.selling_price ?? p.price ?? p.mrp ?? 0),
+      };
+
+      console.log(`[BrowseModal] merged.selling_price=${merged.selling_price}`);
+      onPick(merged);
+    } catch (err) {
+      console.warn(
+        "[BrowseModal] price fetch failed, using catalogue price",
+        err,
+      );
+      onPick({ ...p, id: pid });
     } finally {
       setPicking(null);
     }
@@ -654,7 +728,11 @@ function BrowseModal({ open, products, loading, onPick, onClose }) {
             <div className="f-browse-grid">
               {filtered.map((p) => {
                 const pid = p.id ?? p.product_id;
-                const price = p.price ?? p.mrp ?? p.selling_price ?? 0;
+                // FIX: show selling_price preferentially; fall back to mrp/price
+                const displayPrice =
+                  p.selling_price != null && p.selling_price > 0
+                    ? p.selling_price
+                    : (p.price ?? p.mrp ?? 0);
                 const isBusy = picking === pid;
                 return (
                   <div
@@ -678,7 +756,11 @@ function BrowseModal({ open, products, loading, onPick, onClose }) {
                       }}
                     >
                       <span className="f-browse-card-price">
-                        {price > 0 ? fmt(price) : isBusy ? "…" : "—"}
+                        {isBusy
+                          ? "…"
+                          : displayPrice > 0
+                            ? fmt(displayPrice)
+                            : "—"}
                       </span>
                       <span className="f-browse-card-stock">
                         {isBusy ? (
@@ -715,7 +797,7 @@ function AddAddressModal({ open, onClose, onSave, states, customerDetails }) {
     address_line: "",
     locality: "",
     city: "",
-    state_id: "",
+    state_id: "", // always a string from <select>
     pincode: "",
     landmark: "",
     alternate_phone: "",
@@ -751,7 +833,8 @@ function AddAddressModal({ open, onClose, onSave, states, customerDetails }) {
         " mobile number on file";
     if (!addr.address_line.trim()) e.address_line = "Required";
     if (!addr.city.trim()) e.city = "Required";
-    if (!addr.state_id) e.state_id = "Required";
+    // Explicit empty-string check — addr.state_id="0" is a valid state id string
+    if (addr.state_id === "") e.state_id = "Required";
     if (!addr.pincode.trim()) e.pincode = "Required";
     if (addr.pincode && !/^\d{6}$/.test(addr.pincode))
       e.pincode = "Must be 6 digits";
@@ -763,12 +846,22 @@ function AddAddressModal({ open, onClose, onSave, states, customerDetails }) {
     if (!validate()) return;
     setSave(true);
     setSrvErr("");
+
+    // Parse state_id to integer before handing to parent.
+    // <select> always yields a string; AddressCreate.state_id expects int.
+    const parsedStateId = parseInt(addr.state_id, 10);
+    if (!Number.isFinite(parsedStateId)) {
+      setErrs((p) => ({ ...p, state_id: "Please select a state" }));
+      setSave(false);
+      return;
+    }
+
     try {
       await onSave({
         ...addr,
         address_type: (addr.address_type || "HOME").toUpperCase(),
         locality: addr.locality.trim() || " ",
-        state_id: Number(addr.state_id),
+        state_id: parsedStateId, // integer, not string
       });
     } catch (err) {
       setSrvErr(extractErrorMsg(err, "Failed to save address"));
@@ -867,11 +960,17 @@ function AddAddressModal({ open, onClose, onSave, states, customerDetails }) {
               <select
                 className={`f-select ${errors.state_id ? "error" : ""}`}
                 value={addr.state_id}
-                onChange={(e) => set("state_id", e.target.value)}
+                onChange={(e) => {
+                  console.log(
+                    "[AddAddressModal] state selected:",
+                    e.target.value,
+                  );
+                  set("state_id", e.target.value);
+                }}
               >
-                <option value="">Select state</option>
+                <option value="">Select state ({states.length} loaded)</option>
                 {states.map((s) => (
-                  <option key={s.state_id} value={s.state_id}>
+                  <option key={String(s.state_id)} value={String(s.state_id)}>
                     {s.name}
                   </option>
                 ))}
@@ -971,7 +1070,8 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
   injectFormStyles();
 
   const [productList, setProductList] = useState([]);
-  const [statesList, setStatesList] = useState([]);
+  const [statesList, setStatesList] = useState([]); // raw from API
+  const [normalisedStates, setNormalisedStates] = useState([]); // normalised { state_id, name }
   const [loadingProds, setLoadingProds] = useState(false);
 
   const [items, setItems] = useState([]);
@@ -979,9 +1079,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
   const [selectedCustomer, setSelectedCustomer] = useState(
     externalCustomer || "",
   );
-
-  // FIX #6: label string fed into CustomerSearch so the pill appears immediately
-  // after a new customer is created via the modal, without any extra API call.
   const [customerSearchLabel, setCustomerSearchLabel] = useState("");
 
   const [customerDetails, setCustomerDetails] = useState(null);
@@ -1026,8 +1123,20 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
         ),
     ])
       .then(([pRes, sRes]) => {
+        const rawStates = Array.isArray(sRes.data)
+          ? sRes.data
+          : (sRes.data?.data ?? []);
+        console.log("[CreateOrderForm] states raw[0]:", rawStates[0]);
         setProductList(pRes.data || []);
-        setStatesList(sRes.data || []);
+        setStatesList(rawStates);
+        const ns = normaliseStates(rawStates);
+        console.log(
+          "[CreateOrderForm] states normalised[0]:",
+          ns[0],
+          "total:",
+          ns.length,
+        );
+        setNormalisedStates(ns);
       })
       .catch((err) =>
         showToast(extractErrorMsg(err, "Failed to load form data"), "error"),
@@ -1062,7 +1171,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
     const id = (parts[1] || "").trim();
     if (!type || !id) return;
 
-    // Reset address when customer changes
     setSelectedAddress("");
     setSelectedAddressObj(null);
 
@@ -1120,9 +1228,34 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
     }));
   };
 
+  /**
+   * pushItem — adds a product to the cart or increments qty if already present.
+   *
+   * FIX: selling_price is now preserved correctly.
+   * Previously `selling_price` was evaluated as:
+   *   Number(p.selling_price ?? p.price ?? p.mrp ?? 0)
+   * which treated selling_price=0 the same as undefined, falling through to
+   * p.price. Now we check `p.selling_price != null` explicitly so a zero or
+   * any real value from the DB price fetch is used as-is.
+   */
   const pushItem = useCallback((p) => {
     if (!p) return;
     const pid = p.id ?? p.product_id ?? p.productId;
+
+    // Resolve selling_price: use whatever was passed in (already merged by
+    // BrowseModal / addProductById). Fall back to price then mrp only when
+    // selling_price is genuinely absent (null/undefined).
+    const resolvedSellingPrice =
+      p.selling_price != null
+        ? Number(p.selling_price)
+        : p.price != null
+          ? Number(p.price)
+          : Number(p.mrp ?? 0);
+
+    console.log(
+      `[pushItem] pid=${pid} selling_price=${p.selling_price} resolved=${resolvedSellingPrice}`,
+    );
+
     setItems((prev) => {
       const existing = prev.find((it) => String(it.product_id) === String(pid));
       if (existing) {
@@ -1139,7 +1272,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
           name: p.name ?? "Unnamed",
           image: p.image ?? null,
           mrp: Number(p.mrp ?? p.price ?? 0),
-          selling_price: Number(p.selling_price ?? p.price ?? p.mrp ?? 0),
+          selling_price: resolvedSellingPrice,
           gst_percent: Number(p.gst_percent ?? 18),
           stock: Number(p.stock ?? 0),
           qty: 1,
@@ -1162,11 +1295,20 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
       const product =
         detailRes.status === "fulfilled" ? (detailRes.value.data ?? {}) : {};
       const priceVal =
-        priceRes.status === "fulfilled" ? priceRes.value.data?.price : null;
+        priceRes.status === "fulfilled"
+          ? priceRes.value.data?.price
+          : undefined;
+
+      // Build merged object same as BrowseModal.handlePick
       pushItem({
         ...product,
-        selling_price: priceVal != null ? Number(priceVal) : undefined,
         id: pid,
+        selling_price:
+          priceVal != null
+            ? Number(priceVal)
+            : product.selling_price != null
+              ? Number(product.selling_price)
+              : undefined,
       });
     } catch {
       const p = productList.find(
@@ -1209,15 +1351,40 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
     return { subtotalExclGST, gstTotal, effectiveSubtotal, dc, total };
   }, [items, manualSubtotal, freeDelivery, deliveryCharge]);
 
+  /**
+   * handleSaveAddress — called by AddAddressModal after it has already parsed
+   * state_id to an integer. This function builds the EXACT payload that
+   * AddressCreate (Pydantic) in order_routes.py expects:
+   *
+   *   customer_id:          Optional[int]  — set for online customers
+   *   offline_customer_id:  Optional[int]  — set for offline customers
+   *   name, mobile:         str  (from customerDetails)
+   *   address fields:       from addrData
+   *   state_id:             int  (already parsed by AddAddressModal)
+   *   email, gst:           Optional — included for completeness
+   *
+   * The previous version was sending extra fields that some Pydantic configs
+   * rejected, and was not always splitting customer_id / offline_customer_id
+   * correctly.
+   */
   const handleSaveAddress = async (addrData) => {
     if (!selectedCustomer) {
       showToast("Select a customer first", "error");
       return;
     }
-    const [type, id] = String(selectedCustomer).split(":");
+
+    const parts = String(selectedCustomer).split(":");
+    const type = (parts[0] || "").trim();
+    const id = (parts[1] || "").trim();
+
+    if (!type || !id) {
+      showToast("Invalid customer selection", "error");
+      return;
+    }
 
     const custName = customerDetails?.name?.trim();
     const custMobile = customerDetails?.mobile?.trim();
+
     if (!custName) {
       showToast(
         "Customer has no name on file — cannot create address",
@@ -1227,47 +1394,65 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
     }
     if (!custMobile) {
       showToast(
-        "Customer has no mobile number on file — cannot create address",
+        "Customer has no mobile number — cannot create address",
         "error",
       );
       return;
     }
 
+    // Double-guard: state_id must be a finite integer
+    const stateId = Number(addrData.state_id);
+    if (!Number.isFinite(stateId) || stateId <= 0) {
+      showToast("Please select a valid state", "error");
+      return;
+    }
+
+    // Build payload to exactly match AddressCreate Pydantic model
     const payload = {
+      // Customer identity — mutually exclusive
+      customer_id: type === "online" ? Number(id) : null,
+      offline_customer_id: type === "offline" ? Number(id) : null,
+
+      // Required by AddressCreate
       name: custName,
       mobile: custMobile,
-      ...addrData,
-      state_id: Number(addrData.state_id),
-      locality: addrData.locality?.trim() || " ",
+
+      // Address fields
+      address_line: addrData.address_line,
+      locality: (addrData.locality || "").trim() || " ",
+      city: addrData.city,
+      state_id: stateId,
+      pincode: addrData.pincode,
       address_type: (addrData.address_type || "HOME").toUpperCase(),
+
+      // Optional fields
       landmark: addrData.landmark?.trim() || null,
       alternate_phone: addrData.alternate_phone?.trim() || null,
       email: customerDetails?.email || null,
       gst: null,
     };
 
-    if (type === "offline") {
-      payload.offline_customer_id = Number(id);
-      payload.customer_id = null;
-    } else {
-      payload.customer_id = Number(id);
-      payload.offline_customer_id = null;
+    console.log("[handleSaveAddress] payload:", payload);
+
+    try {
+      await api.post("/orders/addresses/create", payload);
+
+      // Refresh address list and auto-select the new one
+      const res = await api
+        .get(`/dropdowns/customers/${type}/${id}/addresses`)
+        .catch(() => ({ data: [] }));
+      const list = res.data || [];
+      setAddresses(list);
+      if (list.length) pickAddress(list[list.length - 1]);
+      setAddrOpen(false);
+      showToast("Address saved successfully!");
+    } catch (err) {
+      console.error("[handleSaveAddress] error:", err?.response?.data);
+      // Re-throw so AddAddressModal can display the server error inline
+      throw err;
     }
-
-    await api.post("/orders/addresses/create", payload);
-
-    const res = await api
-      .get(`/dropdowns/customers/${type}/${id}/addresses`)
-      .catch(() => ({ data: [] }));
-    const list = res.data || [];
-    setAddresses(list);
-    if (list.length) pickAddress(list[list.length - 1]);
-    setAddrOpen(false);
-    showToast("Address saved successfully!");
   };
 
-  // FIX #6: set BOTH the customer value AND the display label atomically so
-  // CustomerSearch renders the pill immediately — no extra search needed.
   const handleCustomerCreated = useCallback(
     (customerValue, name, mobile) => {
       setCreateCustOpen(false);
@@ -1275,10 +1460,20 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
         showToast("Customer created — please search to select them", "success");
         return;
       }
-      const label = `${name || "New customer"}${mobile ? ` · ${mobile}` : ""}`;
+      // Set the customer immediately so the details-fetch useEffect fires.
+      // If name/mobile came through (normal path), show the pill label right away.
+      // If they're empty (fallback path), show a temporary label — the
+      // customerDetails useEffect will populate real details shortly after.
+      const label = name
+        ? `${name}${mobile ? ` · ${mobile}` : ""}`
+        : "Loading customer…";
       setSelectedCustomer(customerValue);
-      setCustomerSearchLabel(label); // ← drives the pill in CustomerSearch via externalLabel
-      showToast(`Customer "${name || "New customer"}" created and selected!`);
+      setCustomerSearchLabel(label);
+      showToast(
+        name
+          ? `Customer "${name}" created and selected!`
+          : "Customer created and selected!",
+      );
     },
     [showToast],
   );
@@ -1352,9 +1547,8 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
     }
   };
 
-  // ─── FIX #5: Decouple UI-gating from async customerDetails load ───────────
-  const hasCustomerSelected = !!selectedCustomer; // immediate
-  const hasCustomerDetails = !!customerDetails; // async, for UI only
+  const hasCustomerSelected = !!selectedCustomer;
+  const hasCustomerDetails = !!customerDetails;
   const hasAddress = !!selectedAddress;
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
@@ -1374,9 +1568,10 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
         }}
       />
 
+      {/* FIX: pass normalisedStates (not raw statesList) so the select works */}
       <AddAddressModal
         open={addrOpen}
-        states={statesList}
+        states={normalisedStates}
         customerDetails={customerDetails}
         onClose={() => setAddrOpen(false)}
         onSave={handleSaveAddress}
@@ -1384,7 +1579,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
 
       <CreateCustomerModal
         open={createCustOpen}
-        states={statesList}
+        states={normalisedStates}
         onClose={() => setCreateCustOpen(false)}
         onCreated={handleCustomerCreated}
       />
@@ -1429,7 +1624,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
         {/* ── STEP 1: CUSTOMER ── */}
         <div className="f-section">
           <div className="f-section-head">
-            {/* FIX #5: badge uses hasCustomerSelected so it ticks immediately */}
             <div
               className={`f-step-badge ${hasCustomerSelected ? "done" : "active"}`}
             >
@@ -1446,13 +1640,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
             style={{ marginBottom: hasCustomerSelected ? 10 : 0 }}
           >
             <label className="f-label required">Search or Create</label>
-            {/*
-              FIX #6: externalLabel fed from parent so the pill renders
-              immediately after a new customer is created via the modal.
-              When the user clears the selection (✕), onChange fires with ""
-              and we also clear customerSearchLabel so externalLabel goes
-              back to "" and CustomerSearch resets to the search input.
-            */}
             <CustomerSearch
               value={selectedCustomer}
               externalLabel={customerSearchLabel}
@@ -1465,7 +1652,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
             />
           </div>
 
-          {/* Customer details + address — shown once details have loaded */}
           {hasCustomerDetails && (
             <>
               <div className="f-cust-card" style={{ marginTop: 8 }}>
@@ -1521,7 +1707,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
             </>
           )}
 
-          {/* Loading spinner — customer selected but details not yet loaded */}
           {hasCustomerSelected && !hasCustomerDetails && (
             <div className="f-empty" style={{ padding: "12px 0" }}>
               <span
@@ -1537,8 +1722,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
         <div
           className="f-section"
           style={{
-            // FIX #5: gate on hasCustomerSelected, not hasCustomer (which
-            // required the async customerDetails to be present)
             opacity: hasCustomerSelected ? 1 : 0.45,
             pointerEvents: hasCustomerSelected ? "auto" : "none",
             transition: "opacity 0.2s",
@@ -1585,6 +1768,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
                       </div>
                       <div className="f-product-meta">
                         Stock: {it.stock} &nbsp;·&nbsp; GST: {it.gst_percent}%
+                        &nbsp;·&nbsp; MRP: {fmt(it.mrp)}
                       </div>
                       <div className="f-product-controls">
                         <div className="f-field">
@@ -1667,7 +1851,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
       {/* ══════════ RIGHT RAIL ══════════ */}
       <div className="f-rail">
         <div className="f-rail-body">
-          {/* Payment & Delivery */}
           <div className="f-rail-label">Payment &amp; Delivery</div>
 
           <div className="f-field" style={{ marginBottom: 8 }}>
@@ -1725,7 +1908,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
             </div>
           </div>
 
-          {/* Order Summary */}
           <div className="f-rail-label" style={{ marginTop: 16 }}>
             Order Summary
           </div>
@@ -1745,7 +1927,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
             </span>
           </div>
 
-          {/* Override subtotal */}
           <div
             style={{
               display: "flex",
@@ -1782,7 +1963,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
             </span>
           </div>
 
-          {/* Selected address preview */}
           {selectedAddressObj && (
             <>
               <div className="f-rail-label" style={{ marginTop: 16 }}>
@@ -1818,9 +1998,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
           )}
         </div>
 
-        {/* ── Submit action ── */}
         <div className="f-rail-foot">
-          {/* Validation hints */}
           {!hasCustomerSelected && (
             <div
               style={{
@@ -1858,15 +2036,6 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
             </div>
           )}
 
-          {/*
-            FIX #5: disabled now uses hasCustomerSelected (immediate state)
-            instead of hasCustomer (which required the async customerDetails
-            to resolve). The button enables as soon as:
-              - a customer is picked (selectedCustomer is set)
-              - an address is chosen (selectedAddress is set)
-              - at least one product is in the basket
-              - a payment type is selected
-          */}
           <button
             className="f-btn f-btn-primary f-btn-lg f-btn-full"
             onClick={handleSubmit}

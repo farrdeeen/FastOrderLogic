@@ -8,7 +8,6 @@ import {
   ListItemText,
   IconButton,
   Toolbar,
-  AppBar,
   Typography,
   Box,
   Divider,
@@ -29,12 +28,15 @@ import {
 
 const drawerWidth = 220;
 const collapsedWidth = 70;
+const mobileBreakpoint = "@media (max-width: 768px)";
 
-export default function NavDrawer({ onNavigate }) {
+export default function NavDrawer({
+  onNavigate,
+  mobileOpen = false,
+  onMobileClose,
+}) {
   const [open, setOpen] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
 
-  const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
   const handleCollapseToggle = () => setOpen(!open);
 
   // ⬇️ NEW CHAT MENU ENTRY ADDED HERE
@@ -47,7 +49,10 @@ export default function NavDrawer({ onNavigate }) {
     { text: "Logout", icon: <LogoutIcon />, id: "logout" },
   ];
 
-  const drawerContent = (
+  const drawerContent = (isMobile = false) => {
+    const expanded = isMobile || open;
+
+    return (
     <Box
       sx={{
         height: "100%",
@@ -62,14 +67,16 @@ export default function NavDrawer({ onNavigate }) {
       <Toolbar
         sx={{
           display: "flex",
-          justifyContent: open ? "center" : "center",
+          justifyContent: "center",
           alignItems: "center",
           py: 2,
-          cursor: "pointer",
+          cursor: isMobile ? "default" : "pointer",
         }}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          if (!isMobile) setOpen(true);
+        }}
       >
-        {open ? (
+        {expanded ? (
           <Typography
             variant="h6"
             sx={{ fontWeight: 600, color: "#1e3a8a", textAlign: "center" }}
@@ -90,7 +97,7 @@ export default function NavDrawer({ onNavigate }) {
         {menuItems.map((item) => (
           <Tooltip
             key={item.text}
-            title={!open ? item.text : ""}
+            title={!expanded ? item.text : ""}
             placement="right"
             arrow
           >
@@ -98,18 +105,18 @@ export default function NavDrawer({ onNavigate }) {
               <ListItemButton
                 onClick={() => {
                   if (onNavigate) onNavigate(item.id);
-                  if (mobileOpen) setMobileOpen(false);
+                  if (mobileOpen && onMobileClose) onMobileClose();
                 }}
                 sx={{
                   minHeight: 48,
-                  justifyContent: open ? "initial" : "center",
+                  justifyContent: expanded ? "initial" : "center",
                   px: 2.5,
                 }}
               >
                 <ListItemIcon
                   sx={{
                     minWidth: 0,
-                    mr: open ? 2 : "auto",
+                    mr: expanded ? 2 : "auto",
                     justifyContent: "center",
                     color: "#000000ff",
                   }}
@@ -117,7 +124,7 @@ export default function NavDrawer({ onNavigate }) {
                   {item.icon}
                 </ListItemIcon>
 
-                {open && (
+                {expanded && (
                   <ListItemText
                     primary={item.text}
                     primaryTypographyProps={{
@@ -135,25 +142,28 @@ export default function NavDrawer({ onNavigate }) {
       <Divider />
 
       {/* Bottom Toggle */}
-      <Box
-        sx={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          py: 1.5,
-          cursor: "pointer",
-          borderTop: "1px solid #e5e7eb",
-          backgroundColor: "#f3f4f6",
-          "&:hover": { backgroundColor: "#e0e7ff" },
-        }}
-        onClick={handleCollapseToggle}
-      >
-        <IconButton>
-          {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
-        </IconButton>
-      </Box>
+      {!isMobile && (
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            py: 1.5,
+            cursor: "pointer",
+            borderTop: "1px solid #e5e7eb",
+            backgroundColor: "#f3f4f6",
+            "&:hover": { backgroundColor: "#e0e7ff" },
+          }}
+          onClick={handleCollapseToggle}
+        >
+          <IconButton>
+            {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+          </IconButton>
+        </Box>
+      )}
     </Box>
-  );
+    );
+  };
 
   return (
     <Box sx={{ display: "flex" }}>
@@ -164,10 +174,12 @@ export default function NavDrawer({ onNavigate }) {
         variant="permanent"
         open={open}
         sx={{
+          display: "block",
           width: open ? drawerWidth : collapsedWidth,
           flexShrink: 0,
           whiteSpace: "nowrap",
           boxSizing: "border-box",
+          [mobileBreakpoint]: { display: "none" },
           "& .MuiDrawer-paper": {
             width: open ? drawerWidth : collapsedWidth,
             transition: "width 0.3s ease",
@@ -175,21 +187,22 @@ export default function NavDrawer({ onNavigate }) {
           },
         }}
       >
-        {drawerContent}
+        {drawerContent(false)}
       </Drawer>
 
       {/* Mobile drawer */}
       <Drawer
         variant="temporary"
         open={mobileOpen}
-        onClose={handleDrawerToggle}
+        onClose={onMobileClose}
         ModalProps={{ keepMounted: true }}
         sx={{
-          display: { xs: "block", sm: "none" },
+          display: "none",
+          [mobileBreakpoint]: { display: "block" },
           "& .MuiDrawer-paper": { boxSizing: "border-box", width: drawerWidth },
         }}
       >
-        {drawerContent}
+        {drawerContent(true)}
       </Drawer>
     </Box>
   );

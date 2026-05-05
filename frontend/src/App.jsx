@@ -9,6 +9,7 @@ import NavDrawer from "./components/NavDrawer";
 import ChatPage from "./chat/ChatPage";
 import DeviceTransactionForm from "./components/DeviceTransactionForm";
 import DashboardPage from "./dashboard/DashboardPage";
+import SerialSearchPage from "./components/SerialSearchPage";
 
 // ── Forms now live in components/forms/ ──────────────────────────────────────
 import CreateOrderForm from "./components/forms/CreateOrderForm";
@@ -49,6 +50,7 @@ export default function App() {
 
   const [activePage, setActivePage] = useState("dashboard");
   const [invoiceLoading, setInvoiceLoading] = useState({});
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const fetchRunRef = useRef(0);
 
@@ -58,6 +60,7 @@ export default function App() {
     chat: "💬 Chat Support",
     "create-order": "🆕 Create New Order",
     "device-entry": "Bulk Device In/Out",
+    "serial-search": "🔎 Serial & Order Search",
   }[activePage];
 
   // ── Core fetch: parallel count + page-0, then concurrent batches ──────────
@@ -185,6 +188,10 @@ export default function App() {
     });
   }, []);
 
+  const handleOrdersDelete = useCallback((orderId) => {
+    setOrders((prev) => prev.filter((o) => o.order_id !== orderId));
+  }, []);
+
   // ── Sync Wix ──────────────────────────────────────────────────────────────
   const handleSyncWix = async () => {
     try {
@@ -302,6 +309,7 @@ export default function App() {
   const handleNavigate = (section) => {
     if (section === "logout") return alert("Logging out…");
     setActivePage(section);
+    setMobileNavOpen(false);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -334,16 +342,40 @@ export default function App() {
 
       {/* ═════════════ SIGNED IN ═════════════ */}
       <SignedIn>
-        <Box sx={{ display: "flex", fontFamily: "IBM Plex Sans, sans-serif" }}>
-          <NavDrawer onNavigate={handleNavigate} />
+        <Box
+          sx={{
+            display: "flex",
+            fontFamily: "IBM Plex Sans, sans-serif",
+            minHeight: "100dvh",
+            width: "100%",
+            maxWidth: "100vw",
+            overflow: activePage === "chat" ? "hidden" : "visible",
+          }}
+        >
+          <NavDrawer
+            onNavigate={handleNavigate}
+            mobileOpen={mobileNavOpen}
+            onMobileClose={() => setMobileNavOpen(false)}
+          />
 
           <Box
             component="main"
             sx={{
               flexGrow: 1,
-              p: 4,
+              p: activePage === "chat" ? 0 : { xs: 2, sm: 4 },
               background: "#f7f6f3",
-              minHeight: "100vh",
+              boxSizing: "border-box",
+              display: "flex",
+              flexDirection: "column",
+              height: activePage === "chat" ? "100dvh" : "auto",
+              minHeight: "100dvh",
+              minWidth: 0,
+              width: "100%",
+              maxWidth: "100vw",
+              overflow: activePage === "chat" ? "hidden" : "visible",
+              ...(activePage === "chat" && {
+                "@media (min-width: 769px)": { p: 2 },
+              }),
             }}
           >
             {/* TOP BAR */}
@@ -352,7 +384,11 @@ export default function App() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                mb: 1,
+                mb: activePage === "chat" ? 2 : 1,
+                flexShrink: 0,
+                ...(activePage === "chat" && {
+                  "@media (max-width: 768px)": { display: "none" },
+                }),
               }}
             >
               <Typography
@@ -392,7 +428,13 @@ export default function App() {
                 >
                   Bulk In/Out
                 </Button>
-
+                <Button
+                  variant="contained"
+                  sx={{ mb: 2, ml: 2 }}
+                  onClick={() => setActivePage("serial-search")}
+                >
+                  🔎 Serial Search
+                </Button>
                 <SearchBar filters={filters} setFilters={setFilters} />
 
                 <OrdersTable
@@ -400,6 +442,7 @@ export default function App() {
                   filters={filters}
                   onAction={handleAction}
                   onOrdersUpdate={handleOrdersUpdate}
+                  onOrdersDelete={handleOrdersDelete}
                   isInitialLoading={isInitialLoading}
                   isLoadingMore={isLoadingMore}
                   loadedCount={orders.length}
@@ -428,8 +471,19 @@ export default function App() {
             </Fade>
 
             {/* ═══════════ CHAT PAGE ═══════════ */}
-            <div style={{ display: activePage === "chat" ? "block" : "none" }}>
-              {activePage === "chat" && <ChatPage />}
+            <div
+              style={{
+                display: activePage === "chat" ? "flex" : "none",
+                flex: 1,
+                minHeight: 0,
+                width: "100%",
+                maxWidth: "100vw",
+                overflow: "hidden",
+              }}
+            >
+              {activePage === "chat" && (
+                <ChatPage onOpenNav={() => setMobileNavOpen(true)} />
+              )}
             </div>
 
             {/* ═══════════ DEVICE ENTRY PAGE ═══════════ */}
@@ -445,6 +499,22 @@ export default function App() {
                   </Button>
                   <DeviceTransactionForm />
                 </Paper>
+              </div>
+            </Fade>
+            <Fade
+              in={activePage === "serial-search"}
+              mountOnEnter
+              unmountOnExit
+            >
+              <div>
+                <Button
+                  variant="outlined"
+                  onClick={() => setActivePage("orders")}
+                  sx={{ mb: 3 }}
+                >
+                  ⬅ Back to Orders
+                </Button>
+                <SerialSearchPage />
               </div>
             </Fade>
             {/* ═══════════ DASHBOARD PAGE ═══════════ */}

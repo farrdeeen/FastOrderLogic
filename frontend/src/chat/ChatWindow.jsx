@@ -1,12 +1,49 @@
 // src/chat/ChatWindow.jsx
-// Fully wired to styles.js.
-// fillInputRef: optional ref — ChatPage sets fillInputRef.current = (text) => setInput(text)
-// so the info panel can prefill a quick-reply without prop-drilling a controlled input.
-
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Box, Typography } from "@mui/material";
+import { ArrowLeft, MoreVertical, Send } from "lucide-react";
 import { fetchMessages, sendChatMessage } from "./chatApi";
-import { chatStyles, avatarColor, FLAG_COLORS } from "./styles";
+import { chatStyles, avatarColor, WA } from "./styles";
+
+// ── Date grouping helper ──────────────────────────────────────────────────────
+function getDateLabel(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diff = Math.round((today - msgDay) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return d.toLocaleDateString([], {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function groupByDate(messages) {
+  const groups = [];
+  let lastLabel = null;
+  for (const msg of messages) {
+    const label = msg.timestamp ? getDateLabel(msg.timestamp) : null;
+    if (label && label !== lastLabel) {
+      groups.push({ type: "divider", label, id: `div-${label}` });
+      lastLabel = label;
+    }
+    groups.push({ type: "msg", msg });
+  }
+  return groups;
+}
+
+// ── Tick icon ─────────────────────────────────────────────────────────────────
+function Ticks({ status }) {
+  if (!status) return null;
+  const color = status === "read" ? WA.textTick : WA.textSub;
+  if (status === "sent") {
+    return <span style={{ color: WA.textSub, fontSize: 12 }}>✓</span>;
+  }
+  return <span style={{ color, fontSize: 12 }}>✓✓</span>;
+}
 
 // ── Message bubble ────────────────────────────────────────────────────────────
 function MessageBubble({ msg }) {
@@ -14,56 +51,112 @@ function MessageBubble({ msg }) {
 
   if (sender === "system") {
     return (
-      <Box sx={{ alignSelf: "center", my: "6px" }}>
+      <Box sx={{ ...chatStyles.msgWrapper("system"), my: "6px" }}>
         <span style={chatStyles.bubble("system")}>{msg.message}</span>
       </Box>
     );
   }
 
+  const time = msg.timestamp
+    ? new Date(msg.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+
   return (
     <Box sx={chatStyles.msgWrapper(sender)}>
       <span style={chatStyles.bubble(sender)}>{msg.message}</span>
-      <Typography sx={chatStyles.msgMeta(sender)}>
-        {sender === "user" ? "Customer" : "Aria (AI)"} ·{" "}
-        {new Date(msg.timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        })}
-        {sender !== "user" && msg.status && (
-          <span style={{ marginLeft: 4 }}>
-            {msg.status === "read" || msg.status === "delivered" ? "✓✓" : "✓"}
-          </span>
-        )}
-      </Typography>
+      <Box sx={chatStyles.msgMeta(sender)}>
+        <span>{time}</span>
+        {sender === "ai" && <Ticks status={msg.status} />}
+      </Box>
+    </Box>
+  );
+}
+
+// ── Empty state (no chat selected) ───────────────────────────────────────────
+function EmptyState() {
+  return (
+    <Box
+      sx={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        background: WA.bgChat,
+        gap: "16px",
+        userSelect: "none",
+      }}
+    >
+      <Box
+        sx={{
+          width: "100px",
+          height: "100px",
+          borderRadius: "50%",
+          background: `${WA.greenDark}14`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: "44px",
+        }}
+      >
+        💬
+      </Box>
+      <Box sx={{ textAlign: "center" }}>
+        <Typography
+          sx={{
+            fontSize: "22px",
+            fontWeight: 500,
+            color: WA.textPrimary,
+            mb: "8px",
+          }}
+        >
+          DāSh Chat
+        </Typography>
+        <Typography
+          sx={{ fontSize: "14px", color: WA.textSub, maxWidth: "280px" }}
+        >
+          Select a conversation to start chatting with your customers.
+        </Typography>
+      </Box>
     </Box>
   );
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ChatWindow({ chat, fillInputRef }) {
+export default function ChatWindow({
+  chat,
+  fillInputRef,
+  onBackToList,
+  onOpenInfo,
+}) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const scrollRef = useRef(null);
+  const textareaRef = useRef(null);
 
-  // Expose a fill handle so ChatPage can inject quick-reply text
+  // Expose fill handle for quick replies
   useEffect(() => {
     if (fillInputRef) {
-      fillInputRef.current = (text) => setInput(text);
+      fillInputRef.current = (text) => {
+        setInput(text);
+        textareaRef.current?.focus();
+      };
     }
     return () => {
       if (fillInputRef) fillInputRef.current = null;
     };
   }, [fillInputRef]);
 
-  // Null-guard + rAF so MUI Fade never catches a null ref mid-mount
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
-      if (scrollRef.current) {
+      if (scrollRef.current)
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      }
     });
   }, []);
 
@@ -75,9 +168,9 @@ export default function ChatWindow({ chat, fillInputRef }) {
         const data = await fetchMessages(sessionId, { limit: 100 });
         setMessages(data);
         setError(null);
-        if (reset) scrollToBottom();
+        if (reset) setTimeout(scrollToBottom, 60);
       } catch {
-        setError("Failed to load messages");
+        setError("Failed to load messages.");
       } finally {
         setLoading(false);
       }
@@ -88,11 +181,12 @@ export default function ChatWindow({ chat, fillInputRef }) {
   useEffect(() => {
     if (!chat?.id) return;
     setMessages([]);
-    setError(null);
+    setError("");
     setInput("");
     loadMessages(chat.id, true);
   }, [chat?.id, loadMessages]);
 
+  // Poll every 5 s
   useEffect(() => {
     if (!chat?.id) return;
     const t = setInterval(() => loadMessages(chat.id, false), 5000);
@@ -103,10 +197,19 @@ export default function ChatWindow({ chat, fillInputRef }) {
     if (messages.length > 0) scrollToBottom();
   }, [messages.length, scrollToBottom]);
 
+  // Auto-grow textarea
+  const handleInput = (e) => {
+    setInput(e.target.value);
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = "22px";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    }
+  };
+
   const handleSend = async () => {
     const msg = input.trim();
     if (!msg || sending || !chat) return;
-
     const tempId = Date.now();
     setMessages((prev) => [
       ...prev,
@@ -120,36 +223,20 @@ export default function ChatWindow({ chat, fillInputRef }) {
       },
     ]);
     setInput("");
+    if (textareaRef.current) textareaRef.current.style.height = "22px";
     setSending(true);
-
     try {
       await sendChatMessage(chat.id, msg);
       await loadMessages(chat.id, false);
     } catch {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setError("Failed to send message");
+      setError("Failed to send message.");
     } finally {
       setSending(false);
     }
   };
 
-  // ── Empty state ───────────────────────────────────────────────────────────
-  if (!chat) {
-    return (
-      <Box
-        sx={{
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "var(--color-text-tertiary)",
-          fontSize: 13,
-        }}
-      >
-        Select a conversation
-      </Box>
-    );
-  }
+  if (!chat) return <EmptyState />;
 
   const { bg, text: textColor } = avatarColor(chat.name);
   const initials = (chat.name || "?")
@@ -158,99 +245,90 @@ export default function ChatWindow({ chat, fillInputRef }) {
     .slice(0, 2)
     .join("")
     .toUpperCase();
-
-  const statusPill = {
-    active: { bg: "#EAF3DE", color: "#27500A" },
-    waiting: { bg: "#FAEEDA", color: "#633806" },
-    resolved: {
-      bg: "var(--color-background-secondary)",
-      color: "var(--color-text-tertiary)",
-    },
-  }[chat.status] || {
-    bg: "var(--color-background-secondary)",
-    color: "var(--color-text-tertiary)",
-  };
-
-  const flagStyle = chat.flag ? FLAG_COLORS[chat.flag] : null;
+  const grouped = groupByDate(messages);
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
       {/* ── Header ── */}
       <Box sx={chatStyles.chatHeader}>
-        <Box sx={chatStyles.avatar(bg, textColor, 30)}>{initials}</Box>
+        {/* Mobile back */}
+        {onBackToList && (
+          <Box
+            component="button"
+            type="button"
+            onClick={onBackToList}
+            aria-label="Back"
+            sx={chatStyles.mobileBackButton}
+          >
+            <ArrowLeft size={20} strokeWidth={2} />
+          </Box>
+        )}
 
-        <Box sx={chatStyles.chatHeaderInfo}>
+        {/* Avatar — opens info panel */}
+        <Box onClick={onOpenInfo} sx={chatStyles.chatHeaderAvatar}>
+          <Box sx={chatStyles.avatar(bg, textColor, 40)}>{initials}</Box>
+        </Box>
+
+        {/* Name + phone — also opens info panel */}
+        <Box sx={chatStyles.chatHeaderInfo} onClick={onOpenInfo}>
           <p>{chat.name}</p>
           <span>{chat.phone}</span>
         </Box>
 
-        {flagStyle && (
-          <span
-            style={{
-              fontSize: 10,
-              padding: "2px 8px",
-              borderRadius: 20,
-              background: flagStyle.bg,
-              color: flagStyle.text,
-              border: `0.5px solid ${flagStyle.border}`,
-              fontWeight: 500,
-            }}
+        {/* Actions */}
+        <Box sx={chatStyles.headerActions}>
+          <Box
+            component="button"
+            type="button"
+            onClick={onOpenInfo}
+            aria-label="Contact info"
+            sx={chatStyles.iconCircleBtn}
           >
-            {chat.flag}
-          </span>
-        )}
-
-        <span
-          style={{
-            fontSize: 10,
-            padding: "2px 8px",
-            borderRadius: 20,
-            fontWeight: 500,
-            background: statusPill.bg,
-            color: statusPill.color,
-          }}
-        >
-          {chat.status || "active"}
-        </span>
+            <MoreVertical size={18} strokeWidth={2} />
+          </Box>
+        </Box>
       </Box>
 
       {/* ── Messages ── */}
       <Box ref={scrollRef} sx={chatStyles.messages}>
+        {/* Wallpaper texture */}
+        <Box sx={chatStyles.chatWallpaper} />
+
         {loading && (
           <Typography
-            sx={{
-              textAlign: "center",
-              fontSize: 12,
-              color: "var(--color-text-tertiary)",
-              py: 4,
-            }}
+            sx={{ textAlign: "center", fontSize: 13, color: WA.textSub, py: 4 }}
           >
             Loading messages…
           </Typography>
         )}
         {!loading && messages.length === 0 && (
           <Typography
-            sx={{
-              textAlign: "center",
-              fontSize: 12,
-              color: "var(--color-text-tertiary)",
-              py: 4,
-            }}
+            sx={{ textAlign: "center", fontSize: 13, color: WA.textSub, py: 6 }}
           >
-            No messages yet
+            No messages yet. Say hello! 👋
           </Typography>
         )}
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} msg={msg} />
-        ))}
+
+        {grouped.map((item) =>
+          item.type === "divider" ? (
+            <Box key={item.id} sx={chatStyles.dateDivider}>
+              <Box sx={chatStyles.datePill}>{item.label}</Box>
+            </Box>
+          ) : (
+            <MessageBubble key={item.msg.id} msg={item.msg} />
+          ),
+        )}
+
         {error && (
           <Typography
-            sx={{
-              textAlign: "center",
-              fontSize: 11,
-              color: "var(--color-text-danger, #c0392b)",
-              py: 1,
-            }}
+            sx={{ textAlign: "center", fontSize: 12, color: "#E53935", py: 1 }}
           >
             {error}
           </Typography>
@@ -259,30 +337,36 @@ export default function ChatWindow({ chat, fillInputRef }) {
 
       {/* ── Input ── */}
       <Box sx={chatStyles.inputArea}>
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
-          rows={1}
-          style={chatStyles.textarea}
-        />
-        <button
+        <Box sx={chatStyles.textareaWrap}>
+          <Box
+            ref={textareaRef}
+            component="textarea"
+            value={input}
+            onChange={handleInput}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder="Type a message"
+            rows={1}
+            sx={chatStyles.textarea}
+          />
+        </Box>
+        <Box
+          component="button"
+          type="button"
           onClick={handleSend}
           disabled={sending || !input.trim()}
-          style={{
+          aria-label="Send"
+          sx={{
             ...chatStyles.sendBtn,
-            opacity: sending || !input.trim() ? 0.5 : 1,
-            cursor: sending || !input.trim() ? "not-allowed" : "pointer",
+            opacity: sending || !input.trim() ? 0.55 : 1,
           }}
         >
-          {sending ? "…" : "Send"}
-        </button>
+          <Send size={18} strokeWidth={2.5} />
+        </Box>
       </Box>
     </Box>
   );

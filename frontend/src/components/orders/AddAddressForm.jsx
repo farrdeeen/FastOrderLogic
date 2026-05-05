@@ -2,8 +2,18 @@ import { useState, useEffect } from "react";
 import api from "../../api/axiosInstance";
 import { toast } from "./ToastSystem";
 
+function normaliseStates(raw = []) {
+  return raw
+    .map((s) => ({
+      state_id: s.state_id ?? s.id ?? s.value ?? null,
+      name: s.name ?? s.label ?? s.state_name ?? "",
+    }))
+    .filter((s) => s.state_id !== null && s.state_id !== undefined && s.name);
+}
+
 export default function AddAddressForm({ order, onSaved, onCancel }) {
   const [states, setStates] = useState([]);
+  const [loadingStates, setLoadingStates] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -21,22 +31,36 @@ export default function AddAddressForm({ order, onSaved, onCancel }) {
   });
 
   useEffect(() => {
-    api
-      .get("/orders/states/list")
-      .then((r) => setStates(r.data || []))
-      .catch(() => setStates([]));
+    const tryFetch = (url) =>
+      api.get(url).then((r) => {
+        const raw = Array.isArray(r.data) ? r.data : (r.data?.data ?? []);
+        const normalised = normaliseStates(raw);
+        if (normalised.length === 0) throw new Error("No states loaded");
+        return normalised;
+      });
+
+    tryFetch("/states/list")
+      .catch(() => tryFetch("/dropdowns/states/list"))
+      .catch(() => tryFetch("/orders/states/list"))
+      .then((normalised) => setStates(normalised))
+      .catch(() => setStates([]))
+      .finally(() => setLoadingStates(false));
   }, []);
 
   const set = (field, val) => setForm((p) => ({ ...p, [field]: val }));
 
   const handleSave = async () => {
+    const parsedStateId =
+      form.state_id !== "" ? parseInt(form.state_id, 10) : null;
+
     if (
       !form.name ||
       !form.mobile ||
       !form.pincode ||
       !form.address_line ||
       !form.city ||
-      !form.state_id
+      form.state_id === "" ||
+      !Number.isFinite(parsedStateId)
     ) {
       toast.warn("Please fill in all required fields");
       return;
@@ -45,7 +69,7 @@ export default function AddAddressForm({ order, onSaved, onCancel }) {
     try {
       const res = await api.post("/orders/addresses/create", {
         ...form,
-        state_id: parseInt(form.state_id),
+        state_id: parsedStateId,
         customer_id: order.customer_id || null,
         offline_customer_id: order.offline_customer_id || null,
       });
@@ -86,9 +110,9 @@ export default function AddAddressForm({ order, onSaved, onCancel }) {
           <input
             className="form-input"
             value={form.mobile}
-            onChange={(e) => set("mobile", e.target.value)}
+            onChange={(e) => set("mobile", e.target.value.replace(/\D/g, ""))}
             placeholder="10-digit mobile"
-            maxLength={15}
+            maxLength={10}
           />
         </div>
       </div>
@@ -125,9 +149,9 @@ export default function AddAddressForm({ order, onSaved, onCancel }) {
           <input
             className="form-input"
             value={form.pincode}
-            onChange={(e) => set("pincode", e.target.value)}
+            onChange={(e) => set("pincode", e.target.value.replace(/\D/g, ""))}
             placeholder="6-digit"
-            maxLength={10}
+            maxLength={6}
           />
         </div>
         <div className="form-field">
@@ -136,10 +160,13 @@ export default function AddAddressForm({ order, onSaved, onCancel }) {
             className="form-select"
             value={form.state_id}
             onChange={(e) => set("state_id", e.target.value)}
+            disabled={loadingStates}
           >
-            <option value="">Select state</option>
+            <option value="">
+              {loadingStates ? "Loading states…" : "Select state"}
+            </option>
             {states.map((s) => (
-              <option key={s.state_id} value={s.state_id}>
+              <option key={String(s.state_id)} value={String(s.state_id)}>
                 {s.name}
               </option>
             ))}
