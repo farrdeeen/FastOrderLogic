@@ -45,14 +45,69 @@ function Ticks({ status }) {
   return <span style={{ color, fontSize: 12 }}>✓✓</span>;
 }
 
+function parseMeta(meta) {
+  if (!meta) return {};
+  if (typeof meta === "object") return meta;
+  try {
+    return JSON.parse(meta);
+  } catch {
+    return {};
+  }
+}
+
 // ── Message bubble ────────────────────────────────────────────────────────────
 function MessageBubble({ msg }) {
   const { sender } = msg;
+  const meta = parseMeta(msg.meta);
 
   if (sender === "system") {
+    const isPaymentQr = meta.flow === "payment_qr" && meta.qr_url;
+    const paymentUrl = meta.payment_url || "";
+
     return (
       <Box sx={{ ...chatStyles.msgWrapper("system"), my: "6px" }}>
-        <span style={chatStyles.bubble("system")}>{msg.message}</span>
+        <Box
+          sx={{
+            ...chatStyles.bubble("system"),
+            display: "inline-flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: isPaymentQr ? "8px" : 0,
+            maxWidth: isPaymentQr ? "280px" : chatStyles.bubble("system").maxWidth,
+          }}
+        >
+          <span>{isPaymentQr ? `Payment QR for ${meta.order_id || "order"}` : msg.message}</span>
+          {isPaymentQr && (
+            <Box
+              component="img"
+              src={meta.qr_url}
+              alt="Payment QR"
+              sx={{
+                width: "190px",
+                maxWidth: "100%",
+                borderRadius: "8px",
+                border: `1px solid ${WA.borderMid}`,
+                background: "#fff",
+              }}
+            />
+          )}
+          {isPaymentQr && paymentUrl && (
+            <Box
+              component="a"
+              href={paymentUrl}
+              target="_blank"
+              rel="noreferrer"
+              sx={{
+                color: WA.greenDark,
+                fontWeight: 700,
+                textDecoration: "none",
+                overflowWrap: "anywhere",
+              }}
+            >
+              Open Razorpay link
+            </Box>
+          )}
+        </Box>
       </Box>
     );
   }

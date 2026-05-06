@@ -126,7 +126,7 @@ def _notify_order_created_sync(
     try:
         from services.chat_service import notify_order_created
 
-        asyncio.run(
+        notify_result = asyncio.run(
             notify_order_created(
                 db=notify_db,
                 phone=phone,
@@ -135,9 +135,19 @@ def _notify_order_created_sync(
                 amount=amount,
                 address_line=address_line,
                 payment_status=payment_status,
+                send_followup_messages=False,
             )
         )
-        logger.info("WA order notification sent for %s", order_id)
+        logger.info(
+            "WA order notification result for %s: payment_template=%s pay_button=%s payment_link=%s payment_qr=%s order_template=%s errors=%s",
+            order_id,
+            notify_result.get("payment_template_sent"),
+            notify_result.get("payment_template_button_sent"),
+            notify_result.get("payment_link_sent"),
+            notify_result.get("payment_qr_sent"),
+            notify_result.get("order_template_sent"),
+            notify_result.get("errors") or [],
+        )
     except Exception as exc:
         logger.warning("WA notify failed for %s: %s", order_id, exc)
     finally:

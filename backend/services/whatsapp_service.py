@@ -58,7 +58,7 @@ async def _post(payload: dict) -> dict:
         return data
 
 
-async def send_text_message(to: str, body: str) -> dict:
+async def send_text_message(to: str, body: str, preview_url: bool = False) -> dict:
     """Send a plain-text WhatsApp message. Returns the API response JSON."""
     if not _check_credentials():
         return {"status": "skipped", "reason": "credentials_missing"}
@@ -68,7 +68,7 @@ async def send_text_message(to: str, body: str) -> dict:
         "recipient_type": "individual",
         "to": _normalise_phone(to),
         "type": "text",
-        "text": {"preview_url": False, "body": body},
+        "text": {"preview_url": bool(preview_url), "body": body},
     }
     return await _post(payload)
 

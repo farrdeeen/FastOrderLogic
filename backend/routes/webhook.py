@@ -17,11 +17,12 @@ import os
 import logging
 from fastapi import APIRouter, Request, Response, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import Optional
 
 from database import SessionLocal
 from services.whatsapp_service import extract_incoming_message, mark_message_read
-from services.chat_service import handle_inbound_message
+from services.chat_service import handle_inbound_message, save_message
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,11 @@ async def receive_webhook(
     if media:
         background.add_task(mark_message_read, media["wa_message_id"])
         background.add_task(_process_inbound_media, media)
+        return {"status": "ok"}
+
+    statuses = extract_status_updates(body)
+    if statuses:
+        background.add_task(_process_status_updates, statuses)
 
     return {"status": "ok"}
 
@@ -125,6 +131,88 @@ async def _process_inbound_media(media: dict):
         )
     except Exception:
         logger.exception("Error processing media from %s", media.get("phone"))
+    finally:
+        db.close()
+
+
+def extract_status_updates(webhook_body: dict) -> list[dict]:
+    """Extract WhatsApp delivery/read/failed statuses from Meta webhook payloads."""
+    try:
+        value = webhook_body["entry"][0]["changes"][0]["value"]
+        statuses = value.get("statuses") or []
+        updates = []
+        for status in statuses:
+            message_id = status.get("id")
+            status_name = status.get("status")
+            if not message_id or not status_name:
+                continue
+            errors = status.get("errors") or []
+            updates.append({
+                "id": message_id,
+                "status": status_name,
+                "timestamp": status.get("timestamp"),
+                "recipient_id": status.get("recipient_id"),
+                "conversation": status.get("conversation"),
+                "pricing": status.get("pricing"),
+                "errors": errors,
+            })
+        return updates
+    except (KeyError, IndexError, TypeError):
+        return []
+
+
+async def _process_status_updates(statuses: list[dict]):
+    db = SessionLocal()
+    try:
+        for status in statuses:
+            message_id = status["id"]
+            status_name = status["status"]
+            row = db.execute(
+                text("""
+                    SELECT id, session_id, message, meta
+                    FROM chat_messages
+                    WHERE wa_message_id = :wid
+                    LIMIT 1
+                """),
+                {"wid": message_id},
+            ).fetchone()
+
+            result = db.execute(
+                text("UPDATE chat_messages SET status = :status WHERE wa_message_id = :wid"),
+                {"status": status_name, "wid": message_id},
+            )
+            db.commit()
+
+            if result.rowcount:
+                logger.info("WA status update %s for message %s", status_name, message_id)
+            else:
+                logger.debug("WA status update for unknown message %s: %s", message_id, status_name)
+
+            errors = status.get("errors") or []
+            if errors:
+                logger.warning("WA delivery failure for %s: %s", message_id, errors)
+                if row:
+                    first_error = errors[0] if isinstance(errors[0], dict) else {}
+                    error_text = (
+                        first_error.get("message")
+                        or first_error.get("title")
+                        or first_error.get("details")
+                        or str(errors[0])
+                    )
+                    save_message(
+                        db,
+                        row.session_id,
+                        "system",
+                        f"[wa_delivery_failed] {status_name}: {error_text}",
+                        meta={
+                            "flow": "wa_delivery_failed",
+                            "wa_message_id": message_id,
+                            "status": status_name,
+                            "errors": errors,
+                        },
+                    )
+    except Exception:
+        logger.exception("Error processing WA status updates")
     finally:
         db.close()
 
