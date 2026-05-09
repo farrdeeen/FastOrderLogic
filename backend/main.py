@@ -1,8 +1,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+from pathlib import Path
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from routes import orders
 from routes import wix_sync
 from routes import zoho
@@ -19,10 +23,34 @@ from routes.chat import router as chat_api_router
 from routes.chat_router import router as chat_control_router
 from routes.razorpay_webhook import router as razorpay_router
 from routes.serial_search import router as serial_search_router
+from services.chat_media_service import safe_filename
+from routes.payment_webhook import router as payment_webhook_router
 
 
 
 app = FastAPI(title="FastOrderLogic Backend")
+
+MEDIA_DIR = Path(__file__).resolve().parent / "media"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+
+
+@app.get("/media-download/{file_path:path}")
+def download_media(file_path: str, filename: Optional[str] = Query(None)):
+    media_root = MEDIA_DIR.resolve()
+    target = (media_root / file_path).resolve()
+    try:
+        target.relative_to(media_root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        path=str(target),
+        filename=safe_filename(filename or target.name),
+        media_type="application/octet-stream",
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,7 +75,7 @@ app.include_router(dashboard_router.router)
 app.include_router(chat_control_router)
 app.include_router(razorpay_router)
 app.include_router(serial_search_router)
-       # ← NEW
+app.include_router(payment_webhook_router)
 
 
 @app.get("/")

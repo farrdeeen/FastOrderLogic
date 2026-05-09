@@ -16,6 +16,7 @@ _WA_TOKEN    = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
 _WA_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID", "")
 _WA_VERSION  = os.getenv("WHATSAPP_API_VERSION", "v20.0")
 _WA_BASE     = f"https://graph.facebook.com/{_WA_VERSION}/{_WA_PHONE_ID}/messages"
+_WA_GRAPH_BASE = f"https://graph.facebook.com/{_WA_VERSION}"
 
 _HEADERS = {
     "Authorization": f"Bearer {_WA_TOKEN}",
@@ -71,6 +72,32 @@ async def send_text_message(to: str, body: str, preview_url: bool = False) -> di
         "text": {"preview_url": bool(preview_url), "body": body},
     }
     return await _post(payload)
+
+
+async def get_media_url(media_id: str) -> str:
+    """Resolve a WhatsApp media ID to its temporary download URL."""
+    if not media_id or not _check_credentials():
+        return ""
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(f"{_WA_GRAPH_BASE}/{media_id}", headers=_HEADERS)
+        if resp.status_code != 200:
+            logger.error("WA media URL lookup failed %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.json().get("url", "")
+
+
+async def download_media_bytes(media_url: str) -> tuple[bytes, str]:
+    """Download bytes from a WhatsApp media URL using the configured token."""
+    if not media_url or not _check_credentials():
+        return b"", ""
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(media_url, headers={"Authorization": f"Bearer {_WA_TOKEN}"})
+        if resp.status_code != 200:
+            logger.error("WA media download failed %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.content, resp.headers.get("content-type", "")
 
 
 async def send_template_message(
@@ -213,5 +240,23 @@ async def send_image_message(to: str, image_url: str, caption: str = "") -> dict
         "to": _normalise_phone(to),
         "type": "image",
         "image": {"link": image_url, "caption": caption},
+    }
+    return await _post(payload)
+
+
+async def send_document_message(to: str, document_url: str, filename: str, caption: str = "") -> dict:
+    """Send a document by URL via WhatsApp Cloud API."""
+    if not _check_credentials():
+        return {"status": "skipped", "reason": "credentials_missing"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": _normalise_phone(to),
+        "type": "document",
+        "document": {
+            "link": document_url,
+            "filename": filename or "document",
+            "caption": caption or "",
+        },
     }
     return await _post(payload)

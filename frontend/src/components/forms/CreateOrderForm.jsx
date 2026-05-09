@@ -1093,6 +1093,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
   const [deliveryCharge, setDeliveryCharge] = useState("");
   const [freeDelivery, setFreeDelivery] = useState(false);
   const [paymentType, setPaymentType] = useState("");
+  const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [manualSubtotal, setManualSubtotal] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
@@ -1527,6 +1528,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
       total_amount: Number(calc.total.toFixed(2)),
       payment_type: paymentType,
       channel: "offline",
+      send_whatsapp: sendWhatsApp,
       items: payloadItems,
     };
 
@@ -1538,6 +1540,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
       setDeliveryCharge("");
       setFreeDelivery(false);
       setPaymentType("");
+      setSendWhatsApp(true);
       setManualSubtotal("");
       setTimeout(() => onOrderCreated?.(), 1000);
     } catch (err) {
@@ -1867,6 +1870,41 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
               <option value="pending">Pending</option>
             </select>
           </div>
+
+          <button
+            type="button"
+            className={`f-check-row ${sendWhatsApp ? "checked" : ""}`}
+            onClick={() => setSendWhatsApp((v) => !v)}
+            style={{
+              width: "100%",
+              padding: "8px 10px",
+              marginBottom: 8,
+              justifyContent: "space-between",
+              cursor: "pointer",
+            }}
+            title="Toggle WhatsApp notification for this order"
+          >
+            <span
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                minWidth: 0,
+              }}
+            >
+              <span className="f-checkbox">✓</span>
+              <span className="f-check-label">WhatsApp message</span>
+            </span>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: sendWhatsApp ? "var(--f-accent)" : "var(--f-ink3)",
+              }}
+            >
+              {sendWhatsApp ? "ON" : "OFF"}
+            </span>
+          </button>
 
           <div
             style={{

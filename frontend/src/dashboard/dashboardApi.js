@@ -18,6 +18,13 @@ export async function fetchRecentConversations(limit = 10) {
   return res.data || [];
 }
 
+export async function fetchInvoicePending(limit = 50) {
+  const res = await api.get("/dashboard/invoice-pending", {
+    params: { limit },
+  });
+  return res.data || [];
+}
+
 export async function fetchTrainingDocInfo() {
   const res = await api.get("/dashboard/training-doc");
   return res.data;

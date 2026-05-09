@@ -512,8 +512,236 @@ export const STYLES = `
   .pod-fine-print { margin-top: 3mm; text-align: center; font-size: 0.7em; color: #aaa; border-top: 1px dashed #ccc; padding-top: 3mm; }
 
   @media (max-width: 1100px) { .lb-body { grid-template-columns: 1fr; } .lb-panel { max-width: 800px; } }
+
+  /* ═══════════════════════════════════════════════════
+     MOBILE CARD LAYOUT  (≤ 700px)
+     Key fix: use a tight fixed label column (90px) so
+     the value column starts at the same x-position on
+     every row, eliminating the "huge gap" on Order ID.
+  ═══════════════════════════════════════════════════ */
   @media (max-width: 700px) {
+    .ot-wrap {
+      max-width: 100%;
+      overflow: visible;
+    }
+    .ot-table-wrap {
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      overflow: visible;
+    }
+    .ot-table-scroll {
+      overflow: visible;
+    }
+
+    /* Table: plain block */
+    .ot-table {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      font-size: 13px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    /* thead / colgroup: hidden */
+    .ot-table colgroup,
+    .ot-table thead {
+      display: none;
+    }
+
+    /* tbody: flex column */
+    .ot-table tbody {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+
+    /* Each <tr> = one card */
+    .ot-table tbody tr {
+      display: block;
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+      margin: 0;
+      padding: 10px 12px;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .ot-table tbody tr:hover td {
+      background: transparent;
+    }
+
+    /* ── Core fix: every td is a flex row, NOT a grid ──
+       Label (::before) is fixed width; value fills the rest.
+       This prevents the Order ID label from stretching. */
+    .ot-table td,
+    .ot-table td.ot-col-hide-sm,
+    .ot-table td.ot-col-hide-md {
+      display: flex !important;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      padding: 7px 0;
+      overflow: visible;
+      white-space: normal;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .ot-table td:last-child {
+      border-bottom: 0;
+    }
+
+    /* Label column — fixed width, left-aligned */
+    .ot-table td::before {
+      content: "";
+      color: var(--text3);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .3px;
+      text-align: left;
+      text-transform: uppercase;
+      /* Fixed width so ALL value columns start at the same position */
+      flex: 0 0 82px;
+      min-width: 82px;
+      white-space: nowrap;
+    }
+
+    /* Value column — fills remaining space, right-aligned */
+    .ot-table td > * {
+      flex: 1 1 auto;
+      min-width: 0;
+      max-width: 100%;
+      text-align: right;
+    }
+
+    /* order-id span: must be inline so it doesn't stretch to full width */
+    .order-id {
+      display: inline;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+
+    /* Delivery cell stacks its children but still right-aligns */
+    .delivery-cell {
+      align-items: flex-end;
+      max-width: 100%;
+      width: auto;
+    }
+    .waybill-link {
+      white-space: normal;
+      text-align: right;
+      word-break: break-word;
+      display: inline;
+    }
+
+    /* Label text per column */
+    .ot-table td:nth-child(1)::before  { content: "Order ID"; }
+    .ot-table td:nth-child(2)::before  { content: "Customer"; }
+    .ot-table td:nth-child(3)::before  { content: "Mobile"; }
+    .ot-table td:nth-child(4)::before  { content: "Date"; }
+    .ot-table td:nth-child(5)::before  { content: "Qty"; }
+    .ot-table td:nth-child(6)::before  { content: "Amount"; }
+    .ot-table td:nth-child(7)::before  { content: "Channel"; }
+    .ot-table td:nth-child(8)::before  { content: "Payment"; }
+    .ot-table td:nth-child(9)::before  { content: "Delivery"; }
+    .ot-table td:nth-child(10)::before { content: "Status"; }
+    .ot-table td:nth-child(11)::before { content: "Invoice"; }
+
+    .ot-empty {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 36px 16px;
+    }
+    .ot-load-more {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      margin-top: 10px;
+    }
+    .lb-overlay {
+      align-items: stretch;
+      padding: 0;
+    }
+    .lb-panel {
+      max-height: 100dvh;
+      min-height: 100dvh;
+      border-radius: 0;
+      max-width: none;
+    }
+    .lb-header {
+      padding: 12px 14px;
+      gap: 10px;
+    }
+    .lb-body {
+      padding: 12px;
+      gap: 14px;
+    }
     .lb-info-grid { grid-template-columns: 1fr; }
+    .lb-info-value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .lb-items-table-wrap {
+      overflow-x: auto;
+    }
+    .lb-items-table {
+      min-width: 560px;
+    }
+    .lb-actions {
+      position: sticky;
+      bottom: 0;
+      padding: 10px 12px;
+      gap: 7px;
+      box-shadow: 0 -8px 18px rgba(16,24,40,.08);
+    }
+    .lb-btn {
+      flex: 1 1 calc(50% - 7px);
+      justify-content: center;
+      min-width: 0;
+      padding: 8px 10px;
+    }
+    .utr-input-row,
+    .dlv-modal-footer {
+      flex-direction: column;
+    }
+    .dlv-modal-overlay,
+    .track-modal-overlay {
+      padding: 0;
+      align-items: stretch;
+    }
+    .dlv-modal,
+    .track-modal {
+      border-radius: 0;
+      max-width: none;
+      min-height: 100dvh;
+    }
+    .toast-container {
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+    }
+    .toast {
+      min-width: 0;
+      max-width: none;
+      width: 100%;
+    }
+    .pod-preview-wrap {
+      overflow-x: auto;
+      justify-content: flex-start;
+      padding: 12px;
+    }
     .form-grid-2, .form-grid-3, .remarks-utr-row { grid-template-columns: 1fr; }
   }
 `;

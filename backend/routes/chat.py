@@ -12,22 +12,86 @@ GET  /chat/conversations/count           — total session count
 """
 
 import logging
+import os
+import asyncio
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Set
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from database import SessionLocal
 from auth.clerk_auth import get_current_user as require_user
-from services.chat_service import save_message, get_or_create_session
-from services.whatsapp_service import send_text_message, send_order_confirmation
+from services.chat_media_service import media_download_url, media_public_url, save_media_bytes
+from services.chat_service import save_message, get_or_create_session, ensure_chat_session_columns
+from services.whatsapp_service import (
+    send_document_message,
+    send_image_message,
+    send_order_confirmation,
+    send_text_message,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+
+
+class ChatChangeHub:
+    def __init__(self):
+        self.clients: Set[WebSocket] = set()
+        self.loop = None
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.loop = asyncio.get_running_loop()
+        self.clients.add(websocket)
+        await websocket.send_json({"type": "chat_connected"})
+
+    def disconnect(self, websocket: WebSocket):
+        self.clients.discard(websocket)
+
+    async def broadcast(self, payload: dict):
+        dead_clients = []
+        for websocket in list(self.clients):
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                dead_clients.append(websocket)
+        for websocket in dead_clients:
+            self.disconnect(websocket)
+
+
+chat_change_hub = ChatChangeHub()
+
+
+def notify_chat_change(session_id: Optional[int] = None, action: str = "message"):
+    """Fan out chat changes so the dashboard refreshes without manual reload."""
+    if not chat_change_hub.clients:
+        return
+
+    payload = {
+        "type": "chat_changed",
+        "action": action,
+        "session_id": session_id,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    loop = chat_change_hub.loop
+    if loop and loop.is_running():
+        asyncio.run_coroutine_threadsafe(chat_change_hub.broadcast(payload), loop)
+
+
+@router.websocket("/ws")
+async def chat_ws(websocket: WebSocket):
+    await chat_change_hub.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        chat_change_hub.disconnect(websocket)
+    except Exception:
+        chat_change_hub.disconnect(websocket)
 
 
 def get_db():
@@ -45,6 +109,11 @@ class SendMessagePayload(BaseModel):
     message: str
 
 
+class DispatchSlipPayload(BaseModel):
+    session_id: int
+    order_id: str
+
+
 class OrderConfirmationPayload(BaseModel):
     """
     Trigger the 'order_confirmation' WhatsApp template for a customer.
@@ -55,6 +124,44 @@ class OrderConfirmationPayload(BaseModel):
     order_id: str
     amount: str                  # e.g. "₹999"
     session_id: Optional[int] = None   # if provided, message is saved to that session
+
+
+def _wa_message_id(response: Optional[dict]) -> Optional[str]:
+    try:
+        return (response or {}).get("messages", [{}])[0].get("id")
+    except (IndexError, AttributeError, TypeError):
+        return None
+
+
+def _public_base_from_request(request: Request) -> str:
+    configured = (
+        os.getenv("CHAT_MEDIA_PUBLIC_BASE_URL")
+        or os.getenv("PUBLIC_BACKEND_URL")
+        or os.getenv("BACKEND_PUBLIC_URL")
+        or os.getenv("BASE_URL")
+        or ""
+    ).rstrip("/")
+    if configured:
+        return configured
+
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = forwarded_host or request.headers.get("host", "")
+    scheme = forwarded_proto or request.url.scheme
+    if host:
+        return f"{scheme}://{host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _attach_request_urls(saved: dict, request: Request) -> dict:
+    base_url = _public_base_from_request(request)
+    saved["public_url"] = media_public_url(saved["relative_path"], base_url)
+    saved["download_url"] = media_download_url(
+        saved["relative_path"],
+        saved["filename"],
+        base_url,
+    )
+    return saved
 
 
 # ─── GET /chat/conversations ─────────────────────────────────────────────────
@@ -69,6 +176,7 @@ def list_conversations(
     db: Session = Depends(get_db),
 ):
     """Return paginated list of chat sessions with last-message preview."""
+    ensure_chat_session_columns(db)
     conditions = ["1=1"]
     params: dict = {"lim": limit, "off": offset}
 
@@ -94,7 +202,9 @@ def list_conversations(
             cs.last_message,
             cs.last_message_at,
             cs.status,
+            cs.flag,
             cs.is_human,
+            cs.preferred_language,
             cs.created_at,
             cs.updated_at,
             (
@@ -186,6 +296,104 @@ async def _dispatch_wa(phone: str, msg: str) -> None:
         logger.exception("Failed to dispatch manual WA message to %s", phone)
 
 
+# ─── POST /chat/send-media ───────────────────────────────────────────────────
+
+@router.post("/send-media")
+async def send_media_message(
+    request: Request,
+    session_id: int = Form(...),
+    caption: str = Form(""),
+    file: UploadFile = File(...),
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Dashboard agent sends an image or file to a WhatsApp chat."""
+    session = db.execute(
+        text("SELECT id, phone_number FROM chat_sessions WHERE id = :sid"),
+        {"sid": session_id},
+    ).mappings().first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="File cannot be empty")
+
+    content_type = file.content_type or "application/octet-stream"
+    saved = _attach_request_urls(save_media_bytes(
+        data,
+        filename=file.filename or "attachment",
+        folder=f"chat/{session_id}",
+        content_type=content_type,
+    ), request)
+
+    phone = session["phone_number"]
+    media_type = "image" if content_type.startswith("image/") else "document"
+    message = caption.strip() or (
+        f"[image] {saved['filename']}" if media_type == "image" else f"[file] {saved['filename']}"
+    )
+    meta = {
+        "flow": "operator_media",
+        "media_type": media_type,
+        "mime_type": content_type,
+        "media_url": saved["public_url"],
+        "download_url": saved["download_url"],
+        "file_name": saved["filename"],
+        "file_size": saved["size"],
+    }
+
+    try:
+        if media_type == "image":
+            wa_resp = await send_image_message(phone, saved["public_url"], caption=caption.strip())
+        else:
+            wa_resp = await send_document_message(
+                phone,
+                saved["public_url"],
+                saved["filename"],
+                caption=caption.strip(),
+            )
+        meta["wa_send_status"] = "sent"
+        wa_id = _wa_message_id(wa_resp)
+    except Exception as exc:
+        logger.exception("Failed to send chat media to %s", phone)
+        meta["wa_send_status"] = "failed"
+        meta["error"] = str(exc)
+        wa_id = None
+
+    message_id = save_message(db, session_id, "ai", message, wa_message_id=wa_id, meta=meta)
+    return {
+        "success": meta["wa_send_status"] == "sent",
+        "message_id": message_id,
+        "media": meta,
+    }
+
+
+# ─── POST /chat/send-dispatch-slip ───────────────────────────────────────────
+
+@router.post("/send-dispatch-slip")
+async def send_dispatch_slip_message(
+    payload: DispatchSlipPayload,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Send the Delhivery tracking link and dispatch slip PDF to the open chat."""
+    from services.dispatch_slip_service import send_order_dispatch_update
+
+    if not payload.order_id.strip():
+        raise HTTPException(status_code=400, detail="Order ID is required")
+
+    result = await send_order_dispatch_update(
+        db,
+        payload.order_id.strip(),
+        session_id=payload.session_id,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Dispatch update failed")
+
+    return result
+
+
 # ─── POST /chat/send-order-confirmation ──────────────────────────────────────
 
 @router.post("/send-order-confirmation")
@@ -263,6 +471,7 @@ def resolve_session(
         {"now": datetime.now(), "sid": session_id},
     )
     db.commit()
+    notify_chat_change(session_id, "session")
     return {"success": True, "session_id": session_id, "status": "resolved"}
 
 

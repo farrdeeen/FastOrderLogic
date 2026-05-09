@@ -3,10 +3,10 @@
 // clicking the avatar / name in ChatWindow header.
 // Business logic (sendOrderConfirmation, resolveSession, HumanTogglePanel) unchanged.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Box, Typography } from "@mui/material";
-import { X, ChevronRight, Package, Flag, Zap } from "lucide-react";
-import { resolveSession, sendOrderConfirmation } from "./chatApi";
+import { X, ChevronRight, Package, Flag, Zap, Truck } from "lucide-react";
+import { resolveSession, sendDispatchSlip, sendOrderConfirmation } from "./chatApi";
 import {
   chatStyles,
   FLAG_ACTIONS,
@@ -215,9 +215,19 @@ export default function ChatInfoPanel({
   const [activeFlag, setActiveFlag] = useState(null);
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderSentFor, setOrderSentFor] = useState(null);
+  const [dispatchOrderId, setDispatchOrderId] = useState(chat?.linked_order_id || "");
+  const [dispatchSending, setDispatchSending] = useState(false);
+  const [dispatchSent, setDispatchSent] = useState(null);
+  const [dispatchError, setDispatchError] = useState(null);
 
   const currentFlag = activeFlag ?? chat?.flag ?? null;
   const isResolved = currentFlag === "resolved" || chat?.status === "resolved";
+
+  useEffect(() => {
+    setDispatchOrderId(chat?.linked_order_id || "");
+    setDispatchSent(null);
+    setDispatchError(null);
+  }, [chat?.id, chat?.linked_order_id]);
 
   if (!chat) {
     return (
@@ -279,7 +289,41 @@ export default function ChatInfoPanel({
     if (onQuickReply) onQuickReply(text);
   };
 
+  const handleDispatchSlip = async () => {
+    const orderId = dispatchOrderId.trim();
+    if (!orderId) {
+      setDispatchError("Order ID is required.");
+      return;
+    }
+    if (dispatchSending) return;
+
+    setDispatchSending(true);
+    setDispatchError(null);
+    setDispatchSent(null);
+    try {
+      const result = await sendDispatchSlip({ sessionId: chat.id, orderId });
+      setDispatchSent(result);
+    } catch (err) {
+      setDispatchError(err?.response?.data?.detail || "Failed to send dispatch update.");
+    } finally {
+      setDispatchSending(false);
+    }
+  };
+
   const alreadySent = orderSentFor === chat.id;
+  const dispatchInputStyle = {
+    width: "100%",
+    fontSize: "13px",
+    padding: "9px 12px",
+    borderRadius: "8px",
+    border: `1px solid ${WA.borderMid}`,
+    background: WA.bgHeader,
+    color: WA.textPrimary,
+    outline: "none",
+    fontFamily: "inherit",
+    boxSizing: "border-box",
+    marginBottom: "6px",
+  };
 
   const statusPillStyle = {
     display: "inline-block",
@@ -433,6 +477,44 @@ export default function ChatInfoPanel({
             />
           )}
         </button>
+        <input
+          value={dispatchOrderId}
+          onChange={(e) => {
+            setDispatchOrderId(e.target.value);
+            setDispatchError(null);
+            setDispatchSent(null);
+          }}
+          placeholder="Order ID for dispatch slip"
+          style={dispatchInputStyle}
+        />
+        <button
+          onClick={handleDispatchSlip}
+          disabled={dispatchSending || !dispatchOrderId.trim()}
+          style={{
+            ...chatStyles.actionBtn,
+            opacity: dispatchSending || !dispatchOrderId.trim() ? 0.6 : 1,
+            cursor: dispatchSending || !dispatchOrderId.trim() ? "not-allowed" : "pointer",
+          }}
+        >
+          <Truck size={15} />
+          {dispatchSending ? "Sending tracking + slip…" : "Send tracking + dispatch slip"}
+          {!dispatchSending && (
+            <ChevronRight
+              size={14}
+              style={{ marginLeft: "auto", color: WA.textSub }}
+            />
+          )}
+        </button>
+        {dispatchSent && (
+          <Typography sx={{ fontSize: 12, color: "#2E7D32", mt: "2px" }}>
+            Tracking link and PDF added to chat.
+          </Typography>
+        )}
+        {dispatchError && (
+          <Typography sx={{ fontSize: 12, color: "#E53935", mt: "2px" }}>
+            {dispatchError}
+          </Typography>
+        )}
       </Box>
 
       {/* ── AI / Human toggle ── */}

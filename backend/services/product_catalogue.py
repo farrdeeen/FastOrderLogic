@@ -431,7 +431,10 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
                     SELECT pi.image_url
                     FROM product_images pi
                     JOIN products p ON p.product_id = pi.product_id
-                    WHERE p.sku_id = :sku
+                    WHERE (
+                        LOWER(TRIM(p.sku_id)) = LOWER(TRIM(:sku))
+                        OR LOWER(TRIM(COALESCE(p.zoho_sku, ''))) = LOWER(TRIM(:sku))
+                    )
                       AND pi.image_url IS NOT NULL
                       AND pi.image_url != ''
                     ORDER BY pi.image_id ASC

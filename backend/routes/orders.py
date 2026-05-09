@@ -132,6 +132,7 @@ class OrderCreate(BaseModel):
     payment_type: str
     channel: str = "offline"
     items: List[OrderItemIn]
+    send_whatsapp: bool = True
 
 class UTRPayload(BaseModel):
     utr_number: str
@@ -319,13 +320,16 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     if data.delivery_charge and total_qty > 0:
         delivery_per_unit = round(data.delivery_charge / total_qty, 2)
 
+    payment_type_normalized = (data.payment_type or "").strip().lower()
+    payment_status = "paid" if payment_type_normalized == "prepaid" else "pending"
+
     order = Order(
         order_id=order_id, customer_id=data.customer_id,
         offline_customer_id=data.offline_customer_id,
         address_id=data.address_id, total_items=data.total_items,
         subtotal=data.subtotal, gst=data.gst,
         delivery_charge=data.delivery_charge, total_amount=data.total_amount,
-        channel=data.channel.lower(), payment_status="pending",
+        channel=data.channel.lower(), payment_status=payment_status,
         delivery_status="NOT_SHIPPED", created_at=now, updated_at=now,
         order_index=order_index, payment_type=data.payment_type
     )
@@ -399,7 +403,7 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
             address_line = f"{addr.address_line}, {addr.city} — {addr.pincode}"
 
-        if phone:
+        if phone and data.send_whatsapp:
 
             asyncio.create_task(
 
@@ -417,7 +421,7 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
                     address_line=address_line,
 
-                    payment_status=data.payment_type,
+                    payment_status=payment_status,
 
                 )
 

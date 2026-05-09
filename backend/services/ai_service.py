@@ -10,6 +10,7 @@ import logging
 from typing import Optional, Literal
 from pathlib import Path
 import asyncio
+from contextvars import ContextVar
 
 _OPENROUTER_KEY     = os.getenv("OPENROUTER_API_KEY", "")
 _OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
@@ -18,6 +19,7 @@ _OLLAMA_ENABLED     = os.getenv("OLLAMA_ENABLED", "true").lower() == "true"
 _OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 logger = logging.getLogger(__name__)
+_LAST_AI_FAILURE: ContextVar[Optional[dict]] = ContextVar("last_ai_failure", default=None)
 
 _OLLAMA_BASE    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 _OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",    "llama3:8b-instruct-q4_K_M")
@@ -27,6 +29,8 @@ _GENERATE_URL   = f"{_OLLAMA_BASE}/api/generate"
 _cached_catalogue_summary: str = ""
 _catalogue_cache_ts: float = 0.0
 _CATALOGUE_CACHE_TTL = 300  # seconds
+_cached_training_doc: str = ""
+_training_doc_mtime: float = 0.0
 
 _TRAINING_DOC_PATH = Path(os.getenv("TRAINING_DOC_PATH", "data/training_doc.txt"))
 
@@ -45,6 +49,7 @@ YOUR ABILITIES:
 - Share product details and links when customers ask.
 - Help customers place orders by collecting: full name, mobile number, complete address (house/flat, street, city, state, pincode), and the product they want.
 - Tell customers their order status when they provide an order ID.
+- Do not handle service/repair/warranty complaints yourself; the backend will hand those to a human.
 
 ORDER COLLECTION — when you have ALL of: name, mobile, full address with pincode, product name AND SKU, emit exactly ONE JSON block:
 ```json
@@ -54,6 +59,49 @@ ORDER COLLECTION — when you have ALL of: name, mobile, full address with pinco
 ADDRESS CONFIRMATION — once customer confirms, reply ONLY with: CONFIRMED_ADDRESS
 MISSING INFO — ask for only ONE missing field at a time.
 """
+
+
+def get_last_ai_failure_context() -> Optional[dict]:
+    """Return provider failure details for the current AI call, if any."""
+    return _LAST_AI_FAILURE.get()
+
+
+def _limit_error_text(value: str, limit: int = 4000) -> str:
+    value = value or ""
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}\n...[truncated {len(value) - limit} chars]"
+
+
+def _add_provider_error(
+    errors: list[dict],
+    provider: str,
+    kind: str,
+    detail: str,
+    status_code: Optional[int] = None,
+    response_body: str = "",
+) -> None:
+    errors.append({
+        "provider": provider,
+        "kind": kind,
+        "status_code": status_code,
+        "detail": _limit_error_text(str(detail)),
+        "response_body": _limit_error_text(response_body),
+    })
+
+
+def _format_provider_errors(errors: list[dict]) -> str:
+    chunks = []
+    for err in errors:
+        provider = err.get("provider", "provider")
+        kind = err.get("kind", "error")
+        status = err.get("status_code")
+        header = f"{provider} {kind}"
+        if status:
+            header += f" ({status})"
+        body = err.get("response_body") or err.get("detail") or ""
+        chunks.append(f"{header}:\n{body}")
+    return "\n\n".join(chunks).strip()
 
 _ANYTAG_RE   = re.compile(r"<(think|reasoning|reflection|thinking|thought)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
 _BOLD_SEC_RE = re.compile(r"\*\*(Thinking|Reasoning|Internal|Chain of thought):?\*\*.*?(\n\n|\Z)", re.DOTALL | re.IGNORECASE)
@@ -73,6 +121,7 @@ IntentLabel = Literal[
     "order_status",
     "order_payment",
     "order_dispatch",
+    "service_request",
     "product_browse",
     "place_order",
     "general",
@@ -81,12 +130,13 @@ IntentLabel = Literal[
 _CLASSIFIER_SYSTEM = (
     "You are an intent classifier. "
     "Output EXACTLY one label from this list and nothing else:\n"
-    "order_status | order_payment | order_dispatch | product_browse | place_order | general\n\n"
+    "order_status | order_payment | order_dispatch | service_request | product_browse | place_order | general\n\n"
     "Definitions:\n"
     "  order_status   — asking about an existing order (tracking, delivery, where is my order)\n"
     "  order_payment  — saying they paid / asking if payment was received / sharing payment proof\n"
     "  order_dispatch — asking when order will ship/dispatch/arrive\n"
-    "  product_browse — asking about products, prices, availability, specs, catalogue, photos, images\n"
+    "  service_request — warranty, repair, replacement, technical issue, complaint, return/exchange, or asking for human support\n"
+    "  product_browse — wants to buy a product, asks price/availability/catalogue/link/photo for purchase\n"
     "  place_order    — actively placing a new order, giving name/address/product details\n"
     "  general        — greetings, complaints, or unrelated messages\n\n"
     "Rules:\n"
@@ -112,7 +162,7 @@ async def classify_intent(message: str, recent_history: list[dict]) -> IntentLab
 
     valid: set[IntentLabel] = {
         "order_status", "order_payment", "order_dispatch",
-        "product_browse", "place_order", "general",
+        "service_request", "product_browse", "place_order", "general",
     }
     raw = ""
 
@@ -213,6 +263,10 @@ def is_order_management_intent(intent: IntentLabel) -> bool:
     return intent in ("order_status", "order_payment", "order_dispatch")
 
 
+def is_service_intent(intent: IntentLabel) -> bool:
+    return intent == "service_request"
+
+
 def is_product_intent(intent: IntentLabel) -> bool:
     return intent == "product_browse"
 
@@ -232,21 +286,43 @@ async def _get_cached_catalogue_summary() -> str:
     return _cached_catalogue_summary
 
 
+def _get_cached_training_doc() -> str:
+    global _cached_training_doc, _training_doc_mtime
+
+    if not _TRAINING_DOC_PATH.exists():
+        if _cached_training_doc:
+            logger.info("Training doc removed; clearing AI policy cache.")
+        _cached_training_doc = ""
+        _training_doc_mtime = 0.0
+        return ""
+
+    try:
+        mtime = _TRAINING_DOC_PATH.stat().st_mtime
+        if _cached_training_doc and mtime == _training_doc_mtime:
+            return _cached_training_doc
+
+        doc = _TRAINING_DOC_PATH.read_text(encoding="utf-8").strip()
+        if doc:
+            lines = doc.splitlines()
+            if lines and lines[0].startswith("# FILENAME:"):
+                doc = "\n".join(lines[1:]).strip()
+        _cached_training_doc = doc[:3000]
+        _training_doc_mtime = mtime
+        logger.info("Training doc loaded into AI prompt cache; updated_at=%s", mtime)
+        return _cached_training_doc
+    except Exception as exc:
+        logger.warning("Training doc read error: %s", exc)
+        return _cached_training_doc
+
+
 async def build_system_prompt() -> str:
     cat = await _get_cached_catalogue_summary()
     prompt = _BASE_SYSTEM_PROMPT
     if cat:
         prompt += f"\n\n{cat}"
-    if _TRAINING_DOC_PATH.exists():
-        try:
-            doc = _TRAINING_DOC_PATH.read_text(encoding="utf-8").strip()
-            if doc:
-                lines = doc.splitlines()
-                if lines and lines[0].startswith("# FILENAME:"):
-                    doc = "\n".join(lines[1:]).strip()
-                prompt += f"\n\n--- STORE POLICIES ---\n{doc[:2000]}\n---"
-        except Exception as exc:
-            logger.warning("Training doc read error: %s", exc)
+    doc = _get_cached_training_doc()
+    if doc:
+        prompt += f"\n\n--- STORE POLICIES / USER TRAINING DOC ---\n{doc}\n---"
     return prompt
 
 
@@ -382,18 +458,28 @@ async def _call_ollama(system: str, history: list[dict], user_msg: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def generate_reply(conversation_history: list[dict], user_message: str) -> str:
+    _LAST_AI_FAILURE.set(None)
+    provider_errors: list[dict] = []
     system = await build_system_prompt()
 
     # ── 1. OpenRouter ──────────────────────────────────────────────────────────
     if _OPENROUTER_ENABLED:
         if not _OPENROUTER_KEY:
             logger.warning("generate_reply: OPENROUTER_ENABLED=true but key is empty — skipping")
+            _add_provider_error(
+                provider_errors,
+                "openrouter",
+                "configuration",
+                "OPENROUTER_ENABLED=true but OPENROUTER_API_KEY is empty",
+            )
         else:
             try:
                 reply = await _call_openrouter(system, conversation_history, user_message)
                 if reply:
+                    _LAST_AI_FAILURE.set(None)
                     return reply
                 logger.warning("generate_reply: OpenRouter returned blank — trying Ollama")
+                _add_provider_error(provider_errors, "openrouter", "blank_response", "OpenRouter returned blank")
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 if status == 429:
@@ -401,37 +487,76 @@ async def generate_reply(conversation_history: list[dict], user_message: str) ->
                 else:
                     logger.error("generate_reply: OpenRouter HTTP %s — falling back to Ollama. Body: %s",
                                  status, exc.response.text[:300])
+                _add_provider_error(
+                    provider_errors,
+                    "openrouter",
+                    "http_status",
+                    str(exc),
+                    status_code=status,
+                    response_body=exc.response.text,
+                )
             except httpx.TimeoutException:
                 logger.warning("generate_reply: OpenRouter timed out — falling back to Ollama")
+                _add_provider_error(provider_errors, "openrouter", "timeout", "OpenRouter timed out")
             except httpx.ConnectError as exc:
                 logger.error("generate_reply: OpenRouter ConnectError (DNS/network) — falling back to Ollama: %s", exc)
+                _add_provider_error(provider_errors, "openrouter", "connect_error", str(exc))
             except ValueError as exc:
                 logger.debug("generate_reply: OpenRouter skipped — %s", exc)
+                _add_provider_error(provider_errors, "openrouter", "configuration", str(exc))
             except Exception as exc:
                 logger.error("generate_reply: OpenRouter unexpected error — falling back to Ollama: %s", exc)
+                _add_provider_error(provider_errors, "openrouter", "unexpected_error", str(exc))
 
     # ── 2. Ollama ──────────────────────────────────────────────────────────────
     if _OLLAMA_ENABLED:
         try:
             reply = await _call_ollama(system, conversation_history, user_message)
             if reply:
+                _LAST_AI_FAILURE.set(None)
                 return reply
             logger.warning("generate_reply: Ollama returned blank — no providers left")
+            _add_provider_error(provider_errors, "ollama", "blank_response", "Ollama returned blank")
         except httpx.ConnectError:
             logger.error("generate_reply: Ollama not reachable at %s", _OLLAMA_BASE)
+            _add_provider_error(provider_errors, "ollama", "connect_error", f"Ollama not reachable at {_OLLAMA_BASE}")
         except httpx.TimeoutException:
             logger.error("generate_reply: Ollama timed out after %ss", _OLLAMA_TIMEOUT)
+            _add_provider_error(provider_errors, "ollama", "timeout", f"Ollama timed out after {_OLLAMA_TIMEOUT}s")
         except httpx.HTTPStatusError as exc:
             logger.error("generate_reply: Ollama HTTP %s: %s", exc.response.status_code, exc.response.text[:200])
+            _add_provider_error(
+                provider_errors,
+                "ollama",
+                "http_status",
+                str(exc),
+                status_code=exc.response.status_code,
+                response_body=exc.response.text,
+            )
         except Exception as exc:
             logger.error("generate_reply: Ollama unexpected error: %s", exc)
+            _add_provider_error(provider_errors, "ollama", "unexpected_error", str(exc))
+    else:
+        _add_provider_error(provider_errors, "ollama", "configuration", "OLLAMA_ENABLED=false")
 
     # ── 3. Static fallback ─────────────────────────────────────────────────────
     logger.error("generate_reply: ALL providers failed for msg=%r", user_message[:60])
-    return (
+    fallback = (
         "Sorry, our assistant is temporarily busy. "
         "Please WhatsApp us directly or try again in a minute. 🙏"
     )
+    _LAST_AI_FAILURE.set({
+        "ai_failure": True,
+        "flow": "ai_failure",
+        "provider_errors": provider_errors,
+        "error_response": _format_provider_errors(provider_errors) or "All AI providers failed.",
+        "fallback_message": fallback,
+        "model": {
+            "openrouter": _OPENROUTER_MODEL,
+            "ollama": _OLLAMA_MODEL,
+        },
+    })
+    return fallback
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -566,14 +691,19 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
     text  = format_product_list_for_whatsapp(products, intro=intro)
 
     images: list[str] = []
-    for p in products:
+    for p in products[:3]:
         sku  = (p.get("sku") or "").strip()
         name = (p.get("name") or "").strip()
         logger.debug("generate_product_reply: image lookup sku=%r name=%r", sku, name)
         imgs = await get_product_images_by_sku(sku, product_name=name)
         if imgs:
             logger.info("generate_product_reply: found %d image(s) for sku=%r", len(imgs), sku)
-            images = imgs
+            for img in imgs:
+                if img not in images:
+                    images.append(img)
+                if len(images) >= 3:
+                    break
+        if len(images) >= 3:
             break
 
     if not images:

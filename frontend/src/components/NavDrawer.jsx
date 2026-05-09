@@ -20,10 +20,7 @@ import {
   ChevronRight as ChevronRightIcon,
   Dashboard as DashboardIcon,
   ShoppingCart as ShoppingCartIcon,
-  Payments as PaymentsIcon,
-  Settings as SettingsIcon,
-  Logout as LogoutIcon,
-  Forum as ForumIcon,          // ✅ Chat Icon Added
+  Forum as ForumIcon,
 } from "@mui/icons-material";
 
 const drawerWidth = 220;
@@ -39,14 +36,10 @@ export default function NavDrawer({
 
   const handleCollapseToggle = () => setOpen(!open);
 
-  // ⬇️ NEW CHAT MENU ENTRY ADDED HERE
   const menuItems = [
     { text: "Dashboard", icon: <DashboardIcon />, id: "dashboard" },
     { text: "Orders", icon: <ShoppingCartIcon />, id: "orders" },
-    { text: "Payments", icon: <PaymentsIcon />, id: "payments" },
     { text: "Chat", icon: <ForumIcon />, id: "chat" },
-    { text: "Settings", icon: <SettingsIcon />, id: "settings" },
-    { text: "Logout", icon: <LogoutIcon />, id: "logout" },
   ];
 
   const drawerContent = (isMobile = false) => {
@@ -85,7 +78,7 @@ export default function NavDrawer({
           </Typography>
         ) : (
           <Tooltip title="Expand Menu" placement="right">
-            <MenuIcon sx={{ color: "#f4f2f2ff" }} />
+            <MenuIcon sx={{ color: "#264653" }} />
           </Tooltip>
         )}
       </Toolbar>
@@ -199,7 +192,12 @@ export default function NavDrawer({
         sx={{
           display: "none",
           [mobileBreakpoint]: { display: "block" },
-          "& .MuiDrawer-paper": { boxSizing: "border-box", width: drawerWidth },
+          "& .MuiDrawer-paper": {
+            boxSizing: "border-box",
+            width: "min(86vw, 300px)",
+            maxWidth: "100vw",
+            height: "100dvh",
+          },
         }}
       >
         {drawerContent(true)}

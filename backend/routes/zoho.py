@@ -392,6 +392,8 @@ def create_invoice(order_id: str, db: Session = Depends(get_db)):
 
     # DELIVERY
     delivery_charge = float(order_row.delivery_charge or 0)
+    if (order_row.channel or "").lower() == "wix":
+        delivery_charge = 0
     total_qty = sum(int(i["quantity"]) for i in items)
     delivery_per_unit = (
         round(delivery_charge / total_qty, 2)

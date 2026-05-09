@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Typography } from "@mui/material";
 import { Bell, Menu, Search, MessageCirclePlus } from "lucide-react";
-import { fetchConversations } from "./chatApi";
+import { fetchConversations, getChatWsUrl } from "./chatApi";
 import {
   chatStyles,
   CHAT_FILTERS,
@@ -71,6 +71,8 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
   const latestRef = useRef(new Map());
   const loadedOnce = useRef(false);
   const activeIdRef = useRef(activeId);
+  const wsRef = useRef(null);
+  const wsReconnectRef = useRef(null);
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
@@ -143,8 +145,52 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 20000);
+    const t = setInterval(load, 60000);
     return () => clearInterval(t);
+  }, [load]);
+
+  useEffect(() => {
+    let stopped = false;
+
+    const connect = () => {
+      if (stopped || typeof WebSocket === "undefined") return;
+      const ws = new WebSocket(getChatWsUrl());
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (payload.type !== "chat_changed") return;
+        load();
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      ws.onclose = () => {
+        if (stopped) return;
+        wsReconnectRef.current = window.setTimeout(connect, 5000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      if (wsReconnectRef.current) {
+        window.clearTimeout(wsReconnectRef.current);
+        wsReconnectRef.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
   }, [load]);
 
   const visible = conversations.filter((c) => matchesFilter(c, activeFilter));

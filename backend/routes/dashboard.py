@@ -58,6 +58,7 @@ def get_dashboard_stats(
     - orders_converted     : sessions that resulted in a parsed order JSON
     - orders_dispatched    : orders with a non-null AWB / shipped status
     - ai_failures_today    : messages where the AI returned an error string
+    - channel_*            : offline / wix order counts, total and today
     - avg_response_time_s  : average seconds between user message and AI reply
     - weekly_leads         : leads per day for the last 7 days (for sparkline)
     - weekly_conversations : conversations started per day for last 7 days
@@ -71,6 +72,20 @@ def get_dashboard_stats(
         text("SELECT COUNT(*) FROM orders WHERE created_at >= :ts"),
         {"ts": today_start},
     ).scalar() or 0
+
+    # ── Channel split: total + today ──
+    channel_row = db.execute(
+        text("""
+            SELECT
+                SUM(CASE WHEN LOWER(COALESCE(channel, '')) = 'offline' THEN 1 ELSE 0 END) AS offline_total,
+                SUM(CASE WHEN LOWER(COALESCE(channel, '')) = 'offline' AND created_at >= :ts THEN 1 ELSE 0 END) AS offline_today,
+                SUM(CASE WHEN LOWER(COALESCE(channel, '')) = 'wix' THEN 1 ELSE 0 END) AS wix_total,
+                SUM(CASE WHEN LOWER(COALESCE(channel, '')) = 'wix' AND created_at >= :ts THEN 1 ELSE 0 END) AS wix_today
+            FROM orders
+        """),
+        {"ts": today_start},
+    ).first()
+    channel_counts = dict(channel_row._mapping) if channel_row else {}
 
     # ── Conversations ──
     conversations_total = db.execute(
@@ -129,6 +144,16 @@ def get_dashboard_stats(
                   message LIKE '%having trouble connecting%'
                   OR message LIKE '%Something went wrong%'
                   OR message LIKE '%not configured%'
+                  OR message LIKE '%assistant is temporarily busy%'
+                  OR (
+                      meta IS NOT NULL
+                      AND JSON_VALID(meta)
+                      AND (
+                          JSON_UNQUOTE(JSON_EXTRACT(meta, '$.ai_failure')) = 'true'
+                          OR JSON_UNQUOTE(JSON_EXTRACT(meta, '$.flow')) = 'ai_failure'
+                          OR JSON_EXTRACT(meta, '$.error_response') IS NOT NULL
+                      )
+                  )
               )
         """),
         {"ts": today_start},
@@ -187,6 +212,10 @@ def get_dashboard_stats(
         "orders_converted":      orders_converted,
         "orders_dispatched":     orders_dispatched,
         "ai_failures_today":     ai_failures_today,
+        "channel_offline_total":  channel_counts.get("offline_total") or 0,
+        "channel_offline_today":  channel_counts.get("offline_today") or 0,
+        "channel_wix_total":      channel_counts.get("wix_total") or 0,
+        "channel_wix_today":      channel_counts.get("wix_today") or 0,
         "avg_response_time_s":   avg_response_time_s,
         "weekly_leads":          weekly_leads,
         "weekly_conversations":  weekly_conversations,
@@ -209,6 +238,7 @@ def get_ai_failures(
                 cm.id,
                 cm.session_id,
                 cm.message,
+                cm.meta,
                 cm.timestamp,
                 cs.phone_number,
                 cs.wa_contact_name
@@ -219,6 +249,16 @@ def get_ai_failures(
                   cm.message LIKE '%having trouble connecting%'
                   OR cm.message LIKE '%Something went wrong%'
                   OR cm.message LIKE '%not configured%'
+                  OR cm.message LIKE '%assistant is temporarily busy%'
+                  OR (
+                      cm.meta IS NOT NULL
+                      AND JSON_VALID(cm.meta)
+                      AND (
+                          JSON_UNQUOTE(JSON_EXTRACT(cm.meta, '$.ai_failure')) = 'true'
+                          OR JSON_UNQUOTE(JSON_EXTRACT(cm.meta, '$.flow')) = 'ai_failure'
+                          OR JSON_EXTRACT(cm.meta, '$.error_response') IS NOT NULL
+                      )
+                  )
               )
             ORDER BY cm.timestamp DESC
             LIMIT :lim
@@ -226,7 +266,16 @@ def get_ai_failures(
         {"lim": limit},
     ).fetchall()
 
-    return [dict(r._mapping) for r in rows]
+    failures = []
+    for row in rows:
+        item = dict(row._mapping)
+        meta = _parse_meta(item.get("meta"))
+        item["error_response"] = _extract_failure_response(meta, item.get("message") or "")
+        item["error_detail"] = item["error_response"]
+        item["provider_errors"] = meta.get("provider_errors") if isinstance(meta, dict) else None
+        item["flow"] = meta.get("flow") if isinstance(meta, dict) else None
+        failures.append(item)
+    return failures
 
 
 # ─── GET /dashboard/recent-conversations ─────────────────────────────────────
@@ -258,6 +307,161 @@ def get_recent_conversations(
         {"lim": limit},
     ).fetchall()
     return [dict(r._mapping) for r in rows]
+
+
+# ─── GET /dashboard/invoice-pending ──────────────────────────────────────────
+
+@router.get("/invoice-pending")
+def get_invoice_pending(
+    _=Depends(require_user),
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """
+    Customers with more than one order where the invoice has not been generated.
+
+    Each customer row includes grouped order IDs and product quantities so the
+    monthly credit invoice can be prepared without opening every order.
+    """
+    limit = max(1, min(int(limit or 50), 100))
+    rows = db.execute(
+        text("""
+            SELECT
+                CASE
+                    WHEN o.customer_id IS NOT NULL THEN 'online'
+                    ELSE 'offline'
+                END AS customer_type,
+                COALESCE(o.customer_id, o.offline_customer_id) AS customer_id,
+                COALESCE(c.name, oc.name, 'Unknown Customer') AS customer_name,
+                COALESCE(c.mobile, oc.mobile, '') AS customer_mobile,
+                o.order_id,
+                o.created_at,
+                o.total_amount,
+                o.total_items AS order_total_items,
+                oi.item_id,
+                oi.product_id,
+                p.name AS product_name,
+                p.sku_id,
+                oi.quantity
+            FROM orders o
+            LEFT JOIN customer c ON c.customer_id = o.customer_id
+            LEFT JOIN offline_customer oc ON oc.customer_id = o.offline_customer_id
+            LEFT JOIN order_items oi ON oi.order_id = o.order_id
+            LEFT JOIN products p ON p.product_id = oi.product_id
+            WHERE (
+                o.invoice_number IS NULL
+                OR TRIM(o.invoice_number) = ''
+            )
+              AND UPPER(COALESCE(o.order_status, '')) <> 'REJECTED'
+            ORDER BY customer_name ASC, o.created_at ASC, o.order_id ASC, oi.item_id ASC
+        """),
+    ).fetchall()
+
+    groups = {}
+    for row in rows:
+        r = row._mapping
+        customer_id = r["customer_id"]
+        if customer_id is None:
+            continue
+
+        key = f"{r['customer_type']}:{customer_id}"
+        group = groups.setdefault(
+            key,
+            {
+                "customer_key": key,
+                "customer_type": r["customer_type"],
+                "customer_id": customer_id,
+                "customer_name": r["customer_name"] or "Unknown Customer",
+                "customer_mobile": r["customer_mobile"] or "",
+                "_orders": {},
+                "_devices": {},
+            },
+        )
+
+        order_id = r["order_id"]
+        order = group["_orders"].setdefault(
+            order_id,
+            {
+                "order_id": order_id,
+                "created_at": _to_iso(r["created_at"]),
+                "_created_sort": r["created_at"],
+                "total_amount": float(r["total_amount"] or 0),
+                "quantity": 0,
+                "fallback_quantity": int(r["order_total_items"] or 0),
+                "_has_items": False,
+            },
+        )
+
+        if r["product_id"] is None:
+            continue
+
+        quantity = int(r["quantity"] or 0)
+        order["quantity"] += quantity
+        order["_has_items"] = True
+
+        product_name = r["product_name"] or "Unknown Product"
+        sku_id = r["sku_id"] or ""
+        device_key = f"{sku_id}|{product_name}"
+        device = group["_devices"].setdefault(
+            device_key,
+            {
+                "product_name": product_name,
+                "sku_id": sku_id,
+                "quantity": 0,
+                "_order_ids": set(),
+            },
+        )
+        device["quantity"] += quantity
+        device["_order_ids"].add(order_id)
+
+    result = []
+    for group in groups.values():
+        raw_orders = list(group["_orders"].values())
+        if len(raw_orders) <= 1:
+            continue
+
+        orders = []
+        for order in raw_orders:
+            quantity = order["quantity"] if order["_has_items"] else order["fallback_quantity"]
+            orders.append({
+                "order_id": order["order_id"],
+                "created_at": order["created_at"],
+                "total_amount": order["total_amount"],
+                "quantity": quantity,
+            })
+
+        devices = []
+        for device in group["_devices"].values():
+            devices.append({
+                "product_name": device["product_name"],
+                "sku_id": device["sku_id"],
+                "quantity": device["quantity"],
+                "order_count": len(device["_order_ids"]),
+                "order_ids": sorted(device["_order_ids"]),
+            })
+
+        dates = [o["_created_sort"] for o in raw_orders if o["_created_sort"]]
+        result.append({
+            "customer_key": group["customer_key"],
+            "customer_type": group["customer_type"],
+            "customer_id": group["customer_id"],
+            "customer_name": group["customer_name"],
+            "customer_mobile": group["customer_mobile"],
+            "order_count": len(orders),
+            "total_quantity": sum(o["quantity"] for o in orders),
+            "total_amount": sum(o["total_amount"] for o in orders),
+            "order_ids": [o["order_id"] for o in orders],
+            "first_order_at": _to_iso(min(dates)) if dates else None,
+            "last_order_at": _to_iso(max(dates)) if dates else None,
+            "orders": sorted(orders, key=lambda o: o["created_at"] or ""),
+            "devices": sorted(
+                devices,
+                key=lambda d: (-d["quantity"], d["product_name"].lower(), d["sku_id"].lower()),
+            ),
+        })
+
+    result.sort(key=lambda g: g["last_order_at"] or "", reverse=True)
+    return result[:limit]
 
 
 # ─── Training doc endpoints ───────────────────────────────────────────────────
@@ -342,6 +546,50 @@ def _fill_week_gaps(rows) -> list[dict]:
         day = (date.today() - timedelta(days=i)).isoformat()
         result.append({"day": day, "count": day_map.get(day, 0)})
     return result
+
+
+def _to_iso(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _parse_meta(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _extract_failure_response(meta: dict, fallback: str) -> str:
+    if not isinstance(meta, dict):
+        return fallback
+
+    for key in ("error_response", "error", "response_body", "detail"):
+        value = meta.get(key)
+        if value:
+            return str(value)
+
+    provider_errors = meta.get("provider_errors") or []
+    if isinstance(provider_errors, list):
+        chunks = []
+        for err in provider_errors:
+            if not isinstance(err, dict):
+                continue
+            provider = err.get("provider") or "provider"
+            kind = err.get("kind") or "error"
+            status = err.get("status_code")
+            title = f"{provider} {kind}"
+            if status:
+                title += f" ({status})"
+            body = err.get("response_body") or err.get("detail") or ""
+            chunks.append(f"{title}:\n{body}")
+        if chunks:
+            return "\n\n".join(chunks)
+
+    return fallback
 
 
 def _extract_docx_text(content: bytes, filename: str) -> str:

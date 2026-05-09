@@ -21,31 +21,37 @@ from services.ai_service import (
     classify_intent,
     is_order_management_intent,
     is_product_intent,
+    is_service_intent,
     generate_reply,
+    get_last_ai_failure_context,
     generate_product_reply,
-    get_order_status_text,
-    get_orders_by_phone,
-    format_orders_status_for_customer,
     extract_order_json,
     is_address_confirmed,
     analyze_media,
 )
 from services.whatsapp_service import (
+    download_media_bytes,
+    get_media_url,
     send_text_message,
     send_order_confirmation,
     send_template_message,
     send_image_message,
 )
+from services.chat_media_service import save_media_bytes
 from services.payment_service import (
     PaymentLinkError,
     build_payment_qr_url,
+    build_payment_template_button_value,
     create_payment_qr_details,
     create_payment_link_details,
-    encode_payment_order_token,
 )
 from services.ai_order_service import (
     place_ai_order,
     build_order_confirmation_message,
+)
+from services.order_status_service import (
+    build_status_reply_for_order_id,
+    build_status_reply_for_phone,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +59,7 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_ORDER_CONFIRMED = "order_confirmation"
 _TEMPLATE_PAYMENT_PENDING = "payment_pending"
 _RAZORPAY_BASE = os.getenv("RAZORPAY_BASE_URL", "https://rzp.io/l")
+_CHAT_SESSION_COLUMNS_READY = False
 
 
 def _wa_message_id(response: Optional[dict]) -> Optional[str]:
@@ -95,11 +102,124 @@ def normalize_phone(phone: str) -> str:
     return local_phone
 
 
+def ensure_chat_session_columns(db: Session) -> None:
+    global _CHAT_SESSION_COLUMNS_READY
+    if _CHAT_SESSION_COLUMNS_READY:
+        return
+    try:
+        rows = db.execute(text("SHOW COLUMNS FROM chat_sessions")).fetchall()
+        existing = {row[0] for row in rows}
+    except Exception as exc:
+        logger.debug("Could not inspect chat_sessions columns: %s", exc)
+        existing = set()
+
+    columns = {
+        "is_human": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "flag": "VARCHAR(20) NULL",
+        "preferred_language": "VARCHAR(10) NULL",
+    }
+    for name, definition in columns.items():
+        if name in existing:
+            continue
+        try:
+            db.execute(text(f"ALTER TABLE chat_sessions ADD COLUMN {name} {definition}"))
+            db.commit()
+        except Exception as exc:
+            logger.debug("Optional chat_sessions migration skipped for %s: %s", name, exc)
+            db.rollback()
+    _CHAT_SESSION_COLUMNS_READY = True
+
+
+def _detect_language_choice(message: str) -> Optional[str]:
+    text_value = (message or "").strip().lower()
+    compact = re.sub(r"\s+", " ", text_value)
+    if compact in ("1", "hindi", "hin", "hi", "हिंदी", "हिन्दी"):
+        return "hi"
+    if compact in ("2", "english", "eng", "en", "अंग्रेजी", "अंग्रेज़ी"):
+        return "en"
+    return None
+
+
+def _looks_like_greeting(message: str) -> bool:
+    compact = re.sub(r"[\s!.?,]+", " ", (message or "").strip().lower()).strip()
+    greetings = {
+        "hi", "hello", "hey", "hii", "hiii", "namaste", "नमस्ते",
+        "good morning", "good afternoon", "good evening", "kaise ho",
+    }
+    return compact in greetings
+
+
+def _history_asked_for_order_id(history: list[dict]) -> bool:
+    for turn in history[-3:]:
+        content = (turn.get("content") or "").lower()
+        if "order id" in content or "order id" in content.replace("-", " "):
+            return True
+    return False
+
+
+def _extract_order_id_candidate(message: str, history: list[dict]) -> Optional[str]:
+    match = re.search(
+        r"\b(\d{5}#\d{5}|WIX#\d+|ORD-\d+|AI-\d{5})\b",
+        message or "",
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1)
+    if _history_asked_for_order_id(history):
+        raw_match = re.search(r"\b(\d{4,8})\b", message or "")
+        if raw_match:
+            return raw_match.group(1)
+    return None
+
+
+def _infer_language(message: str, fallback: str = "en") -> str:
+    if re.search(r"[\u0900-\u097F]", message or ""):
+        return "hi"
+    return fallback or "en"
+
+
+def _language_prompt() -> str:
+    return (
+        "Namaste! Please choose your preferred language.\n"
+        "1. Hindi\n"
+        "2. English\n\n"
+        "नमस्ते! कृपया भाषा चुनें.\n"
+        "1. Hindi\n"
+        "2. English"
+    )
+
+
+def _language_selected_reply(language: str) -> str:
+    if language == "hi":
+        return "Hindi selected. Aap product, service, ya order status ke liye message bhej sakte hain."
+    return "English selected. You can ask about products, service, or order status."
+
+
+def _service_escalation_reply(language: str) -> str:
+    if language == "hi":
+        return "Maine aapki chat urgent mark kar di hai. Hamari team jald hi yahin reply karegi."
+    return "I've marked this chat as urgent. Our team will reply here shortly."
+
+
+def _mark_session_urgent_for_human(db: Session, session_id: int) -> None:
+    ensure_chat_session_columns(db)
+    db.execute(
+        text("""
+            UPDATE chat_sessions
+            SET flag = 'urgent', is_human = TRUE, updated_at = :now
+            WHERE id = :sid
+        """),
+        {"sid": session_id, "now": datetime.now()},
+    )
+    db.commit()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Session helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_or_create_session(db: Session, phone: str, contact_name: str = "") -> dict:
+    ensure_chat_session_columns(db)
     row = db.execute(
         text("SELECT * FROM chat_sessions WHERE phone_number = :ph"),
         {"ph": phone},
@@ -158,7 +278,13 @@ def save_message(
         {"msg": message[:255], "ts": datetime.now(), "sid": session_id},
     )
     db.commit()
-    return result.lastrowid
+    message_id = result.lastrowid
+    try:
+        from routes.chat import notify_chat_change
+        notify_chat_change(session_id, "message")
+    except Exception:
+        logger.debug("Chat websocket notify failed for session %s", session_id, exc_info=True)
+    return message_id
 
 
 def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> list[dict]:
@@ -188,6 +314,8 @@ async def handle_inbound_media(
     phone: str,
     media_url: str,
     media_type: str,
+    media_id: str = "",
+    filename: str = "",
     contact_name: str = "",
     wa_message_id: Optional[str] = None,
 ) -> str:
@@ -203,9 +331,51 @@ async def handle_inbound_media(
         if existing:
             return ""
 
-    save_message(db, session_id, "user", f"[media:{media_type}]", wa_message_id=wa_message_id)
+    local_media_url = media_url or ""
+    local_download_url = local_media_url
+    local_mime_type = media_type or "application/octet-stream"
+    local_file_name = filename or f"whatsapp-{local_mime_type.split('/')[0]}"
+    local_file_size = None
 
-    reply = await analyze_media(media_url, media_type)
+    if media_id:
+        try:
+            resolved_url = await get_media_url(media_id)
+            media_bytes, downloaded_type = await download_media_bytes(resolved_url)
+            if media_bytes:
+                saved = save_media_bytes(
+                    media_bytes,
+                    filename=local_file_name,
+                    folder=f"chat/{session_id}/inbound",
+                    content_type=downloaded_type or local_mime_type,
+                )
+                local_media_url = saved["public_url"]
+                local_download_url = saved["download_url"]
+                local_mime_type = saved["content_type"]
+                local_file_name = saved["filename"]
+                local_file_size = saved["size"]
+        except Exception as exc:
+            logger.warning("Could not store inbound WA media %s: %s", media_id, exc)
+    media_kind = "image" if str(local_mime_type).startswith("image/") else "document"
+    meta = {
+        "flow": "customer_media",
+        "media_type": media_kind,
+        "mime_type": local_mime_type,
+        "media_url": local_media_url,
+        "download_url": local_download_url,
+        "file_name": local_file_name,
+        "file_size": local_file_size,
+        "wa_media_id": media_id,
+    }
+    save_message(
+        db,
+        session_id,
+        "user",
+        f"[media:{media_kind}] {local_file_name}",
+        wa_message_id=wa_message_id,
+        meta=meta,
+    )
+
+    reply = await analyze_media(local_media_url or media_url, local_mime_type)
     save_message(db, session_id, "ai", reply)
 
     try:
@@ -247,15 +417,44 @@ async def handle_inbound_message(
         logger.info("Human mode ON for session %s — skipping AI", session_id)
         return ""
 
+    # ── Build history for context (exclude the user turn we just saved) ────────
+    history = get_conversation_history(db, session_id, limit=18)
+    if history and history[-1]["role"] == "user" and history[-1]["content"] == text_body:
+        history_for_context = history[:-1]
+    else:
+        history_for_context = history
+
+    selected_language = _detect_language_choice(text_body)
+    if selected_language:
+        db.execute(
+            text("UPDATE chat_sessions SET preferred_language = :lang, updated_at = :now WHERE id = :sid"),
+            {"lang": selected_language, "now": datetime.now(), "sid": session_id},
+        )
+        db.commit()
+        reply = _language_selected_reply(selected_language)
+        save_message(db, session_id, "ai", reply, meta={"flow": "language_selected", "language": selected_language})
+        try:
+            await send_text_message(phone, reply)
+        except Exception as exc:
+            logger.error("Language selection reply send failed %s: %s", phone, exc)
+        return reply
+
+    preferred_language = session.get("preferred_language") or ""
+    if not preferred_language and _looks_like_greeting(text_body) and not history_for_context:
+        reply = _language_prompt()
+        save_message(db, session_id, "ai", reply, meta={"flow": "language_prompt"})
+        try:
+            await send_text_message(phone, reply)
+        except Exception as exc:
+            logger.error("Language prompt send failed %s: %s", phone, exc)
+        return reply
+
+    language = preferred_language or _infer_language(text_body)
+
     # ── Explicit order ID shortcut (structural regex is fine here) ─────────────
-    order_id_match = re.search(
-        r"\b(\d{5}#\d{5}|WIX#\d+|ORD-\d+|AI-\d{5})\b",
-        text_body,
-        re.IGNORECASE,
-    )
-    if order_id_match:
-        order_id    = order_id_match.group(1)
-        status_text = get_order_status_text(order_id, db)
+    order_id = _extract_order_id_candidate(text_body, history_for_context)
+    if order_id:
+        status_text = await build_status_reply_for_order_id(db, order_id, language=language)
         if status_text:
             save_message(db, session_id, "ai", status_text)
             try:
@@ -263,13 +462,17 @@ async def handle_inbound_message(
             except Exception as exc:
                 logger.error("Failed to send order status to %s: %s", phone, exc)
             return status_text
-
-    # ── Build history for context (exclude the user turn we just saved) ────────
-    history = get_conversation_history(db, session_id, limit=18)
-    if history and history[-1]["role"] == "user" and history[-1]["content"] == text_body:
-        history_for_context = history[:-1]
-    else:
-        history_for_context = history
+        not_found = (
+            "Mujhe ye Order ID nahi mila. Please Order ID dobara check karke bhej dein."
+            if language == "hi"
+            else "I couldn't find that Order ID. Please check it once and send it again."
+        )
+        save_message(db, session_id, "ai", not_found)
+        try:
+            await send_text_message(phone, not_found)
+        except Exception as exc:
+            logger.error("Order ID not-found reply failed %s: %s", phone, exc)
+        return not_found
 
     # ── LLM intent classification ──────────────────────────────────────────────
     intent = await classify_intent(text_body, history_for_context[-5:])
@@ -278,54 +481,20 @@ async def handle_inbound_message(
         session_id, phone, intent, text_body[:60],
     )
 
+    # ── Route: service / complaint — hand over to human urgently ───────────────
+    if is_service_intent(intent):
+        _mark_session_urgent_for_human(db, session_id)
+        reply = _service_escalation_reply(language)
+        save_message(db, session_id, "ai", reply, meta={"flow": "service_escalation", "flag": "urgent"})
+        try:
+            await send_text_message(phone, reply)
+        except Exception as exc:
+            logger.error("Service escalation reply send failed %s: %s", phone, exc)
+        return reply
+
     # ── Route: order management ────────────────────────────────────────────────
     if is_order_management_intent(intent):
-        orders = get_orders_by_phone(phone, db)
-
-        if orders:
-            status_reply = format_orders_status_for_customer(orders)
-
-            if intent == "order_payment":
-                pending = [
-                    o for o in orders
-                    if (o.get("payment_status") or "").lower()
-                    not in ("paid", "success", "accepted")
-                ]
-                if pending:
-                    status_reply += (
-                        "\n\n⚠️ We can see your order is still showing payment pending on our end. "
-                        "If you've already paid, please share your payment screenshot or UTR number "
-                        "and we'll verify and dispatch within 1–2 hours. 🙏"
-                    )
-                else:
-                    not_shipped = [
-                        o for o in orders
-                        if (o.get("delivery_status") or "NOT_SHIPPED").upper()
-                        not in ("SHIPPED", "COMPLETED")
-                    ]
-                    if not_shipped:
-                        status_reply += (
-                            "\n\n✅ Payment received! Your order is being prepared for dispatch. "
-                            "You'll receive a tracking number once it's shipped. 🚀"
-                        )
-
-            elif intent == "order_dispatch":
-                not_shipped = [
-                    o for o in orders
-                    if (o.get("delivery_status") or "NOT_SHIPPED").upper()
-                    not in ("SHIPPED", "COMPLETED")
-                ]
-                if not_shipped:
-                    status_reply += (
-                        "\n\n🚀 Orders are typically dispatched within 1–2 business days after "
-                        "payment confirmation. We'll send you the tracking number as soon as it ships!"
-                    )
-        else:
-            status_reply = (
-                "I couldn't find any orders linked to your number. 😔\n\n"
-                "Could you please share your Order ID (e.g. AI-00123 or WIX#1234)? "
-                "Or I'll connect you with our team right away. 🙏"
-            )
+        status_reply = await build_status_reply_for_phone(db, phone, language=language)
 
         save_message(db, session_id, "ai", status_reply)
         try:
@@ -354,12 +523,26 @@ async def handle_inbound_message(
             except Exception as exc:
                 logger.error("Product text send failed %s: %s", phone, exc)
 
-            for img_url in images[:2]:
+            for img_url in images[:3]:
                 try:
                     logger.debug("handle_inbound: sending image url=%s to phone=%s", img_url[:80], phone)
-                    await asyncio.wait_for(
+                    wa_resp = await asyncio.wait_for(
                         send_image_message(phone, img_url),
                         timeout=10.0,
+                    )
+                    save_message(
+                        db,
+                        session_id,
+                        "ai",
+                        "[image] Product photo",
+                        wa_message_id=_wa_message_id(wa_resp),
+                        meta={
+                            "flow": "product_image",
+                            "media_type": "image",
+                            "mime_type": "image/jpeg",
+                            "media_url": img_url,
+                            "download_url": img_url,
+                        },
                     )
                     await asyncio.sleep(0.3)
                 except asyncio.TimeoutError:
@@ -374,6 +557,7 @@ async def handle_inbound_message(
 
     # ── Route: everything else → full AI reply ─────────────────────────────────
     ai_reply = await generate_reply(history_for_context, text_body)
+    ai_failure_context = get_last_ai_failure_context()
 
     # ── Check if AI produced a complete order JSON ─────────────────────────────
     order_data = extract_order_json(ai_reply)
@@ -388,6 +572,13 @@ async def handle_inbound_message(
         order_id      = result.get("order_id")
         raw_total     = result.get("total") or result.get("total_amount") or 0
         amount_str    = f"₹{float(raw_total):,.0f}" if raw_total else "—"
+
+        if result.get("success") and order_id:
+            try:
+                from routes.orders import notify_order_change
+                notify_order_change(order_id, "created")
+            except Exception:
+                logger.debug("Order websocket notify failed for AI order %s", order_id, exc_info=True)
 
         save_message(
             db, session_id, "ai", ai_reply,
@@ -423,7 +614,7 @@ async def handle_inbound_message(
         return ai_reply
 
     # ── Normal AI reply ────────────────────────────────────────────────────────
-    save_message(db, session_id, "ai", ai_reply)
+    save_message(db, session_id, "ai", ai_reply, meta=ai_failure_context)
 
     clean_reply = ai_reply.strip()
     if "CONFIRMED_ADDRESS" in clean_reply:
@@ -506,7 +697,40 @@ async def notify_order_created(
                 report["errors"].append(f"address_nudge:{exc}")
 
     else:
-        payment_button_token = encode_payment_order_token(order_id)
+        payment_link = None
+        pay_link = ""
+        payment_button_value = ""
+        try:
+            payment_link = await create_payment_link_details(
+                order_id=order_id,
+                amount=parse_amount(amount),
+                name=customer_name or "Customer",
+                phone=phone,
+            )
+            pay_link = payment_link.get("short_url") or ""
+            if not pay_link:
+                raise PaymentLinkError("No payment link returned")
+            payment_button_value = build_payment_template_button_value(order_id, pay_link)
+            report["payment_url"] = pay_link
+            report["razorpay_payment_link_id"] = payment_link.get("id")
+            report["payment_button_value"] = payment_button_value
+        except PaymentLinkError as exc:
+            logger.error("Razorpay payment link creation failed for %s order %s: %s", phone, order_id, exc)
+            report["errors"].append(f"payment_link_create:{exc}")
+            save_message(
+                db, session_id, "system",
+                f"[payment_link_create_failed] {order_id}: {exc}",
+                meta={"order_id": order_id, "flow": "payment_link_create_failed", "error": str(exc)},
+            )
+        except Exception as exc:
+            logger.error("Payment link preparation failed for %s order %s: %s", phone, order_id, exc)
+            report["errors"].append(f"payment_link_prepare:{exc}")
+            save_message(
+                db, session_id, "system",
+                f"[payment_link_prepare_failed] {order_id}: {exc}",
+                meta={"order_id": order_id, "flow": "payment_link_prepare_failed", "error": str(exc)},
+            )
+
         payment_template_components = [{
             "type": "body",
             "parameters": [
@@ -516,15 +740,17 @@ async def notify_order_created(
                 {"type": "text", "text": amount or "—"},
             ],
         }]
-        payment_template_components_with_button = [
-            *payment_template_components,
-            {
-                "type": "button",
-                "sub_type": "url",
-                "index": "0",
-                "parameters": [{"type": "text", "text": payment_button_token}],
-            },
-        ]
+        payment_template_components_with_button = payment_template_components
+        if payment_button_value:
+            payment_template_components_with_button = [
+                *payment_template_components,
+                {
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": "0",
+                    "parameters": [{"type": "text", "text": payment_button_value}],
+                },
+            ]
 
         try:
             wa_resp = await send_template_message(
@@ -541,12 +767,13 @@ async def notify_order_created(
                     "order_id": order_id,
                     "flow": "payment_pending_template",
                     "payment": "pending",
-                    "payment_button_token": payment_button_token,
-                    "payment_button": True,
+                    "payment_url": pay_link,
+                    "payment_button_value": payment_button_value,
+                    "payment_button": bool(payment_button_value),
                 },
             )
             report["payment_template_sent"] = True
-            report["payment_template_button_sent"] = True
+            report["payment_template_button_sent"] = bool(payment_button_value)
         except Exception as exc:
             logger.error("payment_pending template with pay button failed for %s: %s", phone, exc)
             report["errors"].append(f"payment_pending_template_button:{exc}")
@@ -571,41 +798,13 @@ async def notify_order_created(
         if not send_followup_messages:
             return report
 
-        # Always send payment link + scannable QR for unpaid orders.
-        try:
-            payment_link = await create_payment_link_details(
-                order_id=order_id,
-                amount=parse_amount(amount),
-                name=customer_name or "Customer",
-                phone=phone,
-            )
-            pay_link = payment_link.get("short_url")
-            if not pay_link:
-                raise PaymentLinkError("No payment link returned")
-
+        # Follow-up session messages can fail outside the 24-hour WhatsApp
+        # service window, so the template button above is the primary pay path.
+        if pay_link:
             pay_msg = (
                 f"💳 Complete your payment to confirm shipment:\n{pay_link}\n\n"
                 "Once paid, we'll dispatch today. Reply here if you need any help! 🙏"
             )
-        except PaymentLinkError as exc:
-            logger.error("Razorpay payment link creation failed for %s order %s: %s", phone, order_id, exc)
-            report["errors"].append(f"payment_link_create:{exc}")
-            save_message(
-                db, session_id, "system",
-                f"[payment_link_create_failed] {order_id}: {exc}",
-                meta={"order_id": order_id, "flow": "payment_link_create_failed", "error": str(exc)},
-            )
-        except Exception as exc:
-            logger.error("Payment link preparation failed for %s order %s: %s", phone, order_id, exc)
-            report["errors"].append(f"payment_link_prepare:{exc}")
-            save_message(
-                db, session_id, "system",
-                f"[payment_link_prepare_failed] {order_id}: {exc}",
-                meta={"order_id": order_id, "flow": "payment_link_prepare_failed", "error": str(exc)},
-            )
-        else:
-            report["payment_url"] = pay_link
-            report["razorpay_payment_link_id"] = payment_link.get("id")
             try:
                 wa_resp = await send_text_message(phone, pay_msg, preview_url=True)
                 save_message(

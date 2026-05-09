@@ -3,17 +3,22 @@ import re
 import logging
 import base64
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
-RAZORPAY_KEY = os.getenv("RAZORPAY_API_KEY")
+RAZORPAY_KEY    = os.getenv("RAZORPAY_API_KEY")
 RAZORPAY_SECRET = os.getenv("RAZORPAY_API_SECRET")
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1")
 PAYMENT_QR_IMAGE_TEMPLATE = os.getenv(
     "PAYMENT_QR_IMAGE_TEMPLATE",
     "https://quickchart.io/qr?size=500&margin=2&text={data}",
 )
+PAYMENT_TEMPLATE_BUTTON_MODE = os.getenv(
+    "PAYMENT_TEMPLATE_BUTTON_MODE",
+    "order_token",
+).strip().lower()
+PAYMENT_TEMPLATE_BUTTON_URL_BASE = os.getenv("PAYMENT_TEMPLATE_BUTTON_URL_BASE", "").strip()
 
 logger = logging.getLogger(__name__)
 
@@ -67,17 +72,75 @@ def build_payment_qr_url(payment_url: str) -> str:
 
 
 def encode_payment_order_token(order_id: str) -> str:
+    """Base64url-encode an order ID for use in WhatsApp payment button URLs."""
     raw = str(order_id or "").encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def decode_payment_order_token(token: str) -> str:
+    """
+    Base64url-decode a token back to an order ID.
+
+    Raises PaymentLinkError if the token is not valid base64.
+    Note: valid base64 does NOT guarantee the result is a real order ID —
+    callers must validate the decoded value themselves (see _try_decode_token
+    in payment_webhook.py).
+    """
     value = str(token or "").strip()
     padding = "=" * (-len(value) % 4)
     try:
         return base64.urlsafe_b64decode((value + padding).encode("ascii")).decode("utf-8")
     except Exception as exc:
         raise PaymentLinkError("Invalid payment order token") from exc
+
+
+def build_payment_template_button_value(order_id: str, payment_url: str) -> str:
+    """
+    Return the dynamic URL button value for the WhatsApp payment template.
+
+    PAYMENT_TEMPLATE_BUTTON_MODE controls what is sent as {{1}}:
+
+    order_token   (default) — base64url-encoded order ID.
+                  Template button URL: https://mtmdash.com/pay/{{1}}
+                  The /pay/<token> route decodes it and redirects to Razorpay.
+
+    order_id      — raw order ID.
+                  Template button URL: https://mtmdash.com/pay/order/{{1}}
+
+    full_url      — complete Razorpay short URL.
+                  Template button URL must be a variable-only button.
+
+    razorpay_suffix — path segment after PAYMENT_TEMPLATE_BUTTON_URL_BASE.
+                  e.g. PAYMENT_TEMPLATE_BUTTON_URL_BASE=https://rzp.io/i
+                  Template button URL: https://rzp.io/i/{{1}}
+
+    razorpay_path — path after the host, e.g. 'i/abc123' for https://rzp.io/i/abc123.
+                  Template button URL: https://rzp.io/{{1}}
+    """
+    if PAYMENT_TEMPLATE_BUTTON_MODE in {"order_token", "encoded_order_token", "token"}:
+        return encode_payment_order_token(order_id)
+
+    if PAYMENT_TEMPLATE_BUTTON_MODE in {"order_id", "backend_redirect"}:
+        return quote(str(order_id or ""), safe="")
+
+    pay_url = str(payment_url or "").strip()
+    if not pay_url:
+        return str(order_id or "")
+
+    configured_base = PAYMENT_TEMPLATE_BUTTON_URL_BASE.rstrip("/")
+    if configured_base and pay_url.startswith(configured_base):
+        return pay_url[len(configured_base):].lstrip("/")
+
+    parsed = urlparse(pay_url)
+    path   = parsed.path.strip("/")
+
+    if PAYMENT_TEMPLATE_BUTTON_MODE in {"razorpay_suffix", "suffix"}:
+        return path.split("/")[-1] if path else pay_url
+
+    if PAYMENT_TEMPLATE_BUTTON_MODE in {"razorpay_path", "path"}:
+        return path or pay_url
+
+    return pay_url
 
 
 async def _razorpay_request(method: str, path: str, **kwargs) -> dict:
@@ -109,7 +172,7 @@ async def get_active_payment_link_by_reference(reference_id: str) -> Optional[di
     if not reference_id:
         return None
 
-    data = await _razorpay_request(
+    data  = await _razorpay_request(
         "GET",
         "/payment_links/",
         params={"reference_id": reference_id},
@@ -131,22 +194,26 @@ async def create_payment_link_details(order_id: str, amount: float, name: str, p
     try:
         existing = await get_active_payment_link_by_reference(order_id)
         if existing:
-            logger.info("Reusing active Razorpay payment link %s for order %s", existing.get("id"), order_id)
+            logger.info(
+                "Reusing active Razorpay payment link %s for order %s",
+                existing.get("id"),
+                order_id,
+            )
             return existing
     except PaymentLinkError as exc:
         logger.warning("Could not check existing Razorpay payment link for %s: %s", order_id, exc)
 
     payload = {
-        "amount": amount_paise,
-        "currency": "INR",
-        "description": f"Payment for Order {order_id}",
+        "amount":       amount_paise,
+        "currency":     "INR",
+        "description":  f"Payment for Order {order_id}",
         "reference_id": order_id,
         "customer": {
-            "name": name,
+            "name":    name,
             "contact": _normalise_razorpay_contact(phone),
         },
         "notify": {
-            "sms": True,
+            "sms":   True,
             "email": False,
         },
         "notes": {"order_id": order_id},
@@ -163,7 +230,11 @@ async def create_payment_link_details(order_id: str, amount: float, name: str, p
         raise
 
     if not data.get("short_url"):
-        logger.error("Razorpay payment link missing short_url for order %s: %s", order_id, data)
+        logger.error(
+            "Razorpay payment link missing short_url for order %s: %s",
+            order_id,
+            data,
+        )
         raise PaymentLinkError("Razorpay did not return short_url")
 
     return data
@@ -172,13 +243,13 @@ async def create_payment_link_details(order_id: str, amount: float, name: str, p
 async def create_payment_qr_details(order_id: str, amount: float, name: str = "") -> dict:
     amount_paise = _amount_to_paise(amount)
     payload = {
-        "type": "upi_qr",
-        "name": (f"{name or 'Customer'} {order_id}")[:64],
-        "usage": "single_use",
-        "fixed_amount": True,
+        "type":           "upi_qr",
+        "name":           (f"{name or 'Customer'} {order_id}")[:64],
+        "usage":          "single_use",
+        "fixed_amount":   True,
         "payment_amount": amount_paise,
-        "description": f"Payment for Order {order_id}",
-        "notes": {"order_id": order_id},
+        "description":    f"Payment for Order {order_id}",
+        "notes":          {"order_id": order_id},
     }
 
     data = await _razorpay_request("POST", "/payments/qr_codes", json=payload)

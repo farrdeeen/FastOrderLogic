@@ -653,6 +653,158 @@ export const FORM_CSS = `
   .f-products-scroll::-webkit-scrollbar { width: 3px; }
   .f-products-scroll::-webkit-scrollbar-thumb { background: var(--f-border2); border-radius: 2px; }
 
+  @media (max-width: 768px) {
+    .f-wrap {
+      height: auto;
+      min-height: 100dvh;
+      overflow: visible;
+      display: flex;
+      flex-direction: column;
+      background: var(--f-bg);
+    }
+    .f-header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      height: auto;
+      min-height: 48px;
+      padding: 10px 12px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .f-header-title {
+      font-size: 12px;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .f-header-actions {
+      width: 100%;
+      margin-left: 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .f-header-actions .f-btn {
+      width: 100%;
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+    .f-main {
+      overflow: visible;
+      padding: 10px;
+      gap: 10px;
+    }
+    .f-section {
+      padding: 10px;
+    }
+    .f-section-head {
+      align-items: flex-start;
+    }
+    .f-section-badge {
+      white-space: nowrap;
+    }
+    .f-rail {
+      max-height: none;
+      border-left: none;
+      border-top: 1px solid var(--f-border);
+      box-shadow: none;
+      overflow: visible;
+    }
+    .f-rail-body {
+      overflow: visible;
+      padding: 10px;
+    }
+    .f-rail-foot {
+      position: sticky;
+      bottom: 0;
+      z-index: 15;
+      padding: 10px;
+      box-shadow: 0 -8px 18px rgba(0,0,0,.08);
+    }
+    .f-products-scroll {
+      max-height: none;
+      overflow: visible;
+      padding-right: 0;
+    }
+    .f-product-row {
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 8px;
+      padding: 9px;
+    }
+    .f-product-name {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .f-product-actions {
+      grid-column: 1 / -1;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--f-border);
+      padding-top: 8px;
+    }
+    .f-product-price,
+    .f-product-price-original {
+      text-align: left;
+    }
+    .f-product-controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .f-product-controls .f-field {
+      min-width: 0;
+    }
+    .f-cust-card {
+      flex-wrap: wrap;
+    }
+    .f-modal-overlay {
+      align-items: stretch;
+      padding: 0;
+    }
+    .f-modal {
+      max-width: none;
+      max-height: 100dvh;
+      min-height: 100dvh;
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+    }
+    .f-modal-head,
+    .f-modal-body,
+    .f-modal-foot {
+      padding-left: 12px;
+      padding-right: 12px;
+    }
+    .f-modal-foot {
+      position: sticky;
+      bottom: 0;
+      flex-wrap: wrap;
+    }
+    .f-modal-foot .f-btn {
+      flex: 1 1 calc(50% - 8px);
+    }
+    .f-browse-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .f-toast {
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      max-width: none;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .f-header-actions,
+    .f-product-controls,
+    .f-browse-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
   /* Step badge for section sequencing */
   .f-step-badge {
     width: 18px; height: 18px;

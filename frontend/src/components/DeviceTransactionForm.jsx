@@ -3,10 +3,11 @@ import axiosInstance from "../api/axiosInstance";
 
 export default function DeviceTransactionForm() {
   const [vendor, setVendor] = useState("");
-  const [inOut, setInOut] = useState(1); // 1 = In, 0 = Out
+  const [inOut, setInOut] = useState(1); // 1 = In, 2 = Out, 3 = Return
   const [modelName, setModelName] = useState("");
   const [price, setPrice] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [orderId, setOrderId] = useState("");
   const [serials, setSerials] = useState([""]);
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
@@ -85,6 +86,15 @@ export default function DeviceTransactionForm() {
       return;
     }
 
+    if (inOut === 3 && !orderId.trim()) {
+      setToast({
+        type: "error",
+        msg: "Order ID is required when marking devices as returned.",
+      });
+      setTimeout(() => setToast(null), 3500);
+      return;
+    }
+
     setSubmitting(true);
     try {
       await axiosInstance.post("/device-transactions/bulk", {
@@ -93,6 +103,7 @@ export default function DeviceTransactionForm() {
         model_name: modelName.trim(),
         price: price ? parseFloat(price) : null,
         serials: validSerials,
+        order_id: orderId.trim() || null,
         remarks: remarks.trim() || null,
       });
       setToast({
@@ -105,6 +116,7 @@ export default function DeviceTransactionForm() {
       setModelName("");
       setPrice("");
       setRemarks("");
+      setOrderId("");
       setSerials([""]);
       setInOut(1);
     } catch (err) {
@@ -188,6 +200,15 @@ export default function DeviceTransactionForm() {
               >
                 ↑ Out
               </button>
+              <button
+                style={{
+                  ...styles.inOutBtn,
+                  ...(inOut === 3 ? styles.inOutBtnReturn : {}),
+                }}
+                onClick={() => setInOut(3)}
+              >
+                Return
+              </button>
             </div>
           </div>
 
@@ -225,6 +246,18 @@ export default function DeviceTransactionForm() {
               placeholder="Optional notes..."
               value={remarks}
               onChange={(e) => setRemarks(e.target.value)}
+            />
+          </div>
+
+          {/* Order ID */}
+          <div style={styles.field}>
+            <label style={styles.label}>Order ID</label>
+            <input
+              style={styles.input}
+              type="text"
+              placeholder={inOut === 3 ? "Required for returns" : "Optional"}
+              value={orderId}
+              onChange={(e) => setOrderId(e.target.value)}
             />
           </div>
         </div>
@@ -384,6 +417,11 @@ const styles = {
     background: "#FCEBEB",
     border: "0.5px solid #A32D2D",
     color: "#501313",
+  },
+  inOutBtnReturn: {
+    background: "#FEF3C7",
+    border: "0.5px solid #D97706",
+    color: "#78350F",
   },
   srHeader: {
     display: "flex",

@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 from datetime import datetime
+from urllib.parse import unquote
 from sqlalchemy import text
 from database import SessionLocal
 from services.chat_service import normalize_phone
@@ -18,6 +19,7 @@ from services.whatsapp_service import send_order_confirmation, send_text_message
 router = APIRouter()
 
 SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
+RAZORPAY_SHORT_URL_BASE = os.getenv("RAZORPAY_SHORT_URL_BASE", "https://rzp.io/i").rstrip("/")
 logger = logging.getLogger(__name__)
 
 
@@ -149,13 +151,7 @@ async def razorpay_webhook(request: Request):
     return {"status": "ok"}
 
 
-@router.get("/pay/{order_token}")
-async def redirect_to_payment(order_token: str):
-    try:
-        order_id = decode_payment_order_token(order_token)
-    except PaymentLinkError:
-        raise HTTPException(status_code=400, detail="Invalid payment link")
-
+async def _redirect_to_razorpay_for_order(order_id: str):
     db = SessionLocal()
     try:
         row = db.execute(
@@ -198,3 +194,72 @@ async def redirect_to_payment(order_token: str):
         raise HTTPException(status_code=502, detail="Razorpay did not return a payment URL")
 
     return RedirectResponse(pay_url, status_code=302)
+
+
+def _resolve_order_reference(value: str) -> str:
+    reference = unquote(str(value or "").strip())
+    if reference.startswith("{{1}}"):
+        reference = reference[len("{{1}}"):]
+    reference = reference.strip()
+    if not reference:
+        raise HTTPException(status_code=400, detail="Invalid payment link")
+    try:
+        return decode_payment_order_token(reference)
+    except PaymentLinkError:
+        return reference
+
+
+def _strip_template_placeholder(value: str) -> str:
+    reference = unquote(str(value or "").strip())
+    if reference.startswith("{{1}}"):
+        reference = reference[len("{{1}}"):]
+    return reference.strip()
+
+
+def _looks_like_order_reference(value: str) -> bool:
+    upper = str(value or "").upper()
+    return (
+        "#" in upper
+        or upper.startswith(("WIX", "ORD", "AI-"))
+        or upper.isdigit()
+    )
+
+
+def _redirect_razorpay_short_code(short_code: str):
+    clean = str(short_code or "").strip().strip("/")
+    if not clean:
+        raise HTTPException(status_code=400, detail="Invalid payment link")
+    if clean.startswith(("http://", "https://")):
+        return RedirectResponse(clean, status_code=302)
+    return RedirectResponse(f"{RAZORPAY_SHORT_URL_BASE}/{clean}", status_code=302)
+
+
+@router.get("/pay/order/{order_id:path}")
+async def redirect_order_id_to_payment(order_id: str):
+    return await _redirect_to_razorpay_for_order(order_id)
+
+
+@router.head("/pay/order/{order_id:path}")
+async def head_redirect_order_id_to_payment(order_id: str):
+    return await _redirect_to_razorpay_for_order(order_id)
+
+
+@router.get("/pay/{order_token:path}")
+async def redirect_to_payment(order_token: str):
+    decoded = _strip_template_placeholder(order_token)
+    if decoded.startswith(("https://rzp.io/", "https://razorpay.com/")):
+        return RedirectResponse(decoded, status_code=302)
+
+    if decoded and not _looks_like_order_reference(decoded):
+        try:
+            decode_payment_order_token(decoded)
+        except PaymentLinkError:
+            return _redirect_razorpay_short_code(decoded)
+
+    order_id = _resolve_order_reference(order_token)
+    return await _redirect_to_razorpay_for_order(order_id)
+
+
+@router.head("/pay/{order_token:path}")
+async def head_redirect_to_payment(order_token: str):
+    return await redirect_to_payment(order_token)

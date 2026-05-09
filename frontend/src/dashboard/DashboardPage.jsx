@@ -4,6 +4,7 @@ import {
   fetchDashboardStats,
   fetchAiFailures,
   fetchRecentConversations,
+  fetchInvoicePending,
   fetchTrainingDocInfo,
   uploadTrainingDoc,
   deleteTrainingDoc,
@@ -116,29 +117,195 @@ function Badge({ label, variant = "default" }) {
   );
 }
 
+function formatAmount(value) {
+  const amount = Number(value || 0);
+  return amount.toLocaleString("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  });
+}
+
+function useIsMobile(maxWidth = 768) {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window === "undefined"
+      ? false
+      : window.matchMedia(`(max-width: ${maxWidth}px)`).matches,
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const query = window.matchMedia(`(max-width: ${maxWidth}px)`);
+    const onChange = (event) => setIsMobile(event.matches);
+    setIsMobile(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, [maxWidth]);
+
+  return isMobile;
+}
+
+function InvoicePendingSection({ items, loading, isMobile = false }) {
+  const customers = items || [];
+  const pendingOrders = customers.reduce(
+    (sum, customer) => sum + Number(customer.order_count || 0),
+    0,
+  );
+
+  return (
+    <div style={isMobile ? { ...styles.card, ...styles.cardMobile } : styles.card}>
+      <SectionHeader
+        title="Invoice Pending"
+        action={
+          !loading && customers.length > 0 ? (
+            <span style={styles.sectionMeta}>
+              {customers.length} customers · {pendingOrders} orders
+            </span>
+          ) : null
+        }
+      />
+      {loading ? (
+        <div style={styles.emptyState}>Loading…</div>
+      ) : customers.length === 0 ? (
+        <div style={styles.emptyState}>
+          No customers with multiple pending-invoice orders.
+        </div>
+      ) : (
+        <div style={styles.invoiceList}>
+          {customers.map((customer) => {
+            const devices = customer.devices || [];
+            return (
+              <div key={customer.customer_key} style={styles.invoiceRow}>
+                <div style={styles.invoiceHeaderRow}>
+                  <div style={styles.invoiceCustomer}>
+                    <strong
+                      style={
+                        isMobile
+                          ? { ...styles.invoiceName, ...styles.invoiceNameMobile }
+                          : styles.invoiceName
+                      }
+                    >
+                      {customer.customer_name || "Unknown Customer"}
+                    </strong>
+                    <div style={styles.invoiceSub}>
+                      {customer.customer_mobile || "No mobile"} ·{" "}
+                      {customer.order_count} orders
+                    </div>
+                  </div>
+
+                  <div
+                    style={
+                      isMobile
+                        ? { ...styles.invoiceTotals, ...styles.invoiceTotalsMobile }
+                        : styles.invoiceTotals
+                    }
+                  >
+                    <span style={styles.totalQtyLabel}>Invoice pending</span>
+                    <strong style={styles.totalQtyValue}>
+                      {customer.total_quantity} items
+                    </strong>
+                    <span style={styles.totalAmount}>
+                      {formatAmount(customer.total_amount)}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={styles.orderPills}>
+                  {(customer.order_ids || []).map((orderId) => (
+                    <span key={orderId} style={styles.orderPill}>
+                      {orderId}
+                    </span>
+                  ))}
+                </div>
+
+                {devices.length === 0 ? (
+                  <div style={styles.emptyInline}>No item details found</div>
+                ) : (
+                  <div style={styles.deviceBreakdown}>
+                    <div
+                      style={
+                        isMobile
+                          ? {
+                              ...styles.deviceBreakdownHeader,
+                              ...styles.deviceBreakdownHeaderMobile,
+                            }
+                          : styles.deviceBreakdownHeader
+                      }
+                    >
+                      <span>Qty</span>
+                      <span>Item / SKU</span>
+                      <span>Orders</span>
+                    </div>
+                    {devices.map((device) => (
+                      <div
+                        key={`${device.sku_id || "sku"}-${device.product_name}`}
+                        style={
+                          isMobile
+                            ? { ...styles.deviceLine, ...styles.deviceLineMobile }
+                            : styles.deviceLine
+                        }
+                      >
+                        <strong style={styles.deviceQty}>
+                          {device.quantity}x
+                        </strong>
+                        <div style={styles.deviceNameWrap}>
+                          <span style={styles.deviceName}>
+                            {device.product_name}
+                          </span>
+                          {device.sku_id ? (
+                            <span style={styles.deviceSku}>{device.sku_id}</span>
+                          ) : null}
+                        </div>
+                        <span
+                          style={
+                            isMobile
+                              ? { ...styles.deviceOrders, ...styles.deviceOrdersMobile }
+                              : styles.deviceOrders
+                          }
+                        >
+                          {(device.order_ids || []).join(", ") ||
+                            `${device.order_count || 0} orders`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 export default function DashboardPage() {
+  const isMobile = useIsMobile();
   const [stats, setStats] = useState(null);
   const [failures, setFailures] = useState([]);
   const [recent, setRecent] = useState([]);
+  const [invoicePending, setInvoicePending] = useState([]);
   const [docInfo, setDocInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [docUploading, setDocUploading] = useState(false);
   const [docMsg, setDocMsg] = useState(null);
-  const [activeTab, setActiveTab] = useState("overview"); // overview | failures | training
+  const [activeTab, setActiveTab] = useState("overview"); // overview | failures | invoice_pending | training
   const fileRef = useRef(null);
 
   const load = useCallback(async () => {
     try {
-      const [s, f, r, d] = await Promise.all([
+      const [s, f, r, i, d] = await Promise.all([
         fetchDashboardStats(),
         fetchAiFailures(30),
         fetchRecentConversations(8),
+        fetchInvoicePending(50),
         fetchTrainingDocInfo(),
       ]);
       setStats(s);
       setFailures(f);
       setRecent(r);
+      setInvoicePending(i);
       setDocInfo(d);
     } catch (err) {
       console.error("Dashboard load error:", err);
@@ -192,11 +359,21 @@ export default function DashboardPage() {
         minute: "2-digit",
       })
     : null;
+  const pageStyle = isMobile ? { ...styles.page, ...styles.pageMobile } : styles.page;
+  const headerStyle = isMobile
+    ? { ...styles.header, ...styles.headerMobile }
+    : styles.header;
+  const tabsStyle = isMobile ? { ...styles.tabs, ...styles.tabsMobile } : styles.tabs;
+  const statGridStyle = isMobile
+    ? { ...styles.statGrid, ...styles.statGridMobile }
+    : styles.statGrid;
+  const cardStyle = isMobile ? { ...styles.card, ...styles.cardMobile } : styles.card;
+  const tableStyle = isMobile ? { ...styles.table, ...styles.tableMobile } : styles.table;
 
   return (
-    <div style={styles.page}>
+    <div style={pageStyle}>
       {/* ── Header ── */}
-      <div style={styles.header}>
+      <div style={headerStyle}>
         <div>
           <div style={styles.headerTitle}>Agent Dashboard</div>
           <div style={styles.headerSub}>
@@ -214,12 +391,16 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Tabs ── */}
-      <div style={styles.tabs}>
+      <div style={tabsStyle}>
         {[
           { id: "overview", label: "Overview" },
           {
             id: "failures",
             label: `AI Failures${failures.length ? ` (${failures.length})` : ""}`,
+          },
+          {
+            id: "invoice_pending",
+            label: `Invoice Pending${invoicePending.length ? ` (${invoicePending.length})` : ""}`,
           },
           { id: "training", label: "Training Docs" },
         ].map((tab) => (
@@ -240,7 +421,7 @@ export default function DashboardPage() {
       {activeTab === "overview" && (
         <div>
           {/* KPI row */}
-          <div style={styles.statGrid}>
+          <div style={statGridStyle}>
             <StatCard
               label="Leads Received Today"
               value={s.leads_today}
@@ -297,86 +478,104 @@ export default function DashboardPage() {
               icon="🤖"
               loading={loading}
             />
+            <StatCard
+              label="Offline Channel"
+              value={s.channel_offline_today?.toLocaleString()}
+              sub={`${(s.channel_offline_total ?? 0).toLocaleString()} total offline orders`}
+              accent="#2563eb"
+              icon="🏬"
+              loading={loading}
+            />
+            <StatCard
+              label="Wix Channel"
+              value={s.channel_wix_today?.toLocaleString()}
+              sub={`${(s.channel_wix_total ?? 0).toLocaleString()} total Wix orders`}
+              accent="#0891b2"
+              icon="🌐"
+              loading={loading}
+            />
           </div>
 
           {/* Recent conversations */}
-          <div style={styles.card}>
+          <div style={cardStyle}>
             <SectionHeader title="Recent Conversations" />
             {loading ? (
               <div style={styles.emptyState}>Loading…</div>
             ) : recent.length === 0 ? (
               <div style={styles.emptyState}>No conversations yet.</div>
             ) : (
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    {[
-                      "Customer",
-                      "Phone",
-                      "Status",
-                      "Messages",
-                      "Last Message",
-                      "Started",
-                    ].map((h) => (
-                      <th key={h} style={styles.th}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {recent.map((conv) => (
-                    <tr key={conv.id} style={styles.tr}>
-                      <td style={styles.td}>
-                        <strong style={{ fontSize: 13 }}>
-                          {conv.wa_contact_name || "—"}
-                        </strong>
-                      </td>
-                      <td style={styles.tdMono}>{conv.phone_number}</td>
-                      <td style={styles.td}>
-                        <Badge
-                          label={conv.status || "active"}
-                          variant={
-                            conv.status === "resolved"
-                              ? "success"
-                              : conv.status === "active"
-                                ? "info"
-                                : "warning"
-                          }
-                        />
-                      </td>
-                      <td style={styles.td}>
-                        <span style={styles.msgCount}>
-                          {conv.user_msgs}↑ {conv.ai_msgs}↓
-                        </span>
-                      </td>
-                      <td
-                        style={{
-                          ...styles.td,
-                          maxWidth: 220,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          fontSize: 12,
-                          color: "#64748b",
-                        }}
-                      >
-                        {conv.last_message || "—"}
-                      </td>
-                      <td
-                        style={{ ...styles.td, fontSize: 11, color: "#94a3b8" }}
-                      >
-                        {conv.created_at
-                          ? new Date(conv.created_at).toLocaleDateString([], {
-                              day: "numeric",
-                              month: "short",
-                            })
-                          : "—"}
-                      </td>
+              <div style={styles.tableScroll}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      {[
+                        "Customer",
+                        "Phone",
+                        "Status",
+                        "Messages",
+                        "Last Message",
+                        "Started",
+                      ].map((h) => (
+                        <th key={h} style={styles.th}>
+                          {h}
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {recent.map((conv) => (
+                      <tr key={conv.id} style={styles.tr}>
+                        <td style={styles.td}>
+                          <strong style={{ fontSize: 13 }}>
+                            {conv.wa_contact_name || "—"}
+                          </strong>
+                        </td>
+                        <td style={styles.tdMono}>{conv.phone_number}</td>
+                        <td style={styles.td}>
+                          <Badge
+                            label={conv.status || "active"}
+                            variant={
+                              conv.status === "resolved"
+                                ? "success"
+                                : conv.status === "active"
+                                  ? "info"
+                                  : "warning"
+                            }
+                          />
+                        </td>
+                        <td style={styles.td}>
+                          <span style={styles.msgCount}>
+                            {conv.user_msgs}↑ {conv.ai_msgs}↓
+                          </span>
+                        </td>
+                        <td
+                          style={{
+                            ...styles.td,
+                            maxWidth: 220,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            fontSize: 12,
+                            color: "#64748b",
+                          }}
+                        >
+                          {conv.last_message || "—"}
+                        </td>
+                        <td
+                          style={{ ...styles.td, fontSize: 11, color: "#94a3b8" }}
+                        >
+                          {conv.created_at
+                            ? new Date(conv.created_at).toLocaleDateString([], {
+                                day: "numeric",
+                                month: "short",
+                              })
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>
@@ -384,7 +583,7 @@ export default function DashboardPage() {
 
       {/* ══════════ FAILURES TAB ══════════ */}
       {activeTab === "failures" && (
-        <div style={styles.card}>
+        <div style={cardStyle}>
           <SectionHeader
             title="AI Failure Log"
             action={
@@ -400,63 +599,76 @@ export default function DashboardPage() {
               ✅ No AI failures detected
             </div>
           ) : (
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  {["Time", "Customer", "Phone", "Error Message"].map((h) => (
-                    <th key={h} style={styles.th}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {failures.map((f) => (
-                  <tr
-                    key={f.id}
-                    style={{ ...styles.tr, background: "#fff5f5" }}
-                  >
-                    <td
-                      style={{
-                        ...styles.td,
-                        fontSize: 11,
-                        color: "#94a3b8",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {f.timestamp
-                        ? new Date(f.timestamp).toLocaleString([], {
-                            day: "numeric",
-                            month: "short",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })
-                        : "—"}
-                    </td>
-                    <td style={styles.td}>{f.wa_contact_name || "Unknown"}</td>
-                    <td style={styles.tdMono}>{f.phone_number}</td>
-                    <td
-                      style={{
-                        ...styles.td,
-                        color: "#dc2626",
-                        fontSize: 12,
-                        maxWidth: 360,
-                      }}
-                    >
-                      {f.message}
-                    </td>
+            <div style={styles.tableScroll}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    {["Time", "Customer", "Phone", "Exact Response"].map((h) => (
+                      <th key={h} style={styles.th}>
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {failures.map((f) => (
+                    <tr
+                      key={f.id}
+                      style={{ ...styles.tr, background: "#fff5f5" }}
+                    >
+                      <td
+                        style={{
+                          ...styles.td,
+                          fontSize: 11,
+                          color: "#94a3b8",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {f.timestamp
+                          ? new Date(f.timestamp).toLocaleString([], {
+                              day: "numeric",
+                              month: "short",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : "—"}
+                      </td>
+                      <td style={styles.td}>{f.wa_contact_name || "Unknown"}</td>
+                      <td style={styles.tdMono}>{f.phone_number}</td>
+                      <td
+                        style={{
+                          ...styles.td,
+                          color: "#dc2626",
+                          fontSize: 12,
+                          maxWidth: 520,
+                        }}
+                      >
+                        <pre style={styles.errorText}>
+                          {f.error_response || f.error_detail || f.message}
+                        </pre>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
+      )}
+
+      {/* ══════════ INVOICE PENDING TAB ══════════ */}
+      {activeTab === "invoice_pending" && (
+        <InvoicePendingSection
+          items={invoicePending}
+          loading={loading}
+          isMobile={isMobile}
+        />
       )}
 
       {/* ══════════ TRAINING TAB ══════════ */}
       {activeTab === "training" && (
         <div>
-          <div style={styles.card}>
+          <div style={cardStyle}>
             <SectionHeader title="Training Document" />
 
             <div style={styles.trainingInfo}>
@@ -559,7 +771,7 @@ export default function DashboardPage() {
           </div>
 
           {/* How it works */}
-          <div style={styles.card}>
+          <div style={cardStyle}>
             <SectionHeader title="How Training Works" />
             <div style={styles.trainingHow}>
               {[
@@ -613,6 +825,11 @@ const styles = {
     fontFamily: "'IBM Plex Sans', sans-serif",
     maxWidth: 1200,
     margin: "0 auto",
+    width: "100%",
+    minWidth: 0,
+  },
+  pageMobile: {
+    maxWidth: "none",
   },
   header: {
     display: "flex",
@@ -623,6 +840,13 @@ const styles = {
     borderRadius: 12,
     padding: "20px 24px",
     marginBottom: 20,
+  },
+  headerMobile: {
+    flexDirection: "column",
+    gap: 14,
+    padding: "16px",
+    borderRadius: 10,
+    marginBottom: 14,
   },
   headerTitle: {
     fontSize: 20,
@@ -637,6 +861,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: 4,
+    flexWrap: "wrap",
   },
   refreshBtn: {
     fontSize: 12,
@@ -656,6 +881,12 @@ const styles = {
     borderBottom: "1.5px solid #e2e8f0",
     paddingBottom: 0,
   },
+  tabsMobile: {
+    overflowX: "auto",
+    WebkitOverflowScrolling: "touch",
+    paddingBottom: 2,
+    marginBottom: 14,
+  },
   tab: {
     fontSize: 13,
     fontWeight: 500,
@@ -669,6 +900,7 @@ const styles = {
     fontFamily: "inherit",
     borderRadius: "6px 6px 0 0",
     transition: "color 0.15s",
+    whiteSpace: "nowrap",
   },
   tabActive: {
     color: "#0f172a",
@@ -680,6 +912,11 @@ const styles = {
     gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
     gap: 14,
     marginBottom: 20,
+  },
+  statGridMobile: {
+    gridTemplateColumns: "1fr",
+    gap: 10,
+    marginBottom: 14,
   },
   statCard: {
     background: "#ffffff",
@@ -732,11 +969,19 @@ const styles = {
     padding: "20px 24px",
     marginBottom: 16,
   },
+  cardMobile: {
+    padding: "14px 12px",
+    borderRadius: 10,
+    marginBottom: 12,
+    overflow: "hidden",
+  },
   sectionHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 16,
+    gap: 10,
+    flexWrap: "wrap",
   },
   sectionTitle: {
     fontSize: 14,
@@ -744,10 +989,188 @@ const styles = {
     color: "#0f172a",
     letterSpacing: "-0.1px",
   },
+  sectionMeta: {
+    fontSize: 12,
+    color: "#64748b",
+    fontWeight: 500,
+  },
+  invoiceList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  invoiceRow: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+    border: "1px solid #e2e8f0",
+    borderRadius: 10,
+    padding: "14px 16px",
+    background: "#ffffff",
+  },
+  invoiceHeaderRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 14,
+    flexWrap: "wrap",
+  },
+  invoiceCustomer: {
+    minWidth: 0,
+    flex: "1 1 260px",
+  },
+  invoiceName: {
+    display: "block",
+    fontSize: 14,
+    color: "#0f172a",
+    marginBottom: 3,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  invoiceNameMobile: {
+    whiteSpace: "normal",
+    overflowWrap: "anywhere",
+  },
+  invoiceSub: {
+    fontSize: 12,
+    color: "#64748b",
+  },
+  orderPills: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  orderPill: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    fontWeight: 600,
+    color: "#334155",
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 6,
+    padding: "3px 7px",
+  },
+  invoiceTotals: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: 2,
+    minWidth: 130,
+  },
+  invoiceTotalsMobile: {
+    alignItems: "flex-start",
+    width: "100%",
+    minWidth: 0,
+  },
+  totalQtyLabel: {
+    fontSize: 11,
+    color: "#64748b",
+    fontWeight: 600,
+    textTransform: "uppercase",
+  },
+  totalQtyValue: {
+    fontSize: 22,
+    color: "#0f172a",
+    fontWeight: 800,
+    lineHeight: 1.1,
+  },
+  totalAmount: {
+    fontSize: 12,
+    color: "#64748b",
+    fontWeight: 600,
+  },
+  deviceBreakdown: {
+    border: "1px solid #e2e8f0",
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  deviceBreakdownHeader: {
+    display: "grid",
+    gridTemplateColumns: "48px minmax(0, 1fr) minmax(92px, 0.65fr)",
+    gap: 10,
+    padding: "7px 10px",
+    background: "#f8fafc",
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase",
+  },
+  deviceBreakdownHeaderMobile: {
+    display: "none",
+  },
+  deviceLine: {
+    display: "grid",
+    gridTemplateColumns: "48px minmax(0, 1fr) minmax(92px, 0.65fr)",
+    gap: 10,
+    alignItems: "center",
+    padding: "9px 10px",
+    borderTop: "1px solid #f1f5f9",
+  },
+  deviceLineMobile: {
+    gridTemplateColumns: "42px minmax(0, 1fr)",
+    alignItems: "start",
+    gap: 8,
+  },
+  deviceQty: {
+    fontSize: 14,
+    color: "#0f172a",
+  },
+  deviceNameWrap: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    minWidth: 0,
+  },
+  deviceName: {
+    fontSize: 13,
+    color: "#1e293b",
+    fontWeight: 600,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  deviceSku: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    color: "#64748b",
+  },
+  deviceOrders: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 11,
+    color: "#475569",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  deviceOrdersMobile: {
+    gridColumn: "1 / -1",
+    whiteSpace: "normal",
+    overflow: "visible",
+    textOverflow: "clip",
+    wordBreak: "break-word",
+    paddingLeft: 50,
+  },
+  emptyInline: {
+    fontSize: 12,
+    color: "#94a3b8",
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 8,
+    padding: "10px 12px",
+  },
   table: {
     width: "100%",
     borderCollapse: "collapse",
     fontSize: 13,
+  },
+  tableScroll: {
+    width: "100%",
+    overflowX: "auto",
+    WebkitOverflowScrolling: "touch",
+  },
+  tableMobile: {
+    minWidth: 680,
   },
   th: {
     textAlign: "left",
@@ -792,6 +1215,15 @@ const styles = {
     padding: "2px 7px",
     borderRadius: 6,
     border: "1px solid #e2e8f0",
+  },
+  errorText: {
+    margin: 0,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 11,
+    lineHeight: 1.5,
+    color: "#b91c1c",
   },
   emptyState: {
     textAlign: "center",

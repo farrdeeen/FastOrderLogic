@@ -126,6 +126,8 @@ async def _process_inbound_media(media: dict):
             phone=media["phone"],
             media_url=media["media_url"],
             media_type=media["media_type"],
+            media_id=media.get("media_id", ""),
+            filename=media.get("filename", ""),
             contact_name=media.get("contact_name", ""),
             wa_message_id=media["wa_message_id"],
         )
@@ -185,6 +187,12 @@ async def _process_status_updates(statuses: list[dict]):
 
             if result.rowcount:
                 logger.info("WA status update %s for message %s", status_name, message_id)
+                if row:
+                    try:
+                        from routes.chat import notify_chat_change
+                        notify_chat_change(row.session_id, "status")
+                    except Exception:
+                        logger.debug("Chat websocket notify failed after WA status update", exc_info=True)
             else:
                 logger.debug("WA status update for unknown message %s: %s", message_id, status_name)
 
@@ -219,7 +227,8 @@ async def _process_status_updates(statuses: list[dict]):
 def extract_incoming_media(webhook_body: dict) -> Optional[dict]:
     """
     Extract media (image/document) from a WhatsApp webhook payload.
-    Returns dict with phone, wa_message_id, media_url, media_type, contact_name
+    Returns dict with phone, wa_message_id, media_id/media_url, media_type,
+    filename, contact_name
     or None if not a media message.
     """
     try:
@@ -232,14 +241,18 @@ def extract_incoming_media(webhook_body: dict) -> Optional[dict]:
         if msg_type not in ("image", "document", "audio"):
             return None
         media_obj  = msg.get(msg_type) or {}
+        media_id   = media_obj.get("id") or ""
         media_url  = media_obj.get("url") or media_obj.get("link") or ""
         media_mime = media_obj.get("mime_type") or msg_type
+        filename   = media_obj.get("filename") or f"whatsapp-{msg_type}"
         contacts   = value.get("contacts", [{}])
         return {
             "phone":        msg["from"],
             "wa_message_id": msg["id"],
+            "media_id":     media_id,
             "media_url":    media_url,
             "media_type":   media_mime,
+            "filename":     filename,
             "contact_name": contacts[0].get("profile", {}).get("name", ""),
             "timestamp":    int(msg.get("timestamp", 0)),
         }

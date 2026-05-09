@@ -33,7 +33,9 @@ class HumanTogglePayload(BaseModel):
 @router.post("/toggle-human")
 def toggle_human_mode(payload: HumanTogglePayload, db: Session = Depends(get_db)):
     """Switch a chat session between AI mode and Human mode."""
-    from services.chat_service import normalize_phone
+    from services.chat_service import ensure_chat_session_columns, normalize_phone
+
+    ensure_chat_session_columns(db)
 
     if payload.session_id:
         row = db.execute(
@@ -58,16 +60,6 @@ def toggle_human_mode(payload: HumanTogglePayload, db: Session = Depends(get_db)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Add column if it doesn't exist yet (safe — idempotent)
-    try:
-        db.execute(text(
-            "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS "
-            "is_human BOOLEAN NOT NULL DEFAULT FALSE"
-        ))
-        db.commit()
-    except Exception:
-        pass  # Column already exists
-
     db.execute(
         text("UPDATE chat_sessions SET is_human = :val, updated_at = NOW() WHERE id = :sid"),
         {"val": payload.is_human, "sid": row.id},
@@ -86,10 +78,15 @@ def toggle_human_mode(payload: HumanTogglePayload, db: Session = Depends(get_db)
 
 @router.get("/session/{phone}")
 def get_session_info(phone: str, db: Session = Depends(get_db)):
-    from services.chat_service import normalize_phone
+    from services.chat_service import ensure_chat_session_columns, normalize_phone
+    ensure_chat_session_columns(db)
     phone = normalize_phone(phone)
     row = db.execute(
-        text("SELECT id, phone_number, status, is_human, last_message, last_message_at FROM chat_sessions WHERE phone_number = :ph"),
+        text("""
+            SELECT id, phone_number, status, flag, is_human, preferred_language, last_message, last_message_at
+            FROM chat_sessions
+            WHERE phone_number = :ph
+        """),
         {"ph": phone},
     ).fetchone()
     if not row:

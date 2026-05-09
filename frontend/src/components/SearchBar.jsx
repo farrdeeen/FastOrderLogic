@@ -104,6 +104,48 @@ const STYLES = `
     opacity: 0.5;
     cursor: pointer;
   }
+
+  @media (max-width: 640px) {
+    .sb-toolbar {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .sb-search-wrap {
+      grid-column: 1 / -1;
+      flex: none;
+      min-width: 0;
+      max-width: none;
+      width: 100%;
+    }
+    .sb-filter-btn,
+    .sb-date-group {
+      width: 100%;
+      min-width: 0;
+      justify-content: center;
+      padding-left: 8px;
+      padding-right: 8px;
+      font-size: 12px;
+    }
+    select.sb-filter-btn {
+      text-align: center;
+      text-align-last: center;
+    }
+    .sb-date-group {
+      justify-content: space-between;
+    }
+    .sb-date-input {
+      width: min(100%, 118px);
+      font-size: 16px;
+    }
+  }
+
+  @media (max-width: 380px) {
+    .sb-toolbar {
+      grid-template-columns: 1fr;
+    }
+  }
 `;
 
 function injectSearchBarStyles() {

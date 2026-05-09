@@ -21,6 +21,7 @@ Required .env keys  (load with python-dotenv):
 import os
 import json
 import httpx
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -32,6 +33,8 @@ from sqlalchemy import text
 
 from database import SessionLocal
 from models import Order
+
+logger = logging.getLogger(__name__)
 
 # ─── env ──────────────────────────────────────────────────────────────────────
 DELHIVERY_TOKEN       = os.getenv("DELHIVERY_TOKEN", "")
@@ -320,6 +323,15 @@ async def push_order_to_delhivery(
     order.updated_at      = datetime.now()
     db.commit()
 
+    dispatch_notify = None
+    try:
+        from services.dispatch_slip_service import send_order_dispatch_update
+
+        dispatch_notify = await send_order_dispatch_update(db, payload.order_id)
+    except Exception as exc:
+        logger.exception("Failed to send dispatch chat update for %s", payload.order_id)
+        dispatch_notify = {"success": False, "error": str(exc)}
+
     return {
         "success":    True,
         "waybill":    waybill,
@@ -327,6 +339,7 @@ async def push_order_to_delhivery(
         "status":     pkg.get("status", ""),
         "remark":     pkg.get("remark", ""),
         "sort_code":  pkg.get("sort_code", ""),
+        "dispatch_notify": dispatch_notify,
         "raw":        result,
     }
 

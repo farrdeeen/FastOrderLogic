@@ -4,6 +4,16 @@
 
 import api from "../api/axiosInstance";
 
+export function getChatWsUrl() {
+  const base = api.defaults.baseURL || window.location.origin;
+  const url = new URL(base, window.location.origin);
+  const rootPath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${rootPath}/chat/ws`;
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.search = "";
+  return url.toString();
+}
+
 // GET /chat/conversations
 export async function fetchConversations({
   search = "",
@@ -38,6 +48,26 @@ export async function sendChatMessage(sessionId, message) {
   const res = await api.post("/chat/send", {
     session_id: sessionId,
     message,
+  });
+  return res.data;
+}
+
+// POST /chat/send-media  (operator image/file upload)
+export async function uploadChatMedia(sessionId, file, caption = "") {
+  const form = new FormData();
+  form.append("session_id", String(sessionId));
+  form.append("caption", caption || "");
+  form.append("file", file);
+
+  const res = await api.post("/chat/send-media", form);
+  return res.data;
+}
+
+// POST /chat/send-dispatch-slip  (tracking link + dispatch PDF)
+export async function sendDispatchSlip({ sessionId, orderId }) {
+  const res = await api.post("/chat/send-dispatch-slip", {
+    session_id: sessionId,
+    order_id: orderId,
   });
   return res.data;
 }

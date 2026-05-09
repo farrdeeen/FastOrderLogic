@@ -21,17 +21,70 @@ import {
   Box,
   Typography,
   Button,
+  IconButton,
   Fade,
   Paper,
 } from "@mui/material";
+import { Menu as MenuIcon } from "@mui/icons-material";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 const PAGE_SIZE = 500;
 const PARALLEL_PAGES = 3;
 
+function PaymentRedirectPage() {
+  const token = decodeURIComponent(
+    window.location.pathname.replace(/^\/pay\/?/, ""),
+  ).replace(/^\{\{1\}\}/, "");
+  const target = `${API_URL.replace(/\/$/, "")}/pay/${token}${window.location.search || ""}`;
+
+  useEffect(() => {
+    window.location.replace(target);
+  }, [target]);
+
+  return (
+    <Box
+      sx={{
+        minHeight: "100dvh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#f7f6f3",
+        fontFamily: "IBM Plex Sans, sans-serif",
+        p: 2,
+      }}
+    >
+      <Paper
+        elevation={0}
+        sx={{
+          width: "100%",
+          maxWidth: 360,
+          p: 3,
+          borderRadius: 2,
+          border: "1px solid #E0E0E0",
+          textAlign: "center",
+        }}
+      >
+        <Typography sx={{ fontSize: 18, fontWeight: 700, mb: 1 }}>
+          Opening Secure Payment
+        </Typography>
+        <Typography sx={{ fontSize: 14, color: "#616161", mb: 2 }}>
+          Please wait while we redirect you to Razorpay.
+        </Typography>
+        <Button variant="contained" href={target}>
+          Continue to payment
+        </Button>
+      </Paper>
+    </Box>
+  );
+}
+
 export default function App() {
   const { isLoaded, isSignedIn } = useAuth();
+
+  if (window.location.pathname.startsWith("/pay")) {
+    return <PaymentRedirectPage />;
+  }
 
   // ── Orders state ──────────────────────────────────────────────────────────
   const [orders, setOrders] = useState([]);
@@ -307,7 +360,6 @@ export default function App() {
   };
 
   const handleNavigate = (section) => {
-    if (section === "logout") return alert("Logging out…");
     setActivePage(section);
     setMobileNavOpen(false);
   };
@@ -349,7 +401,7 @@ export default function App() {
             minHeight: "100dvh",
             width: "100%",
             maxWidth: "100vw",
-            overflow: activePage === "chat" ? "hidden" : "visible",
+            overflow: activePage === "chat" ? "hidden" : "hidden auto",
           }}
         >
           <NavDrawer
@@ -362,7 +414,7 @@ export default function App() {
             component="main"
             sx={{
               flexGrow: 1,
-              p: activePage === "chat" ? 0 : { xs: 2, sm: 4 },
+              p: activePage === "chat" ? 0 : { xs: 1, sm: 3, md: 4 },
               background: "#f7f6f3",
               boxSizing: "border-box",
               display: "flex",
@@ -372,7 +424,7 @@ export default function App() {
               minWidth: 0,
               width: "100%",
               maxWidth: "100vw",
-              overflow: activePage === "chat" ? "hidden" : "visible",
+              overflow: activePage === "chat" ? "hidden" : "hidden auto",
               ...(activePage === "chat" && {
                 "@media (min-width: 769px)": { p: 2 },
               }),
@@ -386,55 +438,97 @@ export default function App() {
                 alignItems: "center",
                 mb: activePage === "chat" ? 2 : 1,
                 flexShrink: 0,
+                gap: 1,
+                "@media (max-width: 768px)": {
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 20,
+                  background: "#f7f6f3",
+                  py: 1,
+                },
                 ...(activePage === "chat" && {
                   "@media (max-width: 768px)": { display: "none" },
                 }),
               }}
             >
-              <Typography
-                variant="h5"
-                sx={{
-                  fontWeight: 600,
-                  fontFamily: "IBM Plex Sans, sans-serif",
-                }}
-              >
-                {pageTitle}
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+                <IconButton
+                  aria-label="Open navigation"
+                  onClick={() => setMobileNavOpen(true)}
+                  sx={{
+                    display: "none",
+                    mr: 0.75,
+                    color: "#264653",
+                    "@media (max-width: 768px)": { display: "inline-flex" },
+                  }}
+                >
+                  <MenuIcon />
+                </IconButton>
+                <Typography
+                  variant="h5"
+                  sx={{
+                    fontWeight: 600,
+                    fontFamily: "IBM Plex Sans, sans-serif",
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    "@media (max-width: 768px)": { fontSize: 20 },
+                  }}
+                >
+                  {pageTitle}
+                </Typography>
+              </Box>
               <UserButton afterSignOutUrl="/" />
             </Box>
 
             {/* ═══════════ ORDERS PAGE ═══════════ */}
             <Fade in={activePage === "orders"} mountOnEnter unmountOnExit>
-              <div>
-                <Button
-                  variant="contained"
-                  onClick={handleSyncWix}
-                  disabled={syncing}
-                  sx={{ mb: 2 }}
+              <div style={{ width: "100%", minWidth: 0 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 1,
+                    mb: 2,
+                    "& .MuiButton-root": {
+                      minWidth: 0,
+                      "@media (max-width: 640px)": {
+                        flex: "1 1 calc(50% - 8px)",
+                        px: 1,
+                      },
+                      "@media (max-width: 380px)": {
+                        flexBasis: "100%",
+                      },
+                    },
+                  }}
                 >
-                  {syncing ? "Syncing..." : "🔄 Sync Wix Orders"}
-                </Button>
-                <Button
-                  variant="contained"
-                  sx={{ mb: 2, ml: 2 }}
-                  onClick={() => setActivePage("create-order")}
-                >
-                  ➕ Create Order
-                </Button>
-                <Button
-                  variant="contained"
-                  sx={{ mb: 2, ml: 4 }}
-                  onClick={() => setActivePage("device-entry")}
-                >
-                  Bulk In/Out
-                </Button>
-                <Button
-                  variant="contained"
-                  sx={{ mb: 2, ml: 2 }}
-                  onClick={() => setActivePage("serial-search")}
-                >
-                  🔎 Serial Search
-                </Button>
+                  <Button
+                    variant="contained"
+                    onClick={handleSyncWix}
+                    disabled={syncing}
+                  >
+                    {syncing ? "Syncing..." : "🔄 Sync Wix Orders"}
+                  </Button>
+                  <Button
+                    variant="contained"
+                    onClick={() => setActivePage("create-order")}
+                  >
+                    ➕ Create Order
+                  </Button>
+                  <Button
+                    variant="contained"
+                    onClick={() => setActivePage("device-entry")}
+                  >
+                    Bulk In/Out
+                  </Button>
+                  <Button
+                    variant="contained"
+                    onClick={() => setActivePage("serial-search")}
+                  >
+                    🔎 Serial Search
+                  </Button>
+                </Box>
                 <SearchBar filters={filters} setFilters={setFilters} />
 
                 <OrdersTable
@@ -454,7 +548,7 @@ export default function App() {
 
             {/* ═══════════ CREATE ORDER PAGE ═══════════ */}
             <Fade in={activePage === "create-order"} mountOnEnter unmountOnExit>
-              <div style={{ flex: 1, minHeight: 0 }}>
+              <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
                 {/*
                   CreateOrderForm now owns its header with Back / Browse / Add Customer.
                   No wrapper buttons needed here — keeps App.jsx clean and avoids
@@ -488,8 +582,8 @@ export default function App() {
 
             {/* ═══════════ DEVICE ENTRY PAGE ═══════════ */}
             <Fade in={activePage === "device-entry"} mountOnEnter unmountOnExit>
-              <div>
-                <Paper sx={{ p: 3, borderRadius: 2 }}>
+              <div style={{ width: "100%", minWidth: 0 }}>
+                <Paper sx={{ p: { xs: 1.5, sm: 3 }, borderRadius: 2 }}>
                   <Button
                     variant="outlined"
                     onClick={() => setActivePage("orders")}
@@ -506,7 +600,7 @@ export default function App() {
               mountOnEnter
               unmountOnExit
             >
-              <div>
+              <div style={{ width: "100%", minWidth: 0 }}>
                 <Button
                   variant="outlined"
                   onClick={() => setActivePage("orders")}
@@ -520,7 +614,7 @@ export default function App() {
             {/* ═══════════ DASHBOARD PAGE ═══════════ */}
 
             <Fade in={activePage === "dashboard"} mountOnEnter unmountOnExit>
-              <div>
+              <div style={{ width: "100%", minWidth: 0 }}>
                 <DashboardPage />
               </div>
             </Fade>

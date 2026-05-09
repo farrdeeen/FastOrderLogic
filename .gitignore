@@ -70,6 +70,7 @@ backend/*.log
 
 # System folders or temporary uploads
 uploads/
+backend/media/
 tmp/
 temp/
 

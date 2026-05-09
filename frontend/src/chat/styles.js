@@ -73,6 +73,10 @@ export const chatStyles = {
       boxShadow: "none",
       width: "100vw",
       maxWidth: "100vw",
+      height: "100dvh",
+      minHeight: "100dvh",
+      position: "fixed",
+      inset: 0,
     },
   },
 
@@ -88,15 +92,17 @@ export const chatStyles = {
     overflow: "hidden",
     flexShrink: 0,
     boxSizing: "border-box",
-    "@media (max-width: 900px)": {
+    "@media (min-width: 769px) and (max-width: 900px)": {
       width: "300px",
       minWidth: "300px",
       maxWidth: "300px",
     },
     "@media (max-width: 768px)": {
-      width: "100%",
-      minWidth: "100%",
-      maxWidth: "100%",
+      width: "100vw",
+      minWidth: "100vw",
+      maxWidth: "100vw",
+      height: "100dvh",
+      minHeight: "100dvh",
       border: "none",
     },
   },
@@ -385,6 +391,14 @@ export const chatStyles = {
     overflow: "hidden",
     position: "relative",
     minWidth: 0,
+    "@media (max-width: 768px)": {
+      width: "100%",
+      minWidth: "100%",
+      maxWidth: "100%",
+      height: "100dvh",
+      minHeight: "100dvh",
+      flex: "0 0 100vw",
+    },
   },
 
   // Subtle WhatsApp-style wallpaper pattern via CSS
@@ -824,6 +838,10 @@ export const chatStyles = {
   mobilePane: (isVisible) => ({
     "@media (max-width: 768px)": {
       display: isVisible ? "flex" : "none",
+      width: "100vw",
+      minWidth: "100vw",
+      maxWidth: "100vw",
+      flex: "0 0 100vw",
     },
   }),
 

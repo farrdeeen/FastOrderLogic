@@ -6,7 +6,7 @@ Place in your routers/ or api/ directory and include in main.py:
     app.include_router(device_transactions_router, prefix="/api")
 """
 
-from datetime import date, datetime
+from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -25,7 +25,7 @@ router = APIRouter(tags=["Device Transactions"])
 
 class BulkDeviceTransactionIn(BaseModel):
     vendor: str = Field(..., max_length=255)
-    in_out: int = Field(..., ge=1, le=2, description="1 = In, 2 = Out")
+    in_out: int = Field(..., ge=1, le=3, description="1 = In, 2 = Out, 3 = Return")
     model_name: str = Field(..., max_length=100)
     price: Optional[float] = Field(None, ge=0)
     serials: List[str] = Field(..., min_items=1)
@@ -99,6 +99,17 @@ async def bulk_create_device_transactions(
             detail="No valid serial numbers provided.",
         )
 
+    order_id = payload.order_id.strip() if payload.order_id else None
+    if payload.in_out == 3 and not order_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Order ID is required for return transactions.",
+        )
+
+    vendor = payload.vendor.strip()
+    model_name = payload.model_name.strip()
+    sku_id = payload.sku_id.strip() if payload.sku_id else None
+    remarks = payload.remarks.strip() if payload.remarks else None
     inserted_rows: List[DeviceTransactionOut] = []
 
     for srno in unique_serials:
@@ -106,14 +117,14 @@ async def bulk_create_device_transactions(
             INSERT_SQL,
             {
                 "device_srno": srno,
-                "model_name": payload.model_name,
-                "sku_id": payload.sku_id,
-                "order_id": payload.order_id,
+                "model_name": model_name,
+                "sku_id": sku_id,
+                "order_id": order_id,
                 "in_out": payload.in_out,
                 "price": payload.price,
-                "remarks": payload.vendor,
-                "create_date": datetime.now(),
-                "vendor": payload.vendor,
+                "remarks": remarks,
+                "create_date": date.today(),
+                "vendor": vendor,
             },
         )
         new_id = result.lastrowid
