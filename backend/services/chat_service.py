@@ -281,7 +281,13 @@ def save_message(
     message_id = result.lastrowid
     try:
         from routes.chat import notify_chat_change
-        notify_chat_change(session_id, "message")
+        notify_chat_change(
+            session_id,
+            "message",
+            message_id=message_id,
+            sender=sender,
+            message=message,
+        )
     except Exception:
         logger.debug("Chat websocket notify failed for session %s", session_id, exc_info=True)
     return message_id
@@ -552,12 +558,13 @@ async def handle_inbound_message(
 
             return text_msg
 
-        # Intent was product_browse but no products matched — fall through to AI
-        logger.info("handle_inbound: no products matched, falling through to AI reply")
+        logger.info("handle_inbound: product intent had no usable search term, falling through to AI reply")
 
     # ── Route: everything else → full AI reply ─────────────────────────────────
     ai_reply = await generate_reply(history_for_context, text_body)
     ai_failure_context = get_last_ai_failure_context()
+    if ai_failure_context:
+        _mark_session_urgent_for_human(db, session_id)
 
     # ── Check if AI produced a complete order JSON ─────────────────────────────
     order_data = extract_order_json(ai_reply)

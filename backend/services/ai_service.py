@@ -9,22 +9,15 @@ import httpx
 import logging
 from typing import Optional, Literal
 from pathlib import Path
-import asyncio
 from contextvars import ContextVar
 
 _OPENROUTER_KEY     = os.getenv("OPENROUTER_API_KEY", "")
 _OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
 _OPENROUTER_ENABLED = os.getenv("OPENROUTER_ENABLED", "true").lower() == "true"
-_OLLAMA_ENABLED     = os.getenv("OLLAMA_ENABLED", "true").lower() == "true"
 _OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 logger = logging.getLogger(__name__)
 _LAST_AI_FAILURE: ContextVar[Optional[dict]] = ContextVar("last_ai_failure", default=None)
-
-_OLLAMA_BASE    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-_OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",    "llama3:8b-instruct-q4_K_M")
-_OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
-_GENERATE_URL   = f"{_OLLAMA_BASE}/api/generate"
 
 _cached_catalogue_summary: str = ""
 _catalogue_cache_ts: float = 0.0
@@ -33,6 +26,11 @@ _cached_training_doc: str = ""
 _training_doc_mtime: float = 0.0
 
 _TRAINING_DOC_PATH = Path(os.getenv("TRAINING_DOC_PATH", "data/training_doc.txt"))
+_STORE_BASE_URL = (os.getenv("WIX_STORE_URL") or os.getenv("STORE_BASE_URL") or "https://www.cspbank.in").rstrip("/")
+_AI_HANDOFF_MESSAGE = (
+    "Please wait, our sales agent will connect with you here shortly.\n\n"
+    "कृपया प्रतीक्षा करें, हमारे sales agent जल्द ही इसी chat पर आपसे जुड़ेंगे."
+)
 
 _BASE_SYSTEM_PROMPT = """You are Aria, a friendly AI sales assistant for an electronics store on WhatsApp.
 You can respond in English, Hindi, or Hinglish depending on user language.
@@ -112,6 +110,68 @@ _SKIP_PFXS   = (
     "i need to", "i should", "i will", "the customer", "the user asked", "based on the",
 )
 
+_PRODUCT_BUY_HINTS = (
+    "chahiye", "chaahiye", "chaiye", "cahiye", " चाहिए", "need", "want",
+    "buy", "purchase", "order karna", "khareedna", "price", "rate",
+    "available", "availability", "catalogue", "catalog", "link", "photo",
+    "image", "pic", "picture", "dikhao", "dikhaiye", "bhejo",
+)
+_PRODUCT_STOPWORDS = {
+    "do", "you", "have", "show", "me", "tell", "about", "looking", "for",
+    "want", "need", "buy", "purchase", "price", "cost", "rate", "kitna",
+    "hai", "h", "ka", "ki", "ke", "ko", "kya", "please", "plz", "pls",
+    "mujhe", "muje", "meko", "mere", "mera", "meri", "ek", "one", "send",
+    "bhejo", "dikhaiye", "dikhao", "dikhaao", "photo", "image", "pic",
+    "picture", "link", "catalogue", "catalog", "available", "availability",
+    "chahiye", "chaahiye", "chaiye", "cahiye", "khareedna", "karna",
+}
+_SERVICE_HINTS = (
+    "repair", "service", "warranty", "replacement", "complaint", "return",
+    "exchange", "not working", "problem", "issue", "fault", "defect",
+    "human", "agent", "support",
+)
+_ORDER_LOOKUP_HINTS = (
+    "order status", "tracking", "track", "awb", "delivery", "dispatch",
+    "shipped", "delivered", "payment", "paid", "utr", "refund", "status",
+    "invoice",
+)
+_INTERNAL_OUTPUT_MARKERS = (
+    "the user says", "the user asked", "we need to", "we should", "as a sales assistant",
+    "the context includes", "likely need", "need to respond", "system prompt",
+    "catalogue listed", "conversation history",
+)
+
+
+def ai_handoff_message() -> str:
+    return _AI_HANDOFF_MESSAGE
+
+
+def _normalise_english_tokens(value: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z]+", " ", str(value or "")).lower().strip()
+
+
+def _extract_product_search_term(message: str) -> str:
+    text = _normalise_english_tokens(message)
+    if not text:
+        return ""
+
+    tokens = [tok for tok in text.split() if tok not in _PRODUCT_STOPWORDS and len(tok) > 1]
+    return " ".join(tokens).strip()
+
+
+def _looks_like_product_browse(message: str) -> bool:
+    raw = (message or "").lower()
+    norm = _normalise_english_tokens(message)
+    if not norm:
+        return False
+    if any(hint in norm or hint in raw for hint in _ORDER_LOOKUP_HINTS):
+        return False
+    if any(hint in norm or hint in raw for hint in _SERVICE_HINTS):
+        return False
+    if not _extract_product_search_term(message):
+        return False
+    return any(hint in norm or hint in raw for hint in _PRODUCT_BUY_HINTS)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Intent classification
@@ -142,6 +202,8 @@ _CLASSIFIER_SYSTEM = (
     "Rules:\n"
     "  - Works for any language: English, Hindi, Hinglish, Marathi, Tamil, etc.\n"
     "  - Photo/image requests for a product = product_browse.\n"
+    "  - Hinglish purchase words like chahiye/chaahiye/chaiye with a product name = product_browse.\n"
+    "  - Price/link/photo/catalogue/available questions about a product = product_browse.\n"
     "  - If the message mentions BOTH an existing order AND products, choose the order intent.\n"
     "  - Use conversation history for context.\n"
     "  - Output ONLY the label. No explanation. No punctuation. No extra text."
@@ -151,8 +213,13 @@ _CLASSIFIER_SYSTEM = (
 async def classify_intent(message: str, recent_history: list[dict]) -> IntentLabel:
     """
     Classify customer intent via a fast LLM call (max 8 output tokens).
-    Tries OpenRouter first, falls back to Ollama, defaults to 'general' on any error.
+    Uses a deterministic product fast path first, then OpenRouter.
+    Defaults to 'general' on any OpenRouter error.
     """
+    if _looks_like_product_browse(message):
+        logger.info("classify_intent: product fast-path matched msg=%r", message[:80])
+        return "product_browse"
+
     context_lines = []
     for turn in recent_history[-3:]:
         role = "Customer" if turn["role"] == "user" else "Agent"
@@ -199,51 +266,22 @@ async def classify_intent(message: str, recent_history: list[dict]) -> IntentLab
                 logger.warning(
                     "classify_intent: OpenRouter RATE LIMITED (429) — "
                     "Retry-After=%s X-RateLimit-Reset=%s X-RateLimit-Remaining=%s — "
-                    "falling back to Ollama",
+                    "defaulting to general",
                     retry_after, reset_at, remaining,
                 )
             else:
                 logger.warning(
-                    "classify_intent: OpenRouter non-200 status=%s body=%s — falling back to Ollama",
+                    "classify_intent: OpenRouter non-200 status=%s body=%s — defaulting to general",
                     resp.status_code, resp.text[:300],
                 )
         except httpx.TimeoutException:
-            logger.warning("classify_intent: OpenRouter timed out — falling back to Ollama")
+            logger.warning("classify_intent: OpenRouter timed out — defaulting to general")
         except httpx.ConnectError as exc:
-            logger.warning("classify_intent: OpenRouter ConnectError (DNS/network) — falling back to Ollama. Detail: %s", exc)
+            logger.warning("classify_intent: OpenRouter ConnectError (DNS/network) — defaulting to general. Detail: %s", exc)
         except Exception as exc:
-            logger.warning("classify_intent: OpenRouter unexpected error — falling back to Ollama: %s", exc)
+            logger.warning("classify_intent: OpenRouter unexpected error — defaulting to general: %s", exc)
     elif _OPENROUTER_ENABLED and not _OPENROUTER_KEY:
         logger.warning("classify_intent: OPENROUTER_ENABLED=true but OPENROUTER_API_KEY is empty — skipping OpenRouter")
-
-    # ── 2. Ollama fallback ─────────────────────────────────────────────────────
-    if not raw and _OLLAMA_ENABLED:
-        try:
-            prompt = (
-                f"SYSTEM:\n{_CLASSIFIER_SYSTEM}\n\n"
-                f"Conversation:\n{user_content}\n\nLabel:"
-            )
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    _GENERATE_URL,
-                    json={
-                        "model":   _OLLAMA_MODEL,
-                        "prompt":  prompt,
-                        "stream":  False,
-                        "options": {"num_predict": 8, "temperature": 0.0},
-                    },
-                )
-            if resp.status_code == 200:
-                raw = resp.json().get("response", "")
-                logger.info("classify_intent: Ollama OK → raw=%r", raw.strip())
-            else:
-                logger.warning("classify_intent: Ollama non-200 status=%s", resp.status_code)
-        except httpx.ConnectError as exc:
-            logger.error("classify_intent: Ollama not reachable at %s: %s", _OLLAMA_BASE, exc)
-        except httpx.TimeoutException:
-            logger.error("classify_intent: Ollama timed out")
-        except Exception as exc:
-            logger.warning("classify_intent: Ollama unexpected error: %s", exc)
 
     # ── Parse & validate ───────────────────────────────────────────────────────
     raw   = (raw or "").strip()
@@ -330,16 +368,6 @@ async def build_system_prompt() -> str:
 # LLM callers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_prompt(system: str, history: list[dict], user_msg: str) -> str:
-    parts = [f"SYSTEM:\n{system}\n"]
-    for m in history[-10:]:
-        role = "User" if m["role"] == "user" else "Assistant"
-        parts.append(f"{role}: {m['content']}")
-    parts.append(f"User: {user_msg}")
-    parts.append("Assistant:")
-    return "\n".join(parts)
-
-
 def _strip_reasoning(text: str) -> str:
     if not text:
         return ""
@@ -362,9 +390,54 @@ def _strip_reasoning(text: str) -> str:
     return text.strip()
 
 
+def _sanitize_customer_reply(text: str) -> str:
+    text = _strip_reasoning(text or "")
+    if not text:
+        return ""
+
+    if text.lower().startswith("```json"):
+        return text
+
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_-]*", "", text).strip()
+        text = re.sub(r"```$", "", text).strip()
+
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                if {"name", "mobile", "address", "product_name", "sku"} & set(parsed.keys()):
+                    return f"```json\n{json.dumps(parsed, ensure_ascii=False)}\n```"
+                for key in ("text", "message", "reply", "content"):
+                    value = parsed.get(key)
+                    if isinstance(value, str) and value.strip():
+                        text = value.strip()
+                        break
+        except json.JSONDecodeError:
+            text = re.sub(r'^\{\s*"type"\s*:\s*"?text"?\s*,?', "", text, flags=re.IGNORECASE).strip()
+            text = text.lstrip(":, ").strip()
+
+    lower = text.lower()
+    if any(marker in lower for marker in _INTERNAL_OUTPUT_MARKERS):
+        safe_lines = []
+        for line in text.splitlines():
+            line_lower = line.strip().lower()
+            if any(marker in line_lower for marker in _INTERNAL_OUTPUT_MARKERS):
+                continue
+            safe_lines.append(line)
+        text = "\n".join(safe_lines).strip()
+        if not text or any(marker in text.lower() for marker in _INTERNAL_OUTPUT_MARKERS):
+            return ""
+
+    text = text.strip().strip('"').strip()
+    if not text or text.startswith("{"):
+        return ""
+    return _MULTI_NL_RE.sub("\n\n", text)
+
+
 async def _call_openrouter(system: str, history: list[dict], user_msg: str) -> str:
     """
-    Call OpenRouter. Raises on any failure so generate_reply can fall back.
+    Call OpenRouter. Raises on any failure so generate_reply can hand off cleanly.
 
     Raises:
         ValueError             — API key not configured
@@ -394,8 +467,9 @@ async def _call_openrouter(system: str, history: list[dict], user_msg: str) -> s
             json={
                 "model":       _OPENROUTER_MODEL,
                 "messages":    messages,
-                "max_tokens":  200,
-                "temperature": 0.7,
+                "max_tokens":  260,
+                "temperature": 0.25,
+                "top_p":       0.9,
             },
             headers=headers,
         )
@@ -407,7 +481,7 @@ async def _call_openrouter(system: str, history: list[dict], user_msg: str) -> s
         logger.warning(
             "_call_openrouter: RATE LIMITED (429) — "
             "Retry-After=%s X-RateLimit-Reset=%s X-RateLimit-Remaining=%s — "
-            "falling back to Ollama",
+            "using sales-agent handoff",
             retry_after, reset_at, remaining,
         )
         resp.raise_for_status()
@@ -416,45 +490,28 @@ async def _call_openrouter(system: str, history: list[dict], user_msg: str) -> s
         logger.error("_call_openrouter: HTTP %s — body: %s", resp.status_code, resp.text[:300])
         resp.raise_for_status()
 
-    raw = resp.json()["choices"][0]["message"]["content"]
-    if not raw or not raw.strip():
+    data = resp.json()
+    choices = data.get("choices") or []
+    message = choices[0].get("message") if choices else {}
+    raw = (message or {}).get("content") or ""
+    if isinstance(raw, list):
+        chunks = []
+        for part in raw:
+            if isinstance(part, dict):
+                chunks.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                chunks.append(str(part))
+        raw = "\n".join(chunk for chunk in chunks if chunk)
+    reply = _sanitize_customer_reply(str(raw))
+    if not reply:
         raise RuntimeError("OpenRouter returned an empty response body")
 
     logger.info("_call_openrouter: OK (model=%s)", _OPENROUTER_MODEL)
-    return _strip_reasoning(raw)
-
-
-async def _call_ollama(system: str, history: list[dict], user_msg: str) -> str:
-    """
-    Call local Ollama. Raises on any failure.
-
-    Raises:
-        httpx.ConnectError     — Ollama not running / wrong host
-        httpx.TimeoutException — model too slow
-        httpx.HTTPStatusError  — non-200 from Ollama
-        RuntimeError           — empty response
-    """
-    prompt = _build_prompt(system, history[-8:], user_msg)
-    async with httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT) as client:
-        resp = await client.post(
-            _GENERATE_URL,
-            json={"model": _OLLAMA_MODEL, "prompt": prompt, "stream": False},
-        )
-
-    if resp.status_code != 200:
-        logger.error("_call_ollama: HTTP %s — %s", resp.status_code, resp.text[:200])
-        resp.raise_for_status()
-
-    raw = resp.json().get("response") or ""
-    if not raw.strip():
-        raise RuntimeError("Ollama returned an empty response")
-
-    logger.info("_call_ollama: OK")
-    return _strip_reasoning(raw)
+    return reply
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main reply — OpenRouter → Ollama → static fallback
+# Main reply — OpenRouter → sales-agent handoff
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def generate_reply(conversation_history: list[dict], user_message: str) -> str:
@@ -462,7 +519,6 @@ async def generate_reply(conversation_history: list[dict], user_message: str) ->
     provider_errors: list[dict] = []
     system = await build_system_prompt()
 
-    # ── 1. OpenRouter ──────────────────────────────────────────────────────────
     if _OPENROUTER_ENABLED:
         if not _OPENROUTER_KEY:
             logger.warning("generate_reply: OPENROUTER_ENABLED=true but key is empty — skipping")
@@ -478,14 +534,14 @@ async def generate_reply(conversation_history: list[dict], user_message: str) ->
                 if reply:
                     _LAST_AI_FAILURE.set(None)
                     return reply
-                logger.warning("generate_reply: OpenRouter returned blank — trying Ollama")
+                logger.warning("generate_reply: OpenRouter returned blank — using sales-agent handoff")
                 _add_provider_error(provider_errors, "openrouter", "blank_response", "OpenRouter returned blank")
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 if status == 429:
-                    logger.warning("generate_reply: OpenRouter rate-limited (429) — falling back to Ollama")
+                    logger.warning("generate_reply: OpenRouter rate-limited (429) — using sales-agent handoff")
                 else:
-                    logger.error("generate_reply: OpenRouter HTTP %s — falling back to Ollama. Body: %s",
+                    logger.error("generate_reply: OpenRouter HTTP %s — using sales-agent handoff. Body: %s",
                                  status, exc.response.text[:300])
                 _add_provider_error(
                     provider_errors,
@@ -496,64 +552,30 @@ async def generate_reply(conversation_history: list[dict], user_message: str) ->
                     response_body=exc.response.text,
                 )
             except httpx.TimeoutException:
-                logger.warning("generate_reply: OpenRouter timed out — falling back to Ollama")
+                logger.warning("generate_reply: OpenRouter timed out — using sales-agent handoff")
                 _add_provider_error(provider_errors, "openrouter", "timeout", "OpenRouter timed out")
             except httpx.ConnectError as exc:
-                logger.error("generate_reply: OpenRouter ConnectError (DNS/network) — falling back to Ollama: %s", exc)
+                logger.error("generate_reply: OpenRouter ConnectError (DNS/network) — using sales-agent handoff: %s", exc)
                 _add_provider_error(provider_errors, "openrouter", "connect_error", str(exc))
             except ValueError as exc:
                 logger.debug("generate_reply: OpenRouter skipped — %s", exc)
                 _add_provider_error(provider_errors, "openrouter", "configuration", str(exc))
             except Exception as exc:
-                logger.error("generate_reply: OpenRouter unexpected error — falling back to Ollama: %s", exc)
+                logger.error("generate_reply: OpenRouter unexpected error — using sales-agent handoff: %s", exc)
                 _add_provider_error(provider_errors, "openrouter", "unexpected_error", str(exc))
-
-    # ── 2. Ollama ──────────────────────────────────────────────────────────────
-    if _OLLAMA_ENABLED:
-        try:
-            reply = await _call_ollama(system, conversation_history, user_message)
-            if reply:
-                _LAST_AI_FAILURE.set(None)
-                return reply
-            logger.warning("generate_reply: Ollama returned blank — no providers left")
-            _add_provider_error(provider_errors, "ollama", "blank_response", "Ollama returned blank")
-        except httpx.ConnectError:
-            logger.error("generate_reply: Ollama not reachable at %s", _OLLAMA_BASE)
-            _add_provider_error(provider_errors, "ollama", "connect_error", f"Ollama not reachable at {_OLLAMA_BASE}")
-        except httpx.TimeoutException:
-            logger.error("generate_reply: Ollama timed out after %ss", _OLLAMA_TIMEOUT)
-            _add_provider_error(provider_errors, "ollama", "timeout", f"Ollama timed out after {_OLLAMA_TIMEOUT}s")
-        except httpx.HTTPStatusError as exc:
-            logger.error("generate_reply: Ollama HTTP %s: %s", exc.response.status_code, exc.response.text[:200])
-            _add_provider_error(
-                provider_errors,
-                "ollama",
-                "http_status",
-                str(exc),
-                status_code=exc.response.status_code,
-                response_body=exc.response.text,
-            )
-        except Exception as exc:
-            logger.error("generate_reply: Ollama unexpected error: %s", exc)
-            _add_provider_error(provider_errors, "ollama", "unexpected_error", str(exc))
     else:
-        _add_provider_error(provider_errors, "ollama", "configuration", "OLLAMA_ENABLED=false")
+        _add_provider_error(provider_errors, "openrouter", "configuration", "OPENROUTER_ENABLED=false")
 
-    # ── 3. Static fallback ─────────────────────────────────────────────────────
-    logger.error("generate_reply: ALL providers failed for msg=%r", user_message[:60])
-    fallback = (
-        "Sorry, our assistant is temporarily busy. "
-        "Please WhatsApp us directly or try again in a minute. 🙏"
-    )
+    logger.error("generate_reply: OpenRouter unavailable/failed for msg=%r", user_message[:60])
+    fallback = _AI_HANDOFF_MESSAGE
     _LAST_AI_FAILURE.set({
         "ai_failure": True,
         "flow": "ai_failure",
         "provider_errors": provider_errors,
-        "error_response": _format_provider_errors(provider_errors) or "All AI providers failed.",
+        "error_response": _format_provider_errors(provider_errors) or "OpenRouter failed.",
         "fallback_message": fallback,
         "model": {
             "openrouter": _OPENROUTER_MODEL,
-            "ollama": _OLLAMA_MODEL,
         },
     })
     return fallback
@@ -579,7 +601,6 @@ async def analyze_media(file_url: str, file_type: str) -> str:
             f"SYSTEM:\n{system}\n\nCustomer sent a PDF. Extracted text:\n\n{text[:3000]}\n\n"
             "User: Summarize this and tell me if it's relevant to our products or orders.\nAssistant:"
         )
-        # PDF: try OpenRouter → Ollama
         if _OPENROUTER_ENABLED and _OPENROUTER_KEY:
             try:
                 async with httpx.AsyncClient(timeout=25) as client:
@@ -589,7 +610,7 @@ async def analyze_media(file_url: str, file_type: str) -> str:
                             "model":       _OPENROUTER_MODEL,
                             "messages":    [{"role": "user", "content": prompt}],
                             "max_tokens":  200,
-                            "temperature": 0.7,
+                            "temperature": 0.25,
                         },
                         headers={
                             "Authorization": f"Bearer {_OPENROUTER_KEY}",
@@ -600,25 +621,12 @@ async def analyze_media(file_url: str, file_type: str) -> str:
                     )
                 if resp.status_code == 200:
                     raw = resp.json()["choices"][0]["message"]["content"]
-                    return _strip_reasoning(raw) or "I've reviewed the document. How can I help?"
-                else:
-                    logger.warning("analyze_media: OpenRouter %s — trying Ollama", resp.status_code)
+                    return _sanitize_customer_reply(raw) or "I've reviewed the document. How can I help?"
+                logger.warning("analyze_media: OpenRouter %s — using sales-agent handoff", resp.status_code)
             except Exception as exc:
-                logger.warning("analyze_media: OpenRouter failed: %s — trying Ollama", exc)
+                logger.warning("analyze_media: OpenRouter failed: %s — using sales-agent handoff", exc)
 
-        if _OLLAMA_ENABLED:
-            try:
-                async with httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT) as client:
-                    resp = await client.post(
-                        _GENERATE_URL,
-                        json={"model": _OLLAMA_MODEL, "prompt": prompt, "stream": False},
-                    )
-                raw = resp.json().get("response") or ""
-                return _strip_reasoning(raw) or "I've reviewed the document. How can I help?"
-            except Exception as exc:
-                logger.exception("analyze_media: Ollama PDF analysis failed: %s", exc)
-
-        return "I received your PDF. Could you describe what you need help with?"
+        return _AI_HANDOFF_MESSAGE
 
     return "Thanks for sharing! If you have a question, please type it and I'll help."
 
@@ -648,13 +656,12 @@ async def _extract_pdf_text(file_url: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Product reply — NO keyword gating; intent decided upstream by classify_intent
+# Product reply
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def generate_product_reply(user_query: str) -> Optional[dict]:
     """
-    Called only when classify_intent() already confirmed product_browse intent.
-    No keyword checks here — just strip filler, search, return text + images.
+    Search the Wix catalogue and return WhatsApp-ready product links plus images.
     """
     from services.product_catalogue import (
         search_products,
@@ -662,19 +669,9 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         get_product_images_by_sku,
     )
 
-    FILLERS = [
-        "do you have", "show me", "tell me about", "looking for", "want to buy",
-        "price of", "cost of", "how much is", "interested in", "i need",
-        "khareedna", "chahiye", "price batao", "dikhao", "dikhaiye", "dikhaao",
-        "photo share kijiye", "photo share karo", "photo bhejo", "photo dikhao",
-        "image share", "pic share", "tasveer", "share kijiye", "share karo",
-        "ka photo", "ki photo", "ka image", "ki image", "ka pic", "ki pic",
-        "photo", "image", "pic", "picture",
-    ]
-    term = user_query.lower().strip()
-    for f in sorted(FILLERS, key=len, reverse=True):
-        term = term.replace(f, " ").strip()
-    term = re.sub(r"\s+", " ", term).strip()
+    term = _extract_product_search_term(user_query)
+    if not term:
+        term = _normalise_english_tokens(user_query)
 
     logger.debug("generate_product_reply: raw=%r → term=%r", user_query, term)
 
@@ -683,11 +680,27 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         return None
 
     products = await search_products(term, limit=3)
+    if not products and " " in term:
+        broad_term = " ".join(term.split()[:2])
+        products = await search_products(broad_term, limit=3)
     if not products:
         logger.info("generate_product_reply: no products found for term=%r", term)
-        return None
+        raw_lower = (user_query or "").lower()
+        text = (
+            f"Is product ka exact match abhi catalogue me nahi mila. "
+            f"Yahan full catalogue dekh sakte hain: {_STORE_BASE_URL}\n\n"
+            "Please product ka exact name ya SKU bhej dein, main options share kar dunga."
+            if any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya"))
+            else (
+                f"I could not find an exact catalogue match. "
+                f"You can check the full catalogue here: {_STORE_BASE_URL}\n\n"
+                "Please send the exact product name or SKU and I will share the right options."
+            )
+        )
+        return {"text": text, "images": []}
 
-    intro = f"Here's what I found for *{term}*:"
+    raw_lower = (user_query or "").lower()
+    intro = "Ji, ye options available hain:" if any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya")) else f"Here's what I found for *{term}*:"
     text  = format_product_list_for_whatsapp(products, intro=intro)
 
     images: list[str] = []

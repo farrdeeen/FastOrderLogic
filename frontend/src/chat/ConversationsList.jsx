@@ -2,7 +2,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Typography } from "@mui/material";
 import { Bell, Menu, Search, MessageCirclePlus } from "lucide-react";
-import { fetchConversations, getChatWsUrl } from "./chatApi";
+import {
+  fetchConversations,
+  fetchRecentUserMessages,
+  getChatWsUrl,
+} from "./chatApi";
 import {
   chatStyles,
   CHAT_FILTERS,
@@ -73,6 +77,8 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
   const activeIdRef = useRef(activeId);
   const wsRef = useRef(null);
   const wsReconnectRef = useRef(null);
+  const notifiedRef = useRef(new Set());
+  const lastUserMessageIdRef = useRef(null);
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
@@ -86,21 +92,26 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
     setNotificationPermission(p);
   }, []);
 
-  const notifyConv = useCallback(
-    (conv) => {
+  const showBrowserNotification = useCallback(
+    ({ sessionId, name, phone, body, key, conversation }) => {
       if (!("Notification" in window) || Notification.permission !== "granted")
         return;
       if (
         document.visibilityState === "visible" &&
-        activeIdRef.current === conv.id
+        Number(activeIdRef.current) === Number(sessionId)
       )
         return;
-      const name = conv.wa_contact_name || conv.phone_number || "Customer";
+      const notifyKey = key || `${sessionId}:${body || ""}`;
+      if (notifiedRef.current.has(notifyKey)) return;
+      if (notifiedRef.current.size > 500) notifiedRef.current.clear();
+      notifiedRef.current.add(notifyKey);
+
+      const titleName = name || phone || "Customer";
       let n;
       try {
-        n = new Notification(`New message from ${name}`, {
-          body: conv.last_message || "New message",
-          tag: `chat-${conv.id}`,
+        n = new Notification(`New message from ${titleName}`, {
+          body: body || "New WhatsApp message",
+          tag: `chat-${sessionId}`,
           renotify: true,
         });
       } catch {
@@ -108,11 +119,25 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
       }
       n.onclick = () => {
         window.focus();
-        onSelectChat(toChat(conv));
+        if (conversation) onSelectChat(toChat(conversation));
         n.close();
       };
     },
     [onSelectChat],
+  );
+
+  const notifyConv = useCallback(
+    (conv) => {
+      showBrowserNotification({
+        sessionId: conv.id,
+        name: conv.wa_contact_name,
+        phone: conv.phone_number,
+        body: conv.last_message || "New message",
+        key: `conv:${conv.id}:${conv.last_message_at || ""}:${conv.last_message || ""}`,
+        conversation: conv,
+      });
+    },
+    [showBrowserNotification],
   );
 
   const load = useCallback(async () => {
@@ -165,6 +190,24 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
           return;
         }
         if (payload.type !== "chat_changed") return;
+        if (payload.action === "message" && payload.sender === "user") {
+          window.dispatchEvent(
+            new CustomEvent("chat:user-message", { detail: payload }),
+          );
+          showBrowserNotification({
+            sessionId: payload.session_id,
+            body: payload.message || "New WhatsApp message",
+            key: payload.message_id
+              ? `msg:${payload.message_id}`
+              : `ws:${payload.session_id}:${payload.updated_at}`,
+          });
+          if (payload.message_id) {
+            lastUserMessageIdRef.current = Math.max(
+              Number(lastUserMessageIdRef.current || 0),
+              Number(payload.message_id),
+            );
+          }
+        }
         load();
       };
 
@@ -191,7 +234,63 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
         wsRef.current = null;
       }
     };
-  }, [load]);
+  }, [load, showBrowserNotification]);
+
+  useEffect(() => {
+    let stopped = false;
+    let pollTimer = null;
+
+    const seedLatestMessageId = async () => {
+      try {
+        const rows = await fetchRecentUserMessages({ latest: true, limit: 1 });
+        if (!stopped) lastUserMessageIdRef.current = rows[0]?.id || 0;
+      } catch {
+        // Polling is a fallback; websocket and normal list refresh can still work.
+      }
+    };
+
+    const pollRecentMessages = async () => {
+      if (stopped || lastUserMessageIdRef.current === null) return;
+      try {
+        const rows = await fetchRecentUserMessages({
+          afterId: lastUserMessageIdRef.current,
+          limit: 50,
+        });
+        if (!rows.length) return;
+
+        rows.forEach((row) => {
+          lastUserMessageIdRef.current = Math.max(
+            Number(lastUserMessageIdRef.current || 0),
+            Number(row.id || 0),
+          );
+          showBrowserNotification({
+            sessionId: row.session_id,
+            name: row.conversation?.wa_contact_name,
+            phone: row.conversation?.phone_number,
+            body: row.message || "New WhatsApp message",
+            key: `msg:${row.id}`,
+            conversation: row.conversation,
+          });
+          window.dispatchEvent(
+            new CustomEvent("chat:user-message", { detail: row }),
+          );
+        });
+        load();
+      } catch {
+        // Keep the interval alive; transient auth/network failures should self-heal.
+      }
+    };
+
+    seedLatestMessageId().finally(() => {
+      if (stopped) return;
+      pollTimer = window.setInterval(pollRecentMessages, 15000);
+    });
+
+    return () => {
+      stopped = true;
+      if (pollTimer) window.clearInterval(pollTimer);
+    };
+  }, [load, showBrowserNotification]);
 
   const visible = conversations.filter((c) => matchesFilter(c, activeFilter));
 

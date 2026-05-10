@@ -19,6 +19,7 @@ import logging
 import httpx
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ _WIX_SITE_ID   = os.getenv("WIX_SITE_ID", "")
 _REFRESH_MINS  = int(os.getenv("CATALOGUE_REFRESH_MINUTES", "60"))
 
 # Your Wix store URL — used for product links sent to customers
-_WIX_STORE_URL = os.getenv("WIX_STORE_URL", "")   # e.g. https://www.yourstore.com
+_WIX_STORE_URL = (os.getenv("WIX_STORE_URL") or os.getenv("STORE_BASE_URL") or "https://www.cspbank.in").rstrip("/")
 
 _PRODUCTS_API  = "https://www.wixapis.com/stores/v1/products/query"
 
@@ -77,28 +78,40 @@ async def search_products(query: str, limit: int = 5) -> list[dict]:
     if not query:
         return catalogue[:limit]
 
-    q = query.lower().strip()
+    q = _normalise_search_text(query)
+    if not q:
+        return catalogue[:limit]
+
+    tokens = [tok for tok in q.split() if len(tok) > 1]
     scored = []
     for p in catalogue:
-        name  = (p.get("name") or "").lower()
-        sku   = (p.get("sku") or "").lower()
-        desc  = (p.get("description") or "").lower()
-        score = 0
+        name  = _normalise_search_text(p.get("name") or "")
+        sku   = _normalise_search_text(p.get("sku") or "")
+        desc  = _normalise_search_text(p.get("description") or "")
+        hay   = f"{name} {sku} {desc}"
+        score = 0.0
         if q in name:
-            score += 3
-        if q in sku:
-            score += 2
+            score += 5
+        if q and q in sku:
+            score += 4
         if q in desc:
             score += 1
-        # partial word match
-        for word in q.split():
-            if word in name:
-                score += 1
+
+        token_hits = sum(1 for word in tokens if word in hay)
+        score += token_hits * 2
+        if tokens and all(word in hay for word in tokens):
+            score += 5
+        if p.get("in_stock") is True:
+            score += 0.25
         if score > 0:
             scored.append((score, p))
 
     scored.sort(key=lambda x: -x[0])
     return [p for _, p in scored[:limit]]
+
+
+def _normalise_search_text(value: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z]+", " ", str(value or "")).lower().strip()
 
 
 def format_product_card(product: dict) -> str:
@@ -131,6 +144,8 @@ def format_product_card(product: dict) -> str:
         lines.append(short_desc)
     if stock is not None:
         lines.append("✅ In Stock" if stock else "❌ Out of Stock")
+    if not link and _WIX_STORE_URL and name:
+        link = f"{_WIX_STORE_URL}/search?q={quote_plus(name)}"
     if link:
         lines.append(f"🔗 {link}")
 
@@ -376,7 +391,9 @@ def _normalise_product(raw: dict) -> dict:
     # ── Product page link ─────────────────────────────────────────────────────
     link = ""
     if slug and _WIX_STORE_URL:
-        link = f"{_WIX_STORE_URL.rstrip('/')}/product-page/{slug}"
+        link = f"{_WIX_STORE_URL}/product-page/{slug}"
+    elif name and _WIX_STORE_URL:
+        link = f"{_WIX_STORE_URL}/search?q={quote_plus(name)}"
 
     # ── Main image URL ────────────────────────────────────────────────────────
     media      = raw.get("media") or {}
@@ -413,15 +430,16 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
       3. In-memory catalogue image_url
     Returns max 2 absolute URLs.
     """
-    from database import SessionLocal
-    from sqlalchemy import text
-
     if not sku and not product_name:
         logger.warning("get_product_images_by_sku: both sku and product_name are empty")
         return []
 
-    db = SessionLocal()
+    db = None
     try:
+        from database import SessionLocal
+        from sqlalchemy import text
+
+        db = SessionLocal()
         urls: list[str] = []
 
         # ── 1. DB lookup by sku_id ─────────────────────────────────────────
@@ -467,24 +485,31 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
             logger.info("Returning %d DB image(s) for sku=%r / name=%r", len(urls), sku, product_name)
             return urls
 
-        # ── 3. In-memory catalogue fallback ───────────────────────────────
-        for p in _catalogue:
-            p_sku  = (p.get("sku") or "").lower()
-            p_name = (p.get("name") or "").lower()
-            if (sku and p_sku == sku.lower()) or (product_name and product_name.lower()[:20] in p_name):
-                img = (p.get("image_url") or "").strip()
-                if img:
-                    logger.info("Catalogue fallback image for sku=%r: %s", sku, img[:80])
-                    return [img]
+        catalogue_urls = _catalogue_image_fallback(sku, product_name)
+        if catalogue_urls:
+            return catalogue_urls
 
         logger.warning("No images found at all for sku=%r / name=%r", sku, product_name)
         return []
 
     except Exception as exc:
         logger.error("get_product_images_by_sku error sku=%r: %s", sku, exc)
-        return []
+        return _catalogue_image_fallback(sku, product_name)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
+
+
+def _catalogue_image_fallback(sku: str, product_name: str = "") -> list[str]:
+    for p in _catalogue:
+        p_sku  = (p.get("sku") or "").lower()
+        p_name = (p.get("name") or "").lower()
+        if (sku and p_sku == sku.lower()) or (product_name and product_name.lower()[:20] in p_name):
+            img = (p.get("image_url") or "").strip()
+            if img:
+                logger.info("Catalogue fallback image for sku=%r: %s", sku, img[:80])
+                return [img]
+    return []
 
 
 def _to_absolute_urls(raw_urls: list[str]) -> list[str]:

@@ -14,7 +14,7 @@ GET  /chat/conversations/count           — total session count
 import logging
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
@@ -66,7 +66,13 @@ class ChatChangeHub:
 chat_change_hub = ChatChangeHub()
 
 
-def notify_chat_change(session_id: Optional[int] = None, action: str = "message"):
+def notify_chat_change(
+    session_id: Optional[int] = None,
+    action: str = "message",
+    message_id: Optional[int] = None,
+    sender: Optional[str] = None,
+    message: Optional[str] = None,
+):
     """Fan out chat changes so the dashboard refreshes without manual reload."""
     if not chat_change_hub.clients:
         return
@@ -75,6 +81,9 @@ def notify_chat_change(session_id: Optional[int] = None, action: str = "message"
         "type": "chat_changed",
         "action": action,
         "session_id": session_id,
+        "message_id": message_id,
+        "sender": sender,
+        "message": (message or "")[:240] if message else None,
         "updated_at": datetime.utcnow().isoformat(),
     }
     loop = chat_change_hub.loop
@@ -222,6 +231,94 @@ def list_conversations(
     """), params).fetchall()
 
     return [dict(r._mapping) for r in rows]
+
+
+@router.get("/recent-user-messages")
+def recent_user_messages(
+    _=Depends(require_user),
+    since: Optional[str] = Query(None, description="ISO timestamp; user messages after this time"),
+    after_id: Optional[int] = Query(None, ge=0, description="Return user messages with id greater than this"),
+    latest: bool = Query(False, description="Return only the latest user message for bootstrapping"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """
+    Lightweight notification fallback for production Gunicorn deployments.
+    Websocket broadcasts are instant when the webhook and socket share a worker;
+    this DB-backed check catches messages when they land on a different worker.
+    """
+    where = ["cm.sender = 'user'"]
+    params: dict = {"lim": 1 if latest else limit}
+    order_direction = "DESC" if latest else "ASC"
+
+    if after_id is not None:
+        where.append("cm.id > :after_id")
+        params["after_id"] = after_id
+    elif not latest:
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(
+                    since.replace("Z", "+00:00").replace("+00:00", "")
+                )
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid 'since' datetime format")
+        else:
+            since_dt = datetime.utcnow() - timedelta(seconds=30)
+        where.append("cm.timestamp > :since")
+        params["since"] = since_dt
+
+    where_clause = " AND ".join(where)
+
+    rows = db.execute(
+        text(f"""
+            SELECT
+                cm.id,
+                cm.session_id,
+                cm.message,
+                cm.timestamp,
+                cs.phone_number,
+                cs.wa_contact_name,
+                cs.status,
+                cs.flag,
+                cs.is_human,
+                cs.last_message,
+                cs.last_message_at
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cs.id = cm.session_id
+            WHERE {where_clause}
+            ORDER BY cm.id {order_direction}
+            LIMIT :lim
+        """),
+        params,
+    ).fetchall()
+
+    result = []
+    for row in rows:
+        item = dict(row._mapping)
+        if item.get("timestamp"):
+            item["timestamp"] = item["timestamp"].isoformat()
+        if item.get("last_message_at"):
+            item["last_message_at"] = item["last_message_at"].isoformat()
+        return_item = {
+            "id": item["id"],
+            "session_id": item["session_id"],
+            "message": item["message"],
+            "timestamp": item["timestamp"],
+            "conversation": {
+                "id": item["session_id"],
+                "phone_number": item["phone_number"],
+                "wa_contact_name": item["wa_contact_name"],
+                "status": item["status"],
+                "flag": item["flag"],
+                "is_human": item["is_human"],
+                "last_message": item["last_message"],
+                "last_message_at": item["last_message_at"],
+                "unread_count": 1,
+            },
+        }
+        result.append(return_item)
+
+    return result
 
 
 # ─── GET /chat/messages/{session_id} ─────────────────────────────────────────

@@ -31,6 +31,24 @@ export async function fetchConversations({
   return res.data || [];
 }
 
+// GET /chat/recent-user-messages
+// Lightweight fallback for production servers where websocket fanout may miss
+// cross-worker webhook events.
+export async function fetchRecentUserMessages({
+  since,
+  afterId,
+  latest = false,
+  limit = 50,
+} = {}) {
+  const params = { limit };
+  if (since) params.since = since;
+  if (afterId !== undefined && afterId !== null) params.after_id = afterId;
+  if (latest) params.latest = true;
+
+  const res = await api.get("/chat/recent-user-messages", { params });
+  return res.data || [];
+}
+
 // GET /chat/messages/{session_id}
 export async function fetchMessages(
   sessionId,
