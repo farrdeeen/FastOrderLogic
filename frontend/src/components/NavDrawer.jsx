@@ -31,16 +31,19 @@ export default function NavDrawer({
   onNavigate,
   mobileOpen = false,
   onMobileClose,
+  allowedPages,
 }) {
   const [open, setOpen] = useState(false);
 
   const handleCollapseToggle = () => setOpen(!open);
 
+  const allowedSet = Array.isArray(allowedPages) ? new Set(allowedPages) : null;
+
   const menuItems = [
     { text: "Dashboard", icon: <DashboardIcon />, id: "dashboard" },
     { text: "Orders", icon: <ShoppingCartIcon />, id: "orders" },
     { text: "Chat", icon: <ForumIcon />, id: "chat" },
-  ];
+  ].filter((item) => !allowedSet || allowedSet.has(item.id));
 
   const drawerContent = (isMobile = false) => {
     const expanded = isMobile || open;

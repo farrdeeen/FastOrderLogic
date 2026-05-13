@@ -48,6 +48,16 @@ const STATUS_BADGE = {
 
 const serialInputKey = (itemId, index) => `${itemId}-${index}`;
 
+const normalizeSerialSlots = (item) => {
+  const quantity = Math.max(0, Number(item.quantity) || 0);
+  const existing = Array.isArray(item.serials) ? item.serials : [];
+  const padded = [
+    ...existing,
+    ...Array(Math.max(0, quantity - existing.length)).fill(""),
+  ];
+  return { ...item, quantity, serials: padded.slice(0, quantity) };
+};
+
 export default function OrderLightbox({
   order,
   details,
@@ -95,6 +105,13 @@ export default function OrderLightbox({
 
   const [editingItemId, setEditingItemId] = useState(null);
   const [editingPrice, setEditingPrice] = useState("");
+  const [editingQuantityItemId, setEditingQuantityItemId] = useState(null);
+  const [editingQuantity, setEditingQuantity] = useState("");
+  const [serialRemovalPrompt, setSerialRemovalPrompt] = useState(null);
+  const [selectedSerialsToRemove, setSelectedSerialsToRemove] = useState([]);
+  const [localOrderTotal, setLocalOrderTotal] = useState(
+    details?.total_amount ?? order.total_amount ?? 0,
+  );
 
   const [addressMode, setAddressMode] = useState("view");
   const [selectedAddressId, setSelectedAddressId] = useState(null);
@@ -119,6 +136,10 @@ export default function OrderLightbox({
     if (details?.invoice_number != null)
       setInvoiceFieldVal(details.invoice_number || "");
   }, [details]);
+
+  useEffect(() => {
+    setLocalOrderTotal(details?.total_amount ?? order.total_amount ?? 0);
+  }, [details?.total_amount, order.order_id, order.total_amount]);
 
   useEffect(() => {
     const cust = order.customer;
@@ -229,9 +250,12 @@ export default function OrderLightbox({
 
   const handleDeleteItem = async (itemId) => {
     try {
-      await api.delete(
+      const res = await api.delete(
         `/orders/${encodeURIComponent(order.order_id)}/items/${itemId}`,
       );
+      if (res.data?.order_total != null) {
+        setLocalOrderTotal(res.data.order_total);
+      }
       toast.success("Item removed from order");
       setConfirmDeleteItemId(null);
       onAction && onAction(order.order_id, "refresh");
@@ -252,10 +276,7 @@ export default function OrderLightbox({
       const res = await api.get(
         `/orders/${encodeURIComponent(order.order_id)}/serial_numbers`,
       );
-      const normalized = (res.data || []).map((it) => ({
-        ...it,
-        serials: it.serials?.length ? it.serials : Array(it.quantity).fill(""),
-      }));
+      const normalized = (res.data || []).map(normalizeSerialSlots);
       setSerialItems(normalized);
       setSerialOpen(true);
     } catch {
@@ -347,6 +368,154 @@ export default function OrderLightbox({
     } catch {
       toast.error("Failed to save serial numbers");
     }
+  };
+
+  const resizeSerialSlots = useCallback((itemId, quantity, removedSerials = []) => {
+    const removed = new Set(removedSerials.map((serial) => String(serial).trim()));
+    setSerialItems((prev) =>
+      prev.map((item) => {
+        if (item.item_id !== itemId) return item;
+        const keptSerials = (item.serials || []).filter(
+          (serial) => !removed.has(String(serial).trim()),
+        );
+        return normalizeSerialSlots({ ...item, quantity, serials: keptSerials });
+      }),
+    );
+  }, []);
+
+  const getAssignedSerialsForItem = useCallback(
+    (itemId) => {
+      const openItem = serialItems.find((item) => item.item_id === itemId);
+      const detailItem = details?.serial_items?.find(
+        (item) => item.item_id === itemId,
+      );
+      const openSerials = openItem?.serials || [];
+      const detailSerials = detailItem?.serials || [];
+      const source = openSerials.some((serial) => String(serial || "").trim())
+        ? openSerials
+        : detailSerials;
+      return source
+        .map((serial) => String(serial || "").trim())
+        .filter(Boolean);
+    },
+    [details?.serial_items, serialItems],
+  );
+
+  const loadAssignedSerialsForItem = useCallback(
+    async (itemId) => {
+      const localSerials = getAssignedSerialsForItem(itemId);
+      if (localSerials.length > 0) return localSerials;
+
+      try {
+        const res = await api.get(
+          `/orders/${encodeURIComponent(order.order_id)}/serial_numbers`,
+        );
+        const normalized = (res.data || []).map(normalizeSerialSlots);
+        if (serialOpen) setSerialItems(normalized);
+        const item = normalized.find((entry) => entry.item_id === itemId);
+        return (item?.serials || [])
+          .map((serial) => String(serial || "").trim())
+          .filter(Boolean);
+      } catch {
+        return localSerials;
+      }
+    },
+    [getAssignedSerialsForItem, order.order_id, serialOpen],
+  );
+
+  const requiredSerialRemovals = (item, quantity, assignedSerials) => {
+    const decreaseBy = Math.max(0, Number(item.quantity) - quantity);
+    return Math.max(
+      Math.min(decreaseBy, assignedSerials.length),
+      Math.max(0, assignedSerials.length - quantity),
+    );
+  };
+
+  const applyItemQuantity = async (item, quantity, removeSerials = []) => {
+    try {
+      const res = await api.put(
+        `/orders/${encodeURIComponent(order.order_id)}/update-item-quantity`,
+        {
+          item_id: item.item_id,
+          quantity,
+          remove_serials: removeSerials,
+        },
+      );
+      if (res.data?.order_total != null) {
+        setLocalOrderTotal(res.data.order_total);
+      }
+      resizeSerialSlots(item.item_id, quantity, removeSerials);
+      setEditingQuantityItemId(null);
+      setEditingQuantity("");
+      setSerialRemovalPrompt(null);
+      setSelectedSerialsToRemove([]);
+      toast.success("Quantity updated");
+      onAction && onAction(order.order_id, "refresh");
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      if (err?.response?.status === 409 && detail?.serials?.length) {
+        const required = detail.required_remove_count || 1;
+        setSerialRemovalPrompt({
+          item,
+          newQuantity: quantity,
+          required,
+          serials: detail.serials,
+        });
+        setSelectedSerialsToRemove(detail.serials.slice(-required));
+        return;
+      }
+      toast.error(detail?.message || detail || "Failed to update quantity");
+    }
+  };
+
+  const saveItemQuantity = async (item) => {
+    const quantity = Number.parseInt(editingQuantity, 10);
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      toast.warn("Quantity must be at least 1");
+      return;
+    }
+
+    if (quantity === Number(item.quantity)) {
+      setEditingQuantityItemId(null);
+      setEditingQuantity("");
+      return;
+    }
+
+    const assignedSerials = await loadAssignedSerialsForItem(item.item_id);
+    const required = requiredSerialRemovals(item, quantity, assignedSerials);
+    if (quantity < Number(item.quantity) && required > 0) {
+      setSerialRemovalPrompt({
+        item,
+        newQuantity: quantity,
+        required,
+        serials: assignedSerials,
+      });
+      setSelectedSerialsToRemove(assignedSerials.slice(-required));
+      return;
+    }
+
+    await applyItemQuantity(item, quantity);
+  };
+
+  const toggleSerialRemoval = (serial) => {
+    setSelectedSerialsToRemove((prev) => {
+      if (prev.includes(serial)) {
+        return prev.filter((value) => value !== serial);
+      }
+      if (serialRemovalPrompt && prev.length >= serialRemovalPrompt.required) {
+        return prev;
+      }
+      return [...prev, serial];
+    });
+  };
+
+  const confirmQuantityDecrease = async () => {
+    if (!serialRemovalPrompt) return;
+    await applyItemQuantity(
+      serialRemovalPrompt.item,
+      serialRemovalPrompt.newQuantity,
+      selectedSerialsToRemove,
+    );
   };
 
   const submitUTR = async () => {
@@ -466,13 +635,16 @@ export default function OrderLightbox({
         toast.warn("Invalid price");
         return;
       }
-      await api.put(
+      const res = await api.put(
         `/orders/${encodeURIComponent(order.order_id)}/update-item-price`,
         {
           item_id: itemId,
           unit_price: newPrice,
         },
       );
+      if (res.data?.order_total != null) {
+        setLocalOrderTotal(res.data.order_total);
+      }
       toast.success("Price updated");
       setEditingItemId(null);
       setEditingPrice("");
@@ -605,6 +777,55 @@ export default function OrderLightbox({
 
   return (
     <>
+      {serialRemovalPrompt && (
+        <div className="serial-remove-overlay">
+          <div className="serial-remove-modal">
+            <div className="serial-remove-title">Select Serials to Remove</div>
+            <div className="serial-remove-copy">
+              Quantity will become {serialRemovalPrompt.newQuantity}. Select{" "}
+              {serialRemovalPrompt.required} assigned serial
+              {serialRemovalPrompt.required > 1 ? "s" : ""} to remove from{" "}
+              {serialRemovalPrompt.item.product_name}.
+            </div>
+            <div className="serial-remove-list">
+              {serialRemovalPrompt.serials.map((serial) => (
+                <label className="serial-remove-option" key={serial}>
+                  <input
+                    type="checkbox"
+                    checked={selectedSerialsToRemove.includes(serial)}
+                    onChange={() => toggleSerialRemoval(serial)}
+                  />
+                  <span>{serial}</span>
+                </label>
+              ))}
+            </div>
+            <div className="serial-remove-footer">
+              <span className="serial-remove-count">
+                {selectedSerialsToRemove.length}/{serialRemovalPrompt.required}{" "}
+                selected
+              </span>
+              <button
+                className="lb-btn lb-btn-secondary lb-btn-sm"
+                onClick={() => {
+                  setSerialRemovalPrompt(null);
+                  setSelectedSerialsToRemove([]);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="lb-btn lb-btn-primary lb-btn-sm"
+                disabled={
+                  selectedSerialsToRemove.length !== serialRemovalPrompt.required
+                }
+                onClick={confirmQuantityDecrease}
+              >
+                Update Quantity
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div
         className="lb-overlay"
         onClick={(e) => e.target === e.currentTarget && onClose()}
@@ -745,7 +966,7 @@ export default function OrderLightbox({
                   <div className="lb-info-card">
                     <div className="lb-info-label">Amount</div>
                     <div className="lb-info-value">
-                      {fmtCurrency(order.total_amount)}
+                      {fmtCurrency(localOrderTotal)}
                     </div>
                   </div>
                   <div className="lb-info-card">
@@ -1118,7 +1339,69 @@ export default function OrderLightbox({
                                 </div>
                               )}
                             </td>
-                            <td>{it.quantity}</td>
+                            <td>
+                              {!isFulfilled &&
+                              editingQuantityItemId === it.item_id ? (
+                                <div className="inline-qty-editor">
+                                  <input
+                                    className="inline-edit-input qty-edit-input"
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={editingQuantity}
+                                    onChange={(e) =>
+                                      setEditingQuantity(e.target.value)
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter")
+                                        saveItemQuantity(it);
+                                      if (e.key === "Escape") {
+                                        setEditingQuantityItemId(null);
+                                        setEditingQuantity("");
+                                      }
+                                    }}
+                                    autoFocus
+                                  />
+                                  <button
+                                    className="lb-btn lb-btn-primary lb-btn-sm"
+                                    onClick={() => saveItemQuantity(it)}
+                                  >
+                                    ✓
+                                  </button>
+                                  <button
+                                    className="lb-btn lb-btn-secondary lb-btn-sm"
+                                    onClick={() => {
+                                      setEditingQuantityItemId(null);
+                                      setEditingQuantity("");
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ) : (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                  }}
+                                >
+                                  <span>{it.quantity}</span>
+                                  {!isFulfilled && (
+                                    <span
+                                      className="edit-icon"
+                                      onClick={() => {
+                                        setEditingQuantityItemId(it.item_id);
+                                        setEditingQuantity(String(it.quantity));
+                                      }}
+                                      title="Edit quantity"
+                                    >
+                                      ✏️
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </td>
                             <td>
                               {!isFulfilled && editingItemId === it.item_id ? (
                                 <input

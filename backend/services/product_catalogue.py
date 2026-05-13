@@ -19,7 +19,9 @@ import logging
 import httpx
 from datetime import datetime, timedelta
 from typing import Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote, urlparse
+
+from services.chat_media_service import media_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -446,13 +448,22 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
         if sku:
             rows = db.execute(
                 text("""
+                    WITH matched_product AS (
+                        SELECT p.product_id
+                        FROM products p
+                        WHERE LOWER(TRIM(p.sku_id)) = LOWER(TRIM(:sku))
+                        ORDER BY
+                            CASE
+                                WHEN LOWER(TRIM(p.sku_id)) = LOWER(TRIM(:sku)) THEN 0
+                                ELSE 2
+                            END,
+                            p.product_id ASC
+                        LIMIT 1
+                    )
                     SELECT pi.image_url
                     FROM product_images pi
-                    JOIN products p ON p.product_id = pi.product_id
-                    WHERE (
-                        LOWER(TRIM(p.sku_id)) = LOWER(TRIM(:sku))
-                        OR LOWER(TRIM(COALESCE(p.zoho_sku, ''))) = LOWER(TRIM(:sku))
-                    )
+                    JOIN matched_product mp ON mp.product_id = pi.product_id
+                    WHERE pi.product_id = mp.product_id
                       AND pi.image_url IS NOT NULL
                       AND pi.image_url != ''
                     ORDER BY pi.image_id ASC
@@ -505,7 +516,7 @@ def _catalogue_image_fallback(sku: str, product_name: str = "") -> list[str]:
         p_sku  = (p.get("sku") or "").lower()
         p_name = (p.get("name") or "").lower()
         if (sku and p_sku == sku.lower()) or (product_name and product_name.lower()[:20] in p_name):
-            img = (p.get("image_url") or "").strip()
+            img = _normalise_product_image_url(p.get("image_url") or "")
             if img:
                 logger.info("Catalogue fallback image for sku=%r: %s", sku, img[:80])
                 return [img]
@@ -515,12 +526,29 @@ def _catalogue_image_fallback(sku: str, product_name: str = "") -> list[str]:
 def _to_absolute_urls(raw_urls: list[str]) -> list[str]:
     """Ensure all URLs are absolute. Filter empty strings."""
     result = []
-    store  = (_WIX_STORE_URL or "").rstrip("/")
     for url in raw_urls:
-        url = (url or "").strip()
+        url = _normalise_product_image_url(url)
         if not url:
             continue
-        if not url.startswith("http"):
-            url = f"{store}/{url.lstrip('/')}" if store else url
         result.append(url)
     return result[:2]
+
+
+def _normalise_product_image_url(raw_url: str) -> str:
+    url = (raw_url or "").strip()
+    if not url:
+        return ""
+
+    parsed = urlparse(url)
+    path = unquote(parsed.path.lstrip("/")) if parsed.scheme else unquote(url.lstrip("/"))
+
+    if path.startswith("media/"):
+        return media_public_url(path)
+    if path.startswith("product_images/"):
+        return media_public_url(path)
+
+    if parsed.scheme in ("http", "https"):
+        return url
+
+    store = (_WIX_STORE_URL or "").rstrip("/")
+    return f"{store}/{url.lstrip('/')}" if store else url

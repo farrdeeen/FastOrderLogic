@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import {
   fetchMessages,
-  getChatWsUrl,
   sendChatMessage,
   uploadChatMedia,
 } from "./chatApi";
@@ -739,8 +738,6 @@ export default function ChatWindow({
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
-  const wsRef = useRef(null);
-  const wsReconnectRef = useRef(null);
 
   // Expose fill handle for quick replies
   useEffect(() => {
@@ -781,75 +778,34 @@ export default function ChatWindow({
 
   useEffect(() => {
     if (!chat?.id) return;
+    window.__folActiveChatId = chat.id;
     setMessages([]);
     setError("");
     setInput("");
     loadMessages(chat.id, true);
+    return () => {
+      if (Number(window.__folActiveChatId) === Number(chat.id)) {
+        window.__folActiveChatId = null;
+      }
+    };
   }, [chat?.id, loadMessages]);
 
-  // Polling fallback (30 s)
+  // Light fallback. Realtime updates come from the single app-level chat listener.
   useEffect(() => {
     if (!chat?.id) return;
-    const t = setInterval(() => loadMessages(chat.id, false), 30000);
+    const t = setInterval(() => loadMessages(chat.id, false), 60000);
     return () => clearInterval(t);
   }, [chat?.id, loadMessages]);
 
-  // WebSocket
+  // App-level realtime fanout.
   useEffect(() => {
     if (!chat?.id) return undefined;
-    let stopped = false;
-    const sessionId = chat.id;
-
-    const connect = () => {
-      if (stopped || typeof WebSocket === "undefined") return;
-      const ws = new WebSocket(getChatWsUrl());
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        let payload;
-        try {
-          payload = JSON.parse(event.data);
-        } catch {
-          return;
-        }
-        if (payload.type !== "chat_changed") return;
-        if (
-          payload.session_id &&
-          Number(payload.session_id) !== Number(sessionId)
-        )
-          return;
-        loadMessages(sessionId, false);
-      };
-      ws.onerror = () => ws.close();
-      ws.onclose = () => {
-        if (stopped) return;
-        wsReconnectRef.current = window.setTimeout(connect, 5000);
-      };
-    };
-    connect();
-
-    return () => {
-      stopped = true;
-      if (wsReconnectRef.current) {
-        window.clearTimeout(wsReconnectRef.current);
-        wsReconnectRef.current = null;
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [chat?.id, loadMessages]);
-
-  // Custom event from sidebar new-message badge
-  useEffect(() => {
-    if (!chat?.id) return undefined;
-    const onUserMessage = (event) => {
+    const onChatChanged = (event) => {
       if (Number(event.detail?.session_id) === Number(chat.id))
         loadMessages(chat.id, false);
     };
-    window.addEventListener("chat:user-message", onUserMessage);
-    return () => window.removeEventListener("chat:user-message", onUserMessage);
+    window.addEventListener("chat:changed", onChatChanged);
+    return () => window.removeEventListener("chat:changed", onChatChanged);
   }, [chat?.id, loadMessages]);
 
   useEffect(() => {

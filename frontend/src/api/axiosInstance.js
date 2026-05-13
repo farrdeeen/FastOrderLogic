@@ -12,13 +12,11 @@ api.interceptors.request.use(
       window.Clerk.session
     ) {
       const token = await window.Clerk.session.getToken();
-      console.log("CLERK TOKEN SENT:", token); // 👈 ADD THIS
 
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
     }
-    console.log("REQUEST HEADERS:", config.headers); // 👈 ADD THIS
     return config;
   },
   (error) => Promise.reject(error)

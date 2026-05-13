@@ -2,6 +2,23 @@ import { useState, useEffect } from "react";
 import api from "../../api/axiosInstance";
 import { toast } from "./ToastSystem";
 
+function formatApiError(err) {
+  const detail = err?.response?.data?.detail;
+  if (!detail) return "Failed to push to Delhivery";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) =>
+        typeof item === "string"
+          ? item
+          : item?.msg || item?.message || JSON.stringify(item),
+      )
+      .filter(Boolean)
+      .join(" | ");
+  }
+  return detail.message || detail.error || JSON.stringify(detail);
+}
+
 export default function DelhiveryPushModal({ order, onClose, onSuccess }) {
   const [serviceability, setServiceability] = useState(null);
   const [checking, setChecking] = useState(false);
@@ -60,7 +77,7 @@ export default function DelhiveryPushModal({ order, onClose, onSuccess }) {
       onSuccess(res.data.waybill);
       onClose();
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "Failed to push to Delhivery");
+      toast.error(formatApiError(err));
     } finally {
       setPushing(false);
     }

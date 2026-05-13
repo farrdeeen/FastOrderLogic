@@ -100,6 +100,61 @@ def _headers():
     }
 
 
+def _flatten_error_text(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        return [value] if value else []
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            parts.extend(_flatten_error_text(item))
+        return parts
+    if isinstance(value, dict):
+        parts = []
+        preferred = (
+            "error",
+            "errors",
+            "message",
+            "msg",
+            "detail",
+            "remarks",
+            "remark",
+            "rmk",
+            "status",
+            "error_message",
+            "client_message",
+        )
+        for key in preferred:
+            if key in value:
+                parts.extend(_flatten_error_text(value.get(key)))
+        if not parts:
+            for nested in value.values():
+                parts.extend(_flatten_error_text(nested))
+        return parts
+    return []
+
+
+def _delhivery_error_message(data, fallback: str = "Delhivery rejected this shipment") -> str:
+    parts = []
+    for text_value in _flatten_error_text(data):
+        text_value = " ".join(str(text_value).split())
+        if text_value and text_value.lower() not in {"false", "none", "null"}:
+            parts.append(text_value)
+
+    unique = []
+    for part in parts:
+        if part not in unique:
+            unique.append(part)
+
+    if unique:
+        return " | ".join(unique[:6])
+    return fallback
+
+
 async def _get(url: str, params: dict = None):
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(url, headers=_headers(), params=params)
@@ -184,6 +239,7 @@ async def push_order_to_delhivery(
 
     # ── gather order details ──────────────────────────────────────────────────
     customer = None
+    row = None
     if order.customer_id:
         row = db.execute(
             text("SELECT name, mobile, email FROM customer WHERE customer_id=:cid"),
@@ -231,14 +287,20 @@ async def push_order_to_delhivery(
     hsn = payload.hsn_code or DEFAULT_HSN
 
     # ── build Delhivery payload ───────────────────────────────────────────────
-    consignee_phone = str(customer.get("mobile", "")).strip()
-    consignee_name  = str(customer.get("name", "")).strip()
+    address_map = dict(address._mapping)
+    consignee_phone = str(address_map.get("mobile") or customer.get("mobile", "")).strip()
+    consignee_name  = str(address_map.get("name") or customer.get("name", "")).strip()
     addr_line       = str(address.address_line or "").replace("&", "and").replace("#", "").replace("%", "").strip()
     city            = str(address.city or "").strip()
     state           = str(getattr(address, "state_name", "") or "").strip()
     pincode         = str(address.pincode or "").strip()
     locality = str(address.locality or "").strip()
     full_address = f"{addr_line}, {locality}" if locality else addr_line
+
+    if not consignee_name:
+        raise HTTPException(400, "Delivery address is missing recipient name")
+    if not consignee_phone:
+        raise HTTPException(400, "Delivery address is missing recipient mobile number")
 
     delhivery_order = {
         "name":            consignee_name,
@@ -271,7 +333,7 @@ async def push_order_to_delhivery(
         "shipment_length": str(payload.length),
         "seller_gst_tin":  SELLER_GST,
         "shipping_mode":   "Surface",
-        "address_type":    "home",
+        "address_type":    str(address_map.get("address_type") or "home").lower(),
     }
 
     if payload.e_waybill:
@@ -302,20 +364,37 @@ async def push_order_to_delhivery(
     r = await _post(url, body_data)
 
     if r.status_code not in (200, 201):
-        raise HTTPException(502, f"Delhivery API error {r.status_code}: {r.text[:500]}")
+        try:
+            error_data = r.json()
+        except Exception:
+            error_data = r.text
+        raise HTTPException(
+            502,
+            f"Delhivery API error {r.status_code}: {_delhivery_error_message(error_data, r.text[:500])}",
+        )
 
-    result = r.json()
+    try:
+        result = r.json()
+    except Exception:
+        raise HTTPException(502, f"Delhivery returned invalid JSON: {r.text[:500]}")
 
     # ── parse response ────────────────────────────────────────────────────────
+    if result.get("success") is False:
+        raise HTTPException(502, _delhivery_error_message(result, "Delhivery rejected this shipment"))
+
     packages = result.get("packages", [])
     if not packages:
-        raise HTTPException(502, f"Delhivery returned no package data: {result}")
+        raise HTTPException(502, _delhivery_error_message(result, f"Delhivery returned no package data: {result}"))
 
     pkg = packages[0]
+    pkg_status = str(pkg.get("status") or "").strip().lower()
+    if pkg_status in {"fail", "failed", "failure", "error", "rejected"}:
+        raise HTTPException(502, _delhivery_error_message(pkg, "Delhivery rejected this shipment"))
+
     waybill = pkg.get("waybill") or pkg.get("refnum") or ""
 
     if not waybill:
-        raise HTTPException(502, f"No waybill in Delhivery response: {result}")
+        raise HTTPException(502, _delhivery_error_message(result, f"No waybill in Delhivery response: {result}"))
 
     # ── persist to DB ─────────────────────────────────────────────────────────
     order.awb_number      = waybill

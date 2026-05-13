@@ -251,6 +251,8 @@ export const STYLES = `
     font-family: inherit; font-size: 13px; outline: none; width: 100%;
     box-shadow: 0 0 0 3px rgba(21,112,239,.12);
   }
+  .inline-qty-editor { display: flex; align-items: center; gap: 5px; min-width: 148px; }
+  .qty-edit-input { width: 62px; min-width: 62px; padding: 5px 7px; }
   .inline-edit-select {
     padding: 5px 9px; border: 1px solid var(--accent); border-radius: 5px;
     font-family: inherit; font-size: 12.5px; outline: none; width: 100%;
@@ -312,6 +314,32 @@ export const STYLES = `
     transition: border .15s; box-sizing: border-box;
   }
   .serial-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,112,239,.12); }
+
+  .serial-remove-overlay {
+    position: fixed; inset: 0; z-index: 2100; background: rgba(16,24,40,.48);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .serial-remove-modal {
+    width: min(440px, 100%); background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); padding: 16px;
+  }
+  .serial-remove-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+  .serial-remove-copy { font-size: 12.5px; color: var(--text2); line-height: 1.45; margin-bottom: 12px; }
+  .serial-remove-list {
+    max-height: 240px; overflow-y: auto; border: 1px solid var(--border);
+    border-radius: var(--radius); background: var(--surface2);
+  }
+  .serial-remove-option {
+    display: flex; align-items: center; gap: 9px; padding: 9px 11px;
+    border-bottom: 1px solid var(--border); font-family: 'DM Mono', monospace;
+    font-size: 12px; color: var(--text); cursor: pointer;
+  }
+  .serial-remove-option:last-child { border-bottom: none; }
+  .serial-remove-option input { margin: 0; }
+  .serial-remove-footer {
+    display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px;
+  }
+  .serial-remove-count { margin-right: auto; font-size: 11.5px; color: var(--text3); font-weight: 600; }
 
   .remarks-utr-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .remarks-input {
@@ -698,6 +726,13 @@ export const STYLES = `
     }
     .lb-items-table {
       min-width: 560px;
+    }
+    .serial-remove-footer {
+      flex-wrap: wrap;
+    }
+    .serial-remove-count {
+      flex: 1 0 100%;
+      margin-right: 0;
     }
     .lb-actions {
       position: sticky;

@@ -32,6 +32,7 @@ const EMPTY_FORM = {
   mobile: "",
   email: "",
   gst_number: "",
+  csp_code: "",
   customer_type: "offline",
   address_line: "",
   locality: "",
@@ -173,6 +174,7 @@ export default function CustomerForm({
         state_id: Number.isFinite(parsedStateId) ? parsedStateId : null,
         email: form.email.trim() || null,
         gst_number: form.gst_number.trim() || null,
+        csp_code: form.csp_code.trim() || null,
         landmark: form.landmark.trim() || null,
         alternate_phone: form.alternate_phone.trim() || null,
         locality: form.locality.trim() || "",
@@ -251,6 +253,19 @@ export default function CustomerForm({
                 <option value="online">Online</option>
               </select>
             </div>
+
+            {form.customer_type === "offline" && (
+              <div className="f-field">
+                <label className="f-label">CSP Code</label>
+                <input
+                  className="f-input mono"
+                  placeholder="optional"
+                  value={form.csp_code}
+                  maxLength={100}
+                  onChange={(e) => set("csp_code", e.target.value.toUpperCase())}
+                />
+              </div>
+            )}
 
             <div className="f-field">
               <label className="f-label">Email</label>

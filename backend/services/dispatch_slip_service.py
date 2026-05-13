@@ -13,6 +13,7 @@ from services.chat_service import (
     normalize_phone,
     save_message,
 )
+from services.order_preferences import ensure_order_preference_columns
 from services.whatsapp_service import send_document_message, send_text_message
 
 logger = logging.getLogger(__name__)
@@ -57,8 +58,13 @@ def _wrap(draw: ImageDraw.ImageDraw, text_value: str, font, width: int) -> list[
 
 
 def get_dispatch_pod_data(db, order_id: str) -> Optional[dict]:
+    send_whatsapp_expr = (
+        "COALESCE(o.send_whatsapp, 1)"
+        if ensure_order_preference_columns(db)
+        else "1"
+    )
     order = db.execute(
-        text("""
+        text(f"""
             SELECT
                 o.order_id,
                 o.created_at,
@@ -69,6 +75,7 @@ def get_dispatch_pod_data(db, order_id: str) -> Optional[dict]:
                 o.awb_number,
                 o.channel,
                 o.address_id,
+                {send_whatsapp_expr} AS send_whatsapp,
                 COALESCE(c.name, oc.name) AS customer_name,
                 COALESCE(c.mobile, oc.mobile) AS customer_mobile,
                 COALESCE(c.email, oc.email) AS customer_email
@@ -205,6 +212,15 @@ async def send_order_dispatch_update(db, order_id: str, session_id: Optional[int
         return {"success": False, "error": "order_not_found"}
 
     order = data["order"]
+    if str(order.get("send_whatsapp", 1)).strip().lower() in {"0", "false", "no", "off"}:
+        return {
+            "success": True,
+            "order_id": order_id,
+            "skipped": True,
+            "reason": "whatsapp_disabled_for_order",
+            "errors": [],
+        }
+
     awb = order.get("awb_number") or ""
     if not awb or awb == "To be assigned":
         return {"success": False, "error": "awb_missing"}

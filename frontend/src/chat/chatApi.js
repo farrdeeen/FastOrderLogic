@@ -115,6 +115,12 @@ export async function resolveSession(sessionId) {
   return res.data;
 }
 
+// POST /chat/sessions/{id}/flag
+export async function updateSessionFlag(sessionId, flag) {
+  const res = await api.post(`/chat/sessions/${sessionId}/flag`, { flag });
+  return res.data;
+}
+
 // POST /chat/toggle-human
 export async function toggleHumanMode(sessionId, phone, isHuman) {
   const res = await api.post("/chat/toggle-human", {

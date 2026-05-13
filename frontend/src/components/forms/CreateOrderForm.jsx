@@ -1093,7 +1093,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
   const [deliveryCharge, setDeliveryCharge] = useState("");
   const [freeDelivery, setFreeDelivery] = useState(false);
   const [paymentType, setPaymentType] = useState("");
-  const [sendWhatsApp, setSendWhatsApp] = useState(true);
+  const [sendWhatsApp, setSendWhatsApp] = useState(false);
   const [manualSubtotal, setManualSubtotal] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
@@ -1540,7 +1540,7 @@ const CreateOrderForm = forwardRef(function CreateOrderForm(
       setDeliveryCharge("");
       setFreeDelivery(false);
       setPaymentType("");
-      setSendWhatsApp(true);
+      setSendWhatsApp(false);
       setManualSubtotal("");
       setTimeout(() => onOrderCreated?.(), 1000);
     } catch (err) {

@@ -624,9 +624,21 @@ export default function OrdersTable({
               `/orders/${encodeURIComponent(id)}/details`,
             );
             setDetailsCache((p) => ({ ...p, [id]: res.data }));
-            // Also patch serial_status locally
+            const rowPatch = {};
             if (res.data?.serial_status) {
-              applyLocalUpdate(id, { serial_status: res.data.serial_status });
+              rowPatch.serial_status = res.data.serial_status;
+            }
+            if ("invoice_number" in res.data) {
+              rowPatch.invoice_number = res.data.invoice_number;
+            }
+            if ("total_amount" in res.data) {
+              rowPatch.total_amount = res.data.total_amount;
+            }
+            if ("total_items" in res.data) {
+              rowPatch.total_items = res.data.total_items;
+            }
+            if (Object.keys(rowPatch).length > 0) {
+              applyLocalUpdate(id, rowPatch);
             }
           } catch (e) {
             console.error(e);

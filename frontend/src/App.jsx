@@ -1,15 +1,21 @@
 import { SignedIn, SignedOut, SignIn, UserButton } from "@clerk/clerk-react";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import api from "./api/axiosInstance";
-import { useAuth } from "@clerk/clerk-react";
+import { useAuth, useUser } from "@clerk/clerk-react";
 import OrdersTable from "./components/orders";
 import SearchBar from "./components/SearchBar";
 import NavDrawer from "./components/NavDrawer";
 import ChatPage from "./chat/ChatPage";
+import ChatNotificationListener from "./chat/ChatNotificationListener";
 import DeviceTransactionForm from "./components/DeviceTransactionForm";
 import DashboardPage from "./dashboard/DashboardPage";
 import SerialSearchPage from "./components/SerialSearchPage";
+import {
+  accessFromServer,
+  canAccessPage,
+  firstAllowedPage,
+} from "./auth/accessControl";
 
 // ── Forms now live in components/forms/ ──────────────────────────────────────
 import CreateOrderForm from "./components/forms/CreateOrderForm";
@@ -31,6 +37,8 @@ const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 const PAGE_SIZE = 500;
 const PARALLEL_PAGES = 3;
+const ACCESS_DEFAULT_ALLOWED =
+  (import.meta.env.VITE_CLERK_ACCESS_DEFAULT || "allow").toLowerCase() !== "deny";
 
 function PaymentRedirectPage() {
   const token = decodeURIComponent(
@@ -81,6 +89,7 @@ function PaymentRedirectPage() {
 
 export default function App() {
   const { isLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
 
   if (window.location.pathname.startsWith("/pay")) {
     return <PaymentRedirectPage />;
@@ -104,8 +113,49 @@ export default function App() {
   const [activePage, setActivePage] = useState("dashboard");
   const [invoiceLoading, setInvoiceLoading] = useState({});
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [serverAccess, setServerAccess] = useState(null);
 
   const fetchRunRef = useRef(0);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) {
+      setServerAccess(null);
+      return;
+    }
+
+    let cancelled = false;
+    api
+      .get("/auth/me")
+      .then((res) => {
+        if (!cancelled) setServerAccess(res.data || null);
+      })
+      .catch(() => {
+        if (!cancelled) setServerAccess(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, isSignedIn, user?.id]);
+
+  const access = useMemo(
+    () => accessFromServer(serverAccess, user, ACCESS_DEFAULT_ALLOWED),
+    [serverAccess, user],
+  );
+
+  const canAccess = useCallback(
+    (pageId) => canAccessPage(access, pageId),
+    [access],
+  );
+  const hasAnyAccess = access.allowedPages.length > 0;
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    if (canAccess(activePage)) return;
+
+    const fallback = firstAllowedPage(access);
+    if (fallback) setActivePage(fallback);
+  }, [access, activePage, canAccess, isLoaded, isSignedIn]);
 
   const pageTitle = {
     dashboard: "📊 Dashboard",
@@ -208,6 +258,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return;
+    if (!canAccess("orders")) return;
     if (activePage !== "orders") return;
     fetchAllOrders(filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -219,6 +270,7 @@ export default function App() {
     isLoaded,
     isSignedIn,
     fetchAllOrders,
+    canAccess,
   ]);
 
   // ── Delta / optimistic merge ──────────────────────────────────────────────
@@ -394,6 +446,7 @@ export default function App() {
 
       {/* ═════════════ SIGNED IN ═════════════ */}
       <SignedIn>
+        {canAccess("chat") && <ChatNotificationListener />}
         <Box
           sx={{
             display: "flex",
@@ -408,6 +461,7 @@ export default function App() {
             onNavigate={handleNavigate}
             mobileOpen={mobileNavOpen}
             onMobileClose={() => setMobileNavOpen(false)}
+            allowedPages={access.allowedPages}
           />
 
           <Box
@@ -483,7 +537,31 @@ export default function App() {
             </Box>
 
             {/* ═══════════ ORDERS PAGE ═══════════ */}
-            <Fade in={activePage === "orders"} mountOnEnter unmountOnExit>
+            {!hasAnyAccess && (
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 3,
+                  borderRadius: 2,
+                  border: "1px solid #e5e7eb",
+                  maxWidth: 520,
+                }}
+              >
+                <Typography sx={{ fontSize: 18, fontWeight: 700, mb: 1 }}>
+                  Access not assigned
+                </Typography>
+                <Typography sx={{ fontSize: 14, color: "#64748b" }}>
+                  Your Clerk account is signed in, but this app has no pages
+                  enabled for it yet.
+                </Typography>
+              </Paper>
+            )}
+
+            <Fade
+              in={activePage === "orders" && canAccess("orders")}
+              mountOnEnter
+              unmountOnExit
+            >
               <div style={{ width: "100%", minWidth: 0 }}>
                 <Box
                   sx={{
@@ -510,24 +588,30 @@ export default function App() {
                   >
                     {syncing ? "Syncing..." : "🔄 Sync Wix Orders"}
                   </Button>
-                  <Button
-                    variant="contained"
-                    onClick={() => setActivePage("create-order")}
-                  >
-                    ➕ Create Order
-                  </Button>
-                  <Button
-                    variant="contained"
-                    onClick={() => setActivePage("device-entry")}
-                  >
-                    Bulk In/Out
-                  </Button>
-                  <Button
-                    variant="contained"
-                    onClick={() => setActivePage("serial-search")}
-                  >
-                    🔎 Serial Search
-                  </Button>
+                  {canAccess("create-order") && (
+                    <Button
+                      variant="contained"
+                      onClick={() => setActivePage("create-order")}
+                    >
+                      ➕ Create Order
+                    </Button>
+                  )}
+                  {canAccess("device-entry") && (
+                    <Button
+                      variant="contained"
+                      onClick={() => setActivePage("device-entry")}
+                    >
+                      Bulk In/Out
+                    </Button>
+                  )}
+                  {canAccess("serial-search") && (
+                    <Button
+                      variant="contained"
+                      onClick={() => setActivePage("serial-search")}
+                    >
+                      🔎 Serial Search
+                    </Button>
+                  )}
                 </Box>
                 <SearchBar filters={filters} setFilters={setFilters} />
 
@@ -547,7 +631,11 @@ export default function App() {
             </Fade>
 
             {/* ═══════════ CREATE ORDER PAGE ═══════════ */}
-            <Fade in={activePage === "create-order"} mountOnEnter unmountOnExit>
+            <Fade
+              in={activePage === "create-order" && canAccess("create-order")}
+              mountOnEnter
+              unmountOnExit
+            >
               <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
                 {/*
                   CreateOrderForm now owns its header with Back / Browse / Add Customer.
@@ -567,7 +655,7 @@ export default function App() {
             {/* ═══════════ CHAT PAGE ═══════════ */}
             <div
               style={{
-                display: activePage === "chat" ? "flex" : "none",
+                display: activePage === "chat" && canAccess("chat") ? "flex" : "none",
                 flex: 1,
                 minHeight: 0,
                 width: "100%",
@@ -575,13 +663,17 @@ export default function App() {
                 overflow: "hidden",
               }}
             >
-              {activePage === "chat" && (
+              {activePage === "chat" && canAccess("chat") && (
                 <ChatPage onOpenNav={() => setMobileNavOpen(true)} />
               )}
             </div>
 
             {/* ═══════════ DEVICE ENTRY PAGE ═══════════ */}
-            <Fade in={activePage === "device-entry"} mountOnEnter unmountOnExit>
+            <Fade
+              in={activePage === "device-entry" && canAccess("device-entry")}
+              mountOnEnter
+              unmountOnExit
+            >
               <div style={{ width: "100%", minWidth: 0 }}>
                 <Paper sx={{ p: { xs: 1.5, sm: 3 }, borderRadius: 2 }}>
                   <Button
@@ -596,7 +688,7 @@ export default function App() {
               </div>
             </Fade>
             <Fade
-              in={activePage === "serial-search"}
+              in={activePage === "serial-search" && canAccess("serial-search")}
               mountOnEnter
               unmountOnExit
             >
@@ -613,7 +705,11 @@ export default function App() {
             </Fade>
             {/* ═══════════ DASHBOARD PAGE ═══════════ */}
 
-            <Fade in={activePage === "dashboard"} mountOnEnter unmountOnExit>
+            <Fade
+              in={activePage === "dashboard" && canAccess("dashboard")}
+              mountOnEnter
+              unmountOnExit
+            >
               <div style={{ width: "100%", minWidth: 0 }}>
                 <DashboardPage />
               </div>

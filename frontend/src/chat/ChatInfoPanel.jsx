@@ -6,7 +6,12 @@
 import { useEffect, useState } from "react";
 import { Box, Typography } from "@mui/material";
 import { X, ChevronRight, Package, Flag, Zap, Truck } from "lucide-react";
-import { resolveSession, sendDispatchSlip, sendOrderConfirmation } from "./chatApi";
+import {
+  resolveSession,
+  sendDispatchSlip,
+  sendOrderConfirmation,
+  updateSessionFlag,
+} from "./chatApi";
 import {
   chatStyles,
   FLAG_ACTIONS,
@@ -224,10 +229,11 @@ export default function ChatInfoPanel({
   const isResolved = currentFlag === "resolved" || chat?.status === "resolved";
 
   useEffect(() => {
+    setActiveFlag(null);
     setDispatchOrderId(chat?.linked_order_id || "");
     setDispatchSent(null);
     setDispatchError(null);
-  }, [chat?.id, chat?.linked_order_id]);
+  }, [chat?.id, chat?.flag, chat?.linked_order_id]);
 
   if (!chat) {
     return (
@@ -263,6 +269,11 @@ export default function ChatInfoPanel({
       await resolveSession(chat.id);
       setActiveFlag("resolved");
       if (onResolved) onResolved(chat.id);
+      window.dispatchEvent(
+        new CustomEvent("chat:session-updated", {
+          detail: { session_id: chat.id, status: "resolved" },
+        }),
+      );
     } catch {
       /* silent */
     } finally {
@@ -270,11 +281,40 @@ export default function ChatInfoPanel({
     }
   };
 
-  const handleFlag = (flagId) => {
+  const handleFlag = async (flagId) => {
     const next = currentFlag === flagId ? null : flagId;
+    if (flagId === "resolved") {
+      setActiveFlag(next);
+      if (next === "resolved") handleResolve();
+      return;
+    }
+
     setActiveFlag(next);
     if (onFlagChange) onFlagChange(chat.id, next);
-    if (flagId === "resolved" && next === "resolved") handleResolve();
+    window.dispatchEvent(
+      new CustomEvent("chat:session-updated", {
+        detail: { session_id: chat.id, flag: next },
+      }),
+    );
+    try {
+      const result = await updateSessionFlag(chat.id, next);
+      const savedFlag = result?.flag ?? null;
+      setActiveFlag(savedFlag);
+      if (onFlagChange) onFlagChange(chat.id, savedFlag);
+      window.dispatchEvent(
+        new CustomEvent("chat:session-updated", {
+          detail: { session_id: chat.id, flag: savedFlag },
+        }),
+      );
+    } catch {
+      setActiveFlag(chat?.flag ?? null);
+      if (onFlagChange) onFlagChange(chat.id, chat?.flag ?? null);
+      window.dispatchEvent(
+        new CustomEvent("chat:session-updated", {
+          detail: { session_id: chat.id, flag: chat?.flag ?? null },
+        }),
+      );
+    }
   };
 
   const handleQuickReply = (reply) => {

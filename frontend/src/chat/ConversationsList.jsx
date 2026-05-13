@@ -2,11 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Typography } from "@mui/material";
 import { Bell, Menu, Search, MessageCirclePlus } from "lucide-react";
-import {
-  fetchConversations,
-  fetchRecentUserMessages,
-  getChatWsUrl,
-} from "./chatApi";
+import { fetchConversations } from "./chatApi";
 import {
   chatStyles,
   CHAT_FILTERS,
@@ -35,6 +31,14 @@ function getBadges(conv) {
   return badges;
 }
 
+function isHumanMode(value) {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes";
+  }
+  return Boolean(value);
+}
+
 function matchesFilter(conv, filterId) {
   if (filterId === "all") return true;
   if (filterId === "flagged") return conv.flag === "flagged";
@@ -56,7 +60,7 @@ function toChat(conv) {
     flag: conv.flag,
     unread: conv.unread_count,
     linked_order_id: conv.linked_order_id,
-    is_human: Boolean(conv.is_human),
+    is_human: isHumanMode(conv.is_human),
   };
 }
 
@@ -72,93 +76,67 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
     return Notification.permission;
   });
 
-  const latestRef = useRef(new Map());
-  const loadedOnce = useRef(false);
-  const activeIdRef = useRef(activeId);
-  const wsRef = useRef(null);
-  const wsReconnectRef = useRef(null);
-  const notifiedRef = useRef(new Set());
-  const lastUserMessageIdRef = useRef(null);
-  useEffect(() => {
-    activeIdRef.current = activeId;
-  }, [activeId]);
+  const refreshTimerRef = useRef(null);
 
-  const requestNotifications = useCallback(async () => {
-    if (!("Notification" in window)) {
-      setNotificationPermission("unsupported");
-      return;
-    }
-    const p = await Notification.requestPermission();
-    setNotificationPermission(p);
+  useEffect(() => {
+    const handleSessionUpdate = (event) => {
+      const detail = event.detail || {};
+      const sessionId = detail.session_id || detail.id;
+      if (!sessionId) return;
+      setConversations((prev) =>
+        prev.map((conv) =>
+          Number(conv.id) === Number(sessionId)
+            ? {
+                ...conv,
+                ...("is_human" in detail
+                  ? { is_human: isHumanMode(detail.is_human) }
+                  : {}),
+                ...(detail.status ? { status: detail.status } : {}),
+                ...("flag" in detail ? { flag: detail.flag } : {}),
+              }
+            : conv,
+        ),
+      );
+    };
+    window.addEventListener("chat:session-updated", handleSessionUpdate);
+    return () =>
+      window.removeEventListener("chat:session-updated", handleSessionUpdate);
   }, []);
 
-  const showBrowserNotification = useCallback(
-    ({ sessionId, name, phone, body, key, conversation }) => {
-      if (!("Notification" in window) || Notification.permission !== "granted")
-        return;
-      if (
-        document.visibilityState === "visible" &&
-        Number(activeIdRef.current) === Number(sessionId)
-      )
-        return;
-      const notifyKey = key || `${sessionId}:${body || ""}`;
-      if (notifiedRef.current.has(notifyKey)) return;
-      if (notifiedRef.current.size > 500) notifiedRef.current.clear();
-      notifiedRef.current.add(notifyKey);
+  const requestNotifications = useCallback(async () => {
+    const isIos =
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const isStandalone =
+      window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      window.navigator.standalone;
 
-      const titleName = name || phone || "Customer";
-      let n;
-      try {
-        n = new Notification(`New message from ${titleName}`, {
-          body: body || "New WhatsApp message",
-          tag: `chat-${sessionId}`,
-          renotify: true,
-        });
-      } catch {
-        return;
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      if (isIos && !isStandalone) {
+        window.alert(
+          "On iPhone Safari, notifications work only after adding this site to Home Screen and opening it from that app icon.",
+        );
       }
-      n.onclick = () => {
-        window.focus();
-        if (conversation) onSelectChat(toChat(conversation));
-        n.close();
-      };
-    },
-    [onSelectChat],
-  );
-
-  const notifyConv = useCallback(
-    (conv) => {
-      showBrowserNotification({
-        sessionId: conv.id,
-        name: conv.wa_contact_name,
-        phone: conv.phone_number,
-        body: conv.last_message || "New message",
-        key: `conv:${conv.id}:${conv.last_message_at || ""}:${conv.last_message || ""}`,
-        conversation: conv,
+      return;
+    }
+    const p = await new Promise((resolve) => {
+      const request = Notification.requestPermission((permission) => {
+        if (permission) resolve(permission);
       });
-    },
-    [showBrowserNotification],
-  );
+      if (request?.then) request.then(resolve);
+    });
+    setNotificationPermission(p);
+    if (p === "denied") {
+      window.alert(
+        "Notifications are blocked in the browser. Enable them from Safari/Chrome site settings for mtmdash.com.",
+      );
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
       const data = await fetchConversations({ search, limit: 100 });
-      data.forEach((conv) => {
-        const key = [
-          conv.last_message_at || "",
-          conv.last_message || "",
-          conv.unread_count || 0,
-        ].join("|");
-        const prev = latestRef.current.get(conv.id);
-        if (
-          loadedOnce.current &&
-          prev !== key &&
-          Number(conv.unread_count || 0) > 0
-        )
-          notifyConv(conv);
-        latestRef.current.set(conv.id, key);
-      });
-      loadedOnce.current = true;
       setConversations(data);
       setError(null);
     } catch {
@@ -166,131 +144,30 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
     } finally {
       setLoading(false);
     }
-  }, [notifyConv, search]);
+  }, [search]);
+
+  const scheduleLoad = useCallback(() => {
+    if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = window.setTimeout(load, 150);
+  }, [load]);
 
   useEffect(() => {
     load();
     const t = setInterval(load, 60000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+    };
   }, [load]);
 
   useEffect(() => {
-    let stopped = false;
-
-    const connect = () => {
-      if (stopped || typeof WebSocket === "undefined") return;
-      const ws = new WebSocket(getChatWsUrl());
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        let payload;
-        try {
-          payload = JSON.parse(event.data);
-        } catch {
-          return;
-        }
-        if (payload.type !== "chat_changed") return;
-        if (payload.action === "message" && payload.sender === "user") {
-          window.dispatchEvent(
-            new CustomEvent("chat:user-message", { detail: payload }),
-          );
-          showBrowserNotification({
-            sessionId: payload.session_id,
-            body: payload.message || "New WhatsApp message",
-            key: payload.message_id
-              ? `msg:${payload.message_id}`
-              : `ws:${payload.session_id}:${payload.updated_at}`,
-          });
-          if (payload.message_id) {
-            lastUserMessageIdRef.current = Math.max(
-              Number(lastUserMessageIdRef.current || 0),
-              Number(payload.message_id),
-            );
-          }
-        }
-        load();
-      };
-
-      ws.onerror = () => {
-        ws.close();
-      };
-
-      ws.onclose = () => {
-        if (stopped) return;
-        wsReconnectRef.current = window.setTimeout(connect, 5000);
-      };
-    };
-
-    connect();
-
+    window.addEventListener("chat:changed", scheduleLoad);
+    window.addEventListener("chat:user-message", scheduleLoad);
     return () => {
-      stopped = true;
-      if (wsReconnectRef.current) {
-        window.clearTimeout(wsReconnectRef.current);
-        wsReconnectRef.current = null;
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      window.removeEventListener("chat:changed", scheduleLoad);
+      window.removeEventListener("chat:user-message", scheduleLoad);
     };
-  }, [load, showBrowserNotification]);
-
-  useEffect(() => {
-    let stopped = false;
-    let pollTimer = null;
-
-    const seedLatestMessageId = async () => {
-      try {
-        const rows = await fetchRecentUserMessages({ latest: true, limit: 1 });
-        if (!stopped) lastUserMessageIdRef.current = rows[0]?.id || 0;
-      } catch {
-        // Polling is a fallback; websocket and normal list refresh can still work.
-      }
-    };
-
-    const pollRecentMessages = async () => {
-      if (stopped || lastUserMessageIdRef.current === null) return;
-      try {
-        const rows = await fetchRecentUserMessages({
-          afterId: lastUserMessageIdRef.current,
-          limit: 50,
-        });
-        if (!rows.length) return;
-
-        rows.forEach((row) => {
-          lastUserMessageIdRef.current = Math.max(
-            Number(lastUserMessageIdRef.current || 0),
-            Number(row.id || 0),
-          );
-          showBrowserNotification({
-            sessionId: row.session_id,
-            name: row.conversation?.wa_contact_name,
-            phone: row.conversation?.phone_number,
-            body: row.message || "New WhatsApp message",
-            key: `msg:${row.id}`,
-            conversation: row.conversation,
-          });
-          window.dispatchEvent(
-            new CustomEvent("chat:user-message", { detail: row }),
-          );
-        });
-        load();
-      } catch {
-        // Keep the interval alive; transient auth/network failures should self-heal.
-      }
-    };
-
-    seedLatestMessageId().finally(() => {
-      if (stopped) return;
-      pollTimer = window.setInterval(pollRecentMessages, 15000);
-    });
-
-    return () => {
-      stopped = true;
-      if (pollTimer) window.clearInterval(pollTimer);
-    };
-  }, [load, showBrowserNotification]);
+  }, [scheduleLoad]);
 
   const visible = conversations.filter((c) => matchesFilter(c, activeFilter));
 
@@ -425,6 +302,7 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
           const badges = getBadges(conv);
           const unread = Number(conv.unread_count || 0);
           const hasUnread = unread > 0;
+          const isHuman = isHumanMode(conv.is_human);
 
           return (
             <Box
@@ -477,7 +355,7 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
                 </Box>
 
                 {/* Badges row */}
-                {badges.length > 0 && (
+                {(badges.length > 0 || isHuman) && (
                   <Box sx={chatStyles.convBadges}>
                     {badges.map((b) => (
                       <span key={b} style={chatStyles.badge(b)}>
@@ -486,7 +364,7 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
                           : b}
                       </span>
                     ))}
-                    {conv.is_human && (
+                    {isHuman && (
                       <span style={chatStyles.badge("flagged")}>👨 human</span>
                     )}
                   </Box>

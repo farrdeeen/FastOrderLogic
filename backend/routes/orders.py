@@ -14,6 +14,7 @@ from database import SessionLocal
 from models import Order
 from sqlalchemy import Table, MetaData
 from services.chat_service import notify_order_created, notify_order_shipped
+from services.order_preferences import ensure_order_preference_columns
 from services.chat_service import normalize_phone
 
 
@@ -132,7 +133,7 @@ class OrderCreate(BaseModel):
     payment_type: str
     channel: str = "offline"
     items: List[OrderItemIn]
-    send_whatsapp: bool = True
+    send_whatsapp: bool = False
 
 class UTRPayload(BaseModel):
     utr_number: str
@@ -149,6 +150,11 @@ class MobileUpdate(BaseModel):
 class ItemPriceUpdate(BaseModel):
     item_id: int
     unit_price: float
+
+class ItemQuantityUpdate(BaseModel):
+    item_id: int
+    quantity: int
+    remove_serials: Optional[List[str]] = None
 
 class AddressUpdate(BaseModel):
     address_id: int
@@ -294,6 +300,7 @@ def _get_order_summary(db: Session, order_id: str):
 # ================================
 @router.post("/create")
 async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
+    has_send_whatsapp_column = ensure_order_preference_columns(db)
     if not data.address_id:
         raise HTTPException(status_code=400, detail="Address not selected")
 
@@ -336,6 +343,13 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     db.add(order)
     db.commit()
     db.refresh(order)
+
+    if has_send_whatsapp_column:
+        db.execute(
+            text("UPDATE orders SET send_whatsapp = :send_whatsapp WHERE order_id = :oid"),
+            {"send_whatsapp": 1 if data.send_whatsapp else 0, "oid": order_id},
+        )
+        db.commit()
 
     for it in data.items:
         new_unit_price = float(it.final_unit_price) if data.channel.lower() == "offline" else float(it.final_unit_price) + delivery_per_unit
@@ -826,8 +840,9 @@ def get_serial_numbers(order_id: str, db: Session = Depends(get_db)):
         SELECT oi.item_id, oi.product_id, p.name AS product_name, oi.quantity, dt.device_srno
         FROM order_items oi
         LEFT JOIN products p ON p.product_id = oi.product_id
-        LEFT JOIN device_transaction dt ON dt.order_id = oi.order_id AND dt.sku_id = p.sku_id
-        WHERE oi.order_id = :oid ORDER BY oi.item_id
+        LEFT JOIN device_transaction dt
+            ON dt.order_id = oi.order_id AND dt.sku_id = p.sku_id AND dt.in_out = 2
+        WHERE oi.order_id = :oid ORDER BY oi.item_id, dt.auto_id
     """), {"oid": order_id}).fetchall()
     items = {}
     for r in rows:
@@ -1085,6 +1100,8 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
         "address": dict(address._mapping) if address else None,
         "items": items,
         "remarks": order.remarks,
+        "total_amount": float(order.total_amount or 0),
+        "total_items": order.total_items or 0,
         "serial_status": serial_status,
         "serial_items": serial_items,
         "utr_number": order.utr_number,
@@ -1169,6 +1186,125 @@ def update_item_price(order_id: str, payload: ItemPriceUpdate, db: Session = Dep
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update item price")
+
+
+@router.put("/{order_id}/update-item-quantity")
+def update_item_quantity(order_id: str, payload: ItemQuantityUpdate, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if payload.quantity < 1:
+        raise HTTPException(status_code=400, detail="Quantity must be at least 1")
+
+    try:
+        item = db.execute(text("""
+            SELECT oi.item_id, oi.quantity, oi.unit_price, p.sku_id
+            FROM order_items oi
+            LEFT JOIN products p ON p.product_id = oi.product_id
+            WHERE oi.item_id = :iid AND oi.order_id = :oid
+        """), {"iid": payload.item_id, "oid": order_id}).first()
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found in order")
+
+        assigned_serials = []
+        if item.sku_id:
+            rows = db.execute(text("""
+                SELECT device_srno
+                FROM device_transaction
+                WHERE order_id = :oid AND sku_id = :sku AND in_out = 2
+                ORDER BY auto_id
+            """), {"oid": order_id, "sku": item.sku_id}).fetchall()
+            assigned_serials = [r.device_srno for r in rows if r.device_srno]
+
+        old_quantity = int(item.quantity or 0)
+        decrease_by = max(0, old_quantity - payload.quantity)
+        required_remove_count = max(
+            min(decrease_by, len(assigned_serials)),
+            max(0, len(assigned_serials) - payload.quantity),
+        )
+        remove_serials = [
+            str(serial).strip()
+            for serial in (payload.remove_serials or [])
+            if str(serial).strip()
+        ]
+        removed_serials = []
+
+        if required_remove_count > 0:
+            assigned_set = set(assigned_serials)
+            selected_unique = []
+            for serial in remove_serials:
+                if serial in assigned_set and serial not in selected_unique:
+                    selected_unique.append(serial)
+
+            if len(selected_unique) != required_remove_count:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Select serial numbers to remove before reducing quantity",
+                        "required_remove_count": required_remove_count,
+                        "serials": assigned_serials,
+                    },
+                )
+
+            removed_serials = selected_unique
+            for serial in selected_unique:
+                db.execute(text("""
+                    DELETE FROM device_transaction
+                    WHERE order_id = :oid
+                      AND sku_id = :sku
+                      AND in_out = 2
+                      AND device_srno = :serial
+                    LIMIT 1
+                """), {"oid": order_id, "sku": item.sku_id, "serial": serial})
+
+        new_total_price = round(float(item.unit_price or 0) * payload.quantity, 2)
+        db.execute(text("""
+            UPDATE order_items
+            SET quantity = :qty, total_price = :total
+            WHERE item_id = :iid AND order_id = :oid
+        """), {
+            "qty": payload.quantity,
+            "total": new_total_price,
+            "iid": payload.item_id,
+            "oid": order_id,
+        })
+
+        totals = db.execute(text("""
+            SELECT SUM(total_price) AS total, SUM(quantity) AS items
+            FROM order_items
+            WHERE order_id = :oid
+        """), {"oid": order_id}).first()
+        new_order_total = float(totals.total or 0)
+        new_order_items = int(totals.items or 0)
+
+        db.execute(text("""
+            UPDATE orders
+            SET total_amount = :total, total_items = :items, updated_at = :now
+            WHERE order_id = :oid
+        """), {
+            "total": new_order_total,
+            "items": new_order_items,
+            "now": datetime.now(),
+            "oid": order_id,
+        })
+
+        db.commit()
+        notify_order_change(order_id, "updated")
+        return {
+            "success": True,
+            "item_id": payload.item_id,
+            "quantity": payload.quantity,
+            "total_price": new_total_price,
+            "order_total": new_order_total,
+            "order_total_items": new_order_items,
+            "removed_serials": removed_serials,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update item quantity")
 
 
 @router.put("/{order_id}/update-address")

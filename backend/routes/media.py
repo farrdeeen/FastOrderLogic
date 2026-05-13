@@ -56,6 +56,7 @@ def _mime(path: Path) -> str:
     return mime or "application/octet-stream"
 
 
+@router.head("/media/{path:path}", include_in_schema=False)
 @router.get("/media/{path:path}")
 async def serve_media(
     path: str,

@@ -37,6 +37,7 @@ from services.whatsapp_service import (
     send_template_message,
     send_image_message,
 )
+from services.order_preferences import order_allows_whatsapp
 from services.chat_media_service import save_media_bytes
 from services.payment_service import (
     PaymentLinkError,
@@ -892,6 +893,10 @@ async def notify_order_created(
 
 
 async def notify_order_shipped(db: Session, phone: str, order_id: str, awb: str) -> None:
+    if not order_allows_whatsapp(db, order_id):
+        logger.info("notify_order_shipped skipped for %s — WhatsApp disabled on order", order_id)
+        return
+
     phone = normalize_phone(phone)
     if not phone:
         logger.warning("notify_order_shipped skipped — missing phone for order %s", order_id)

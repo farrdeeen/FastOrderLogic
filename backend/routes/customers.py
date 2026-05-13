@@ -26,6 +26,7 @@ def create_customer(data: dict, db: Session = Depends(get_db)):
     mobile          = (data.get("mobile") or "").strip()
     email           = (data.get("email") or "").strip() or None
     gst_number      = (data.get("gst_number") or "").strip() or None
+    csp_code        = (data.get("csp_code") or "").strip() or None
     customer_type   = (data.get("customer_type") or "offline").strip()
 
     if not name:
@@ -77,12 +78,13 @@ def create_customer(data: dict, db: Session = Depends(get_db)):
             """)
         else:
             sql = text("""
-                INSERT INTO offline_customer (name, mobile, email, gst_number)
-                VALUES (:name, :mobile, :email, :gst)
+                INSERT INTO offline_customer (name, mobile, email, gst_number, csp_code)
+                VALUES (:name, :mobile, :email, :gst, :csp_code)
             """)
 
         result      = db.execute(sql, {"name": name, "mobile": mobile,
-                                       "email": email, "gst": gst_number})
+                                       "email": email, "gst": gst_number,
+                                       "csp_code": csp_code})
         customer_id = result.lastrowid
 
         # ── insert address (only when address data supplied) ────────────────

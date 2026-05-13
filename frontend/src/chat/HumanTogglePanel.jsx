@@ -3,6 +3,14 @@ import { useState, useCallback, useEffect } from "react";
 import { Box, Typography, CircularProgress } from "@mui/material";
 import { toggleHumanMode } from "./chatApi";
 
+function isHumanMode(value) {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes";
+  }
+  return Boolean(value);
+}
+
 // ── Mode badge ────────────────────────────────────────────────────────────────
 function ModeBadge({ isHuman }) {
   return (
@@ -31,13 +39,13 @@ function ModeBadge({ isHuman }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function HumanTogglePanel({ chat, onModeChange }) {
-  const [isHuman, setIsHuman] = useState(chat?.is_human ?? false);
+  const [isHuman, setIsHuman] = useState(isHumanMode(chat?.is_human));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastToggled, setLastToggled] = useState(null);
 
   useEffect(() => {
-    setIsHuman(Boolean(chat?.is_human));
+    setIsHuman(isHumanMode(chat?.is_human));
     setLastToggled(null);
     setError(null);
   }, [chat?.id, chat?.is_human]);
@@ -48,10 +56,20 @@ export default function HumanTogglePanel({ chat, onModeChange }) {
     setLoading(true);
     setError(null);
     try {
-      await toggleHumanMode(chat.id, chat.phone, next);
-      setIsHuman(next);
+      const result = await toggleHumanMode(chat.id, chat.phone, next);
+      const actual = isHumanMode(result?.is_human ?? next);
+      setIsHuman(actual);
       setLastToggled(new Date());
-      if (onModeChange) onModeChange(chat.id, next);
+      window.dispatchEvent(
+        new CustomEvent("chat:session-updated", {
+          detail: {
+            session_id: chat.id,
+            is_human: actual,
+            mode: result?.mode || (actual ? "human" : "ai"),
+          },
+        }),
+      );
+      if (onModeChange) onModeChange(chat.id, actual);
     } catch (err) {
       setError(
         err?.response?.data?.detail || "Failed to toggle mode. Try again.",
