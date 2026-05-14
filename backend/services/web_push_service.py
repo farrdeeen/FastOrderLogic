@@ -25,7 +25,18 @@ def _public_key() -> str:
 
 
 def _private_key() -> str:
-    return os.getenv("WEB_PUSH_PRIVATE_KEY", "").strip()
+    value = os.getenv("WEB_PUSH_PRIVATE_KEY", "").strip()
+    if not value:
+        return ""
+    if "BEGIN" in value:
+        return value
+    try:
+        if os.path.exists(value):
+            with open(value, "r", encoding="utf-8") as key_file:
+                return key_file.read()
+    except Exception:
+        logger.exception("Failed to read WEB_PUSH_PRIVATE_KEY file")
+    return value
 
 
 def _subject() -> str:
