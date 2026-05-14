@@ -147,9 +147,25 @@ def _subscriptions_for_user(db: Session, user_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def _send_to_subscription(db: Session, subscription: dict, payload: dict) -> bool:
+def _subscription_error_rows(db: Session, subscription_ids: list[int]) -> list[dict]:
+    if not subscription_ids:
+        return []
+    rows = db.execute(
+        text(
+            """
+            SELECT id, enabled, last_error, updated_at, LEFT(endpoint, 80) AS endpoint_preview
+            FROM notification_subscriptions
+            WHERE id IN :ids
+            ORDER BY updated_at DESC
+            """
+        ).bindparams(ids=tuple(subscription_ids)),
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def _send_to_subscription(db: Session, subscription: dict, payload: dict) -> dict:
     if not is_web_push_configured():
-        return False
+        return {"ok": False, "error": "web_push_not_configured"}
 
     info = {
         "endpoint": subscription["endpoint"],
@@ -168,12 +184,16 @@ def _send_to_subscription(db: Session, subscription: dict, payload: dict) -> boo
             timeout=10,
         )
         logger.info("Web push sent subscription_id=%s type=%s", subscription.get("id"), payload.get("type"))
-        return True
+        return {"ok": True}
     except Exception as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        logger.warning("Web push failed status=%s error=%s", status_code, exc)
+        response_text = getattr(getattr(exc, "response", None), "text", "") or ""
+        error_text = f"{exc}"
+        if response_text and response_text not in error_text:
+            error_text = f"{error_text} | response={response_text}"
+        logger.warning("Web push failed status=%s error=%s", status_code, error_text)
         if status_code in (404, 410):
-            disable_subscription(db, subscription["endpoint"], str(exc))
+            disable_subscription(db, subscription["endpoint"], error_text)
         else:
             db.execute(
                 text(
@@ -183,10 +203,10 @@ def _send_to_subscription(db: Session, subscription: dict, payload: dict) -> boo
                     WHERE id = :id
                     """
                 ),
-                {"id": subscription["id"], "error": str(exc)[:1000], "now": datetime.now()},
+                {"id": subscription["id"], "error": error_text[:1000], "now": datetime.now()},
             )
             db.commit()
-        return False
+        return {"ok": False, "status_code": status_code, "error": error_text[:1000]}
 
 
 def send_chat_push_notification(session_id: int, message_id: int, message: str) -> dict:
@@ -229,7 +249,8 @@ def send_chat_push_notification(session_id: int, message_id: int, message: str) 
             len(subscriptions),
         )
         for subscription in subscriptions:
-            if _send_to_subscription(db, subscription, payload):
+            result = _send_to_subscription(db, subscription, payload)
+            if result.get("ok"):
                 sent += 1
         return {"success": True, "sent": sent}
     except Exception as exc:
@@ -273,15 +294,21 @@ def send_test_push_notification(user_id: str) -> dict:
             "url": "/",
         }
         sent = 0
+        results = []
         for subscription in subscriptions:
-            if _send_to_subscription(db, subscription, payload):
+            result = _send_to_subscription(db, subscription, payload)
+            results.append({"id": subscription["id"], **result})
+            if result.get("ok"):
                 sent += 1
+        errors = _subscription_error_rows(db, [row["id"] for row in subscriptions])
 
         return {
             "success": sent > 0,
             "sent": sent,
             "subscriptions": len(subscriptions),
             "error": None if sent > 0 else "no_active_subscription_sent",
+            "results": results,
+            "subscription_errors": errors,
         }
     except Exception as exc:
         logger.exception("send_test_push_notification failed")
