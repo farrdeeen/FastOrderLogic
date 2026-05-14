@@ -24,6 +24,28 @@ export default function ChatNotificationListener() {
   const workerRegistrationRef = useRef(null);
 
   useEffect(() => {
+    const openSession = (sessionId) => {
+      if (!sessionId) return;
+      window.__folPendingChatSessionId = sessionId;
+      window.dispatchEvent(new CustomEvent("app:navigate", { detail: { page: "chat" } }));
+      window.dispatchEvent(
+        new CustomEvent("chat:open-session-by-id", {
+          detail: { session_id: sessionId },
+        }),
+      );
+    };
+
+    const handleWorkerMessage = (event) => {
+      if (event.data?.type !== "chat_notification_click") return;
+      openSession(event.data.session_id || event.data.sessionId);
+    };
+
+    navigator.serviceWorker?.addEventListener?.("message", handleWorkerMessage);
+
+    const params = new URLSearchParams(window.location.search);
+    const sessionFromUrl = params.get("chat_session");
+    if (sessionFromUrl) openSession(sessionFromUrl);
+
     registerChatNotificationWorker()
       .then(({ supported, registration }) => {
         if (!supported) return;
@@ -42,6 +64,10 @@ export default function ChatNotificationListener() {
       .catch(() => {
         workerRegistrationRef.current = null;
       });
+
+    return () => {
+      navigator.serviceWorker?.removeEventListener?.("message", handleWorkerMessage);
+    };
   }, []);
 
   const showBrowserNotification = useCallback(
@@ -89,6 +115,14 @@ export default function ChatNotificationListener() {
         if (conversation) {
           window.dispatchEvent(
             new CustomEvent("chat:open-session", { detail: conversation }),
+          );
+        } else if (sessionId) {
+          window.__folPendingChatSessionId = sessionId;
+          window.dispatchEvent(new CustomEvent("app:navigate", { detail: { page: "chat" } }));
+          window.dispatchEvent(
+            new CustomEvent("chat:open-session-by-id", {
+              detail: { session_id: sessionId },
+            }),
           );
         }
         notification.close();

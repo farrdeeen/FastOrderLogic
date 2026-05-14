@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useClerk } from "@clerk/clerk-react";
 import {
   Drawer,
   List,
@@ -21,6 +22,7 @@ import {
   Dashboard as DashboardIcon,
   ShoppingCart as ShoppingCartIcon,
   Forum as ForumIcon,
+  Logout as LogoutIcon,
 } from "@mui/icons-material";
 
 const drawerWidth = 220;
@@ -34,6 +36,7 @@ export default function NavDrawer({
   allowedPages,
 }) {
   const [open, setOpen] = useState(false);
+  const { signOut } = useClerk();
 
   const handleCollapseToggle = () => setOpen(!open);
 
@@ -47,6 +50,10 @@ export default function NavDrawer({
 
   const drawerContent = (isMobile = false) => {
     const expanded = isMobile || open;
+    const handleSignOut = () => {
+      if (mobileOpen && onMobileClose) onMobileClose();
+      signOut({ redirectUrl: "/" });
+    };
 
     return (
     <Box
@@ -133,6 +140,47 @@ export default function NavDrawer({
             </ListItem>
           </Tooltip>
         ))}
+      </List>
+
+      <Divider />
+
+      <List>
+        <Tooltip
+          title={!expanded ? "Sign out" : ""}
+          placement="right"
+          arrow
+        >
+          <ListItem disablePadding sx={{ display: "block" }}>
+            <ListItemButton
+              onClick={handleSignOut}
+              sx={{
+                minHeight: 48,
+                justifyContent: expanded ? "initial" : "center",
+                px: 2.5,
+              }}
+            >
+              <ListItemIcon
+                sx={{
+                  minWidth: 0,
+                  mr: expanded ? 2 : "auto",
+                  justifyContent: "center",
+                  color: "#991b1b",
+                }}
+              >
+                <LogoutIcon />
+              </ListItemIcon>
+              {expanded && (
+                <ListItemText
+                  primary="Sign out"
+                  primaryTypographyProps={{
+                    fontWeight: 600,
+                    color: "#991b1b",
+                  }}
+                />
+              )}
+            </ListItemButton>
+          </ListItem>
+        </Tooltip>
       </List>
 
       <Divider />

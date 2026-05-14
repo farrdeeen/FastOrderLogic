@@ -150,12 +150,29 @@ export default function App() {
   const hasAnyAccess = access.allowedPages.length > 0;
 
   useEffect(() => {
+    const handleAppNavigate = (event) => {
+      const page = event.detail?.page;
+      if (!page || !canAccess(page)) return;
+      setActivePage(page);
+      setMobileNavOpen(false);
+    };
+    window.addEventListener("app:navigate", handleAppNavigate);
+    return () => window.removeEventListener("app:navigate", handleAppNavigate);
+  }, [canAccess]);
+
+  useEffect(() => {
     if (!isLoaded || !isSignedIn) return;
     if (canAccess(activePage)) return;
 
     const fallback = firstAllowedPage(access);
     if (fallback) setActivePage(fallback);
   }, [access, activePage, canAccess, isLoaded, isSignedIn]);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || !canAccess("chat")) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("chat_session")) setActivePage("chat");
+  }, [canAccess, isLoaded, isSignedIn]);
 
   const pageTitle = {
     dashboard: "📊 Dashboard",

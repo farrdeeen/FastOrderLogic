@@ -31,6 +31,12 @@ export async function fetchConversations({
   return res.data || [];
 }
 
+// GET /chat/conversations/by-id/{session_id}
+export async function fetchConversation(sessionId) {
+  const res = await api.get(`/chat/conversations/by-id/${sessionId}`);
+  return res.data;
+}
+
 // GET /chat/recent-user-messages
 // Lightweight fallback for production servers where websocket fanout may miss
 // cross-worker webhook events.

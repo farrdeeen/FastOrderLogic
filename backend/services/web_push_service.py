@@ -237,7 +237,7 @@ def send_chat_push_notification(session_id: int, message_id: int, message: str) 
             "session_id": session_id,
             "message_id": message_id,
             "tag": f"chat-{session_id}",
-            "url": "/",
+            "url": f"/?chat_session={session_id}",
         }
 
         sent = 0

@@ -1,10 +1,30 @@
 // src/chat/ChatPage.jsx
-import { useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Box } from "@mui/material";
 import ConversationsList from "./ConversationsList";
 import ChatWindow from "./ChatWindow";
 import ChatInfoPanel from "./ChatInfoPanel";
 import { chatStyles } from "./styles";
+import { fetchConversation } from "./chatApi";
+
+function toChat(conversation) {
+  if (!conversation) return null;
+  return {
+    id: conversation.id,
+    name: conversation.wa_contact_name || conversation.phone_number,
+    phone: conversation.phone_number,
+    lastMsg: conversation.last_message,
+    lastTime: conversation.last_message_at,
+    status: conversation.status,
+    flag: conversation.flag,
+    unread: conversation.unread_count,
+    linked_order_id: conversation.linked_order_id,
+    is_human:
+      conversation.is_human === true ||
+      conversation.is_human === 1 ||
+      conversation.is_human === "1",
+  };
+}
 
 export default function ChatPage({ onOpenNav }) {
   const [activeChat, setActiveChat] = useState(null);
@@ -12,11 +32,50 @@ export default function ChatPage({ onOpenNav }) {
   const [infoPanelOpen, setInfoPanelOpen] = useState(false);
   const fillInputRef = useRef(null);
 
-  const handleSelectChat = (chat) => {
+  const handleSelectChat = useCallback((chat) => {
     setActiveChat(chat);
     setInfoPanelOpen(false);
     setMobilePane("chat");
-  };
+  }, []);
+
+  const openChatById = useCallback(async (sessionId) => {
+    if (!sessionId) return;
+    try {
+      const conversation = await fetchConversation(sessionId);
+      handleSelectChat(toChat(conversation));
+      window.__folPendingChatSessionId = null;
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("chat_session")) {
+        url.searchParams.delete("chat_session");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+    } catch {
+      // The conversation list will still refresh normally; keep notification click quiet.
+    }
+  }, [handleSelectChat]);
+
+  useEffect(() => {
+    const pending = window.__folPendingChatSessionId;
+    if (pending) openChatById(pending);
+
+    const params = new URLSearchParams(window.location.search);
+    const sessionFromUrl = params.get("chat_session");
+    if (sessionFromUrl) openChatById(sessionFromUrl);
+
+    const onOpenById = (event) => {
+      openChatById(event.detail?.session_id || event.detail?.sessionId);
+    };
+    const onOpenSession = (event) => {
+      const chat = toChat(event.detail);
+      if (chat) handleSelectChat(chat);
+    };
+    window.addEventListener("chat:open-session-by-id", onOpenById);
+    window.addEventListener("chat:open-session", onOpenSession);
+    return () => {
+      window.removeEventListener("chat:open-session-by-id", onOpenById);
+      window.removeEventListener("chat:open-session", onOpenSession);
+    };
+  }, [handleSelectChat, openChatById]);
 
   const handleResolved = (sessionId) => {
     if (activeChat?.id === sessionId)

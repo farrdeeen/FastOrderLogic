@@ -55,7 +55,9 @@ self.addEventListener("notificationclick", (event) => {
           if ("focus" in client) {
             client.postMessage({
               type: "chat_notification_click",
-              session_id: event.notification?.data?.session_id,
+              session_id:
+                event.notification?.data?.session_id ||
+                event.notification?.data?.sessionId,
             });
             return client.focus();
           }

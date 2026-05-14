@@ -233,6 +233,43 @@ def list_conversations(
     return [dict(r._mapping) for r in rows]
 
 
+@router.get("/conversations/by-id/{session_id}")
+def get_conversation(
+    session_id: int,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    ensure_chat_session_columns(db)
+    row = db.execute(text("""
+        SELECT
+            cs.id,
+            cs.phone_number,
+            cs.wa_contact_name,
+            cs.last_message,
+            cs.last_message_at,
+            cs.status,
+            cs.flag,
+            cs.is_human,
+            cs.preferred_language,
+            cs.created_at,
+            cs.updated_at,
+            (
+                SELECT COUNT(*) FROM chat_messages cm
+                WHERE cm.session_id = cs.id AND cm.sender = 'user'
+                  AND cm.timestamp > COALESCE((
+                      SELECT MAX(cm2.timestamp) FROM chat_messages cm2
+                      WHERE cm2.session_id = cs.id AND cm2.sender IN ('ai','system')
+                  ), '2000-01-01')
+            ) AS unread_count
+        FROM chat_sessions cs
+        WHERE cs.id = :sid
+        LIMIT 1
+    """), {"sid": session_id}).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return dict(row._mapping)
+
+
 @router.get("/recent-user-messages")
 def recent_user_messages(
     _=Depends(require_user),
