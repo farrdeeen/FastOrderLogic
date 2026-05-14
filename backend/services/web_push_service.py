@@ -131,6 +131,22 @@ def _active_subscriptions(db: Session) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _subscriptions_for_user(db: Session, user_id: str) -> list[dict]:
+    rows = db.execute(
+        text(
+            """
+            SELECT id, endpoint, p256dh, auth
+            FROM notification_subscriptions
+            WHERE enabled = 1 AND user_id = :user_id
+            ORDER BY updated_at DESC
+            LIMIT 25
+            """
+        ),
+        {"user_id": user_id},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
 def _send_to_subscription(db: Session, subscription: dict, payload: dict) -> bool:
     if not is_web_push_configured():
         return False
@@ -151,6 +167,7 @@ def _send_to_subscription(db: Session, subscription: dict, payload: dict) -> boo
             vapid_claims={"sub": _subject()},
             timeout=10,
         )
+        logger.info("Web push sent subscription_id=%s type=%s", subscription.get("id"), payload.get("type"))
         return True
     except Exception as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
@@ -201,11 +218,17 @@ def send_chat_push_notification(session_id: int, message_id: int, message: str) 
             "message_id": message_id,
             "tag": f"chat-{session_id}",
             "url": "/",
-            "silent_when_focused": True,
         }
 
         sent = 0
-        for subscription in _active_subscriptions(db):
+        subscriptions = _active_subscriptions(db)
+        logger.info(
+            "Sending chat web push session_id=%s message_id=%s subscriptions=%s",
+            session_id,
+            message_id,
+            len(subscriptions),
+        )
+        for subscription in subscriptions:
             if _send_to_subscription(db, subscription, payload):
                 sent += 1
         return {"success": True, "sent": sent}
@@ -218,6 +241,13 @@ def send_chat_push_notification(session_id: int, message_id: int, message: str) 
 
 def queue_chat_push_notification(session_id: int, message_id: int, message: str) -> None:
     if not is_web_push_configured():
+        logger.warning(
+            "Web push skipped: configured=%s public_key=%s private_key=%s dependency=%s",
+            is_web_push_configured(),
+            bool(_public_key()),
+            bool(_private_key()),
+            bool(webpush),
+        )
         return
 
     thread = threading.Thread(
@@ -226,3 +256,35 @@ def queue_chat_push_notification(session_id: int, message_id: int, message: str)
         daemon=True,
     )
     thread.start()
+
+
+def send_test_push_notification(user_id: str) -> dict:
+    db = SessionLocal()
+    try:
+        if not is_web_push_configured():
+            return {"success": False, "sent": 0, "error": "web_push_not_configured"}
+
+        subscriptions = _subscriptions_for_user(db, user_id)
+        payload = {
+            "type": "test",
+            "title": "FastOrderLogic notification test",
+            "body": "Chrome/Web Push is working on this device.",
+            "tag": "fol-test-notification",
+            "url": "/",
+        }
+        sent = 0
+        for subscription in subscriptions:
+            if _send_to_subscription(db, subscription, payload):
+                sent += 1
+
+        return {
+            "success": sent > 0,
+            "sent": sent,
+            "subscriptions": len(subscriptions),
+            "error": None if sent > 0 else "no_active_subscription_sent",
+        }
+    except Exception as exc:
+        logger.exception("send_test_push_notification failed")
+        return {"success": False, "sent": 0, "error": str(exc)}
+    finally:
+        db.close()

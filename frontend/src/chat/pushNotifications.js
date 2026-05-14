@@ -45,6 +45,16 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
+function arrayBufferEquals(left, right) {
+  if (!left || !right || left.byteLength !== right.byteLength) return false;
+  const a = new Uint8Array(left);
+  const b = new Uint8Array(right);
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export async function registerChatNotificationWorker() {
   if (!("serviceWorker" in navigator)) {
     return { supported: false, reason: "service_worker_unsupported" };
@@ -54,6 +64,7 @@ export async function registerChatNotificationWorker() {
   }
 
   const registration = await navigator.serviceWorker.register(SW_PATH);
+  await registration.update();
   if (navigator.serviceWorker.ready) {
     await navigator.serviceWorker.ready;
   }
@@ -109,11 +120,20 @@ export async function ensureChatPushSubscription({ prompt = false } = {}) {
   }
 
   const registration = worker.registration;
+  const applicationServerKey = urlBase64ToUint8Array(publicKey);
   let subscription = await registration.pushManager.getSubscription();
+  if (
+    subscription &&
+    subscription.options?.applicationServerKey &&
+    !arrayBufferEquals(subscription.options.applicationServerKey, applicationServerKey)
+  ) {
+    await subscription.unsubscribe();
+    subscription = null;
+  }
   if (!subscription) {
     subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
+      applicationServerKey,
     });
   }
 

@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 
 from auth.clerk_auth import get_current_user as require_user
 from database import SessionLocal
-from services.web_push_service import public_key_payload, save_subscription
+from services.web_push_service import (
+    public_key_payload,
+    save_subscription,
+    send_test_push_notification,
+)
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -57,3 +61,8 @@ def subscribe(
         platform=payload.platform,
         user_agent=payload.user_agent,
     )
+
+
+@router.post("/test")
+def test_push(user=Depends(require_user)):
+    return send_test_push_notification(user.get("sub", ""))

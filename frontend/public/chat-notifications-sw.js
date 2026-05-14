@@ -8,15 +8,6 @@ self.addEventListener("push", (event) => {
         data = { body: event.data?.text?.() || "New WhatsApp message" };
       }
 
-      if (data.silent_when_focused) {
-        const clientList = await self.clients.matchAll({
-          type: "window",
-          includeUncontrolled: true,
-        });
-        const hasFocusedClient = clientList.some((client) => client.focused);
-        if (hasFocusedClient) return;
-      }
-
       const title = data.title || "New WhatsApp message";
       const options = {
         body: data.body || "New WhatsApp message",
