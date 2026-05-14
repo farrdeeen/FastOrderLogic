@@ -10,6 +10,7 @@ frontend/.env
 .zoho_tokens.json
 backend/.zoho_tokens.json
 backend/.env.production
+backend/secrets/
 
 # Logs and debug files
 *.log
