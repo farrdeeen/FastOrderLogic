@@ -72,7 +72,7 @@ def _parse_access_value(value: Any) -> Optional[List[str]]:
 def access_from_metadata(metadata: Optional[dict], default_allowed: Optional[bool] = None) -> dict:
     meta = metadata or {}
     if default_allowed is None:
-        default_allowed = os.getenv("CLERK_ACCESS_DEFAULT", "allow").strip().lower() != "deny"
+        default_allowed = os.getenv("CLERK_ACCESS_DEFAULT", "deny").strip().lower() == "allow"
 
     if meta.get("active") is False or _truthy(meta.get("blocked")) or _truthy(meta.get("disabled")):
         return {"allowed_pages": [], "is_admin": False}

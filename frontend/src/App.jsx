@@ -38,7 +38,7 @@ const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 const PAGE_SIZE = 500;
 const PARALLEL_PAGES = 3;
 const ACCESS_DEFAULT_ALLOWED =
-  (import.meta.env.VITE_CLERK_ACCESS_DEFAULT || "allow").toLowerCase() !== "deny";
+  (import.meta.env.VITE_CLERK_ACCESS_DEFAULT || "deny").toLowerCase() === "allow";
 
 function PaymentRedirectPage() {
   const token = decodeURIComponent(

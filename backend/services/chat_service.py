@@ -291,6 +291,13 @@ def save_message(
         )
     except Exception:
         logger.debug("Chat websocket notify failed for session %s", session_id, exc_info=True)
+    if sender == "user":
+        try:
+            from services.web_push_service import queue_chat_push_notification
+
+            queue_chat_push_notification(session_id, message_id, message)
+        except Exception:
+            logger.debug("Chat web push queue failed for session %s", session_id, exc_info=True)
     return message_id
 
 

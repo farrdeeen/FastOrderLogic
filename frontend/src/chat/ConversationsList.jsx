@@ -4,6 +4,12 @@ import { Box, Typography } from "@mui/material";
 import { Bell, Menu, Search, MessageCirclePlus } from "lucide-react";
 import { fetchConversations } from "./chatApi";
 import {
+  ensureChatPushSubscription,
+  isIosDevice,
+  isStandaloneApp,
+  pushFailureMessage,
+} from "./pushNotifications";
+import {
   chatStyles,
   CHAT_FILTERS,
   FLAG_COLORS,
@@ -75,6 +81,10 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
       return "unsupported";
     return Notification.permission;
   });
+  const [pushSubscribed, setPushSubscribed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(window.__folPushSubscribed);
+  });
 
   const refreshTimerRef = useRef(null);
 
@@ -99,19 +109,22 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
       );
     };
     window.addEventListener("chat:session-updated", handleSessionUpdate);
-    return () =>
+    const handlePushUpdate = (event) => {
+      setPushSubscribed(Boolean(event.detail?.subscribed));
+      if ("Notification" in window) setNotificationPermission(Notification.permission);
+    };
+    window.addEventListener("chat:push-subscription-changed", handlePushUpdate);
+    return () => {
       window.removeEventListener("chat:session-updated", handleSessionUpdate);
+      window.removeEventListener("chat:push-subscription-changed", handlePushUpdate);
+    };
   }, []);
 
   const requestNotifications = useCallback(async () => {
-    const isIos =
-      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    const isStandalone =
-      window.matchMedia?.("(display-mode: standalone)")?.matches ||
-      window.navigator.standalone;
+    const isIos = isIosDevice();
+    const isStandalone = isStandaloneApp();
 
-    if (!("Notification" in window)) {
+    if (!("Notification" in window) || !("PushManager" in window)) {
       setNotificationPermission("unsupported");
       if (isIos && !isStandalone) {
         window.alert(
@@ -120,17 +133,17 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
       }
       return;
     }
-    const p = await new Promise((resolve) => {
-      const request = Notification.requestPermission((permission) => {
-        if (permission) resolve(permission);
-      });
-      if (request?.then) request.then(resolve);
-    });
-    setNotificationPermission(p);
-    if (p === "denied") {
+
+    const result = await ensureChatPushSubscription({ prompt: true });
+    setNotificationPermission(result.permission || Notification.permission);
+    if (result.permission === "denied") {
       window.alert(
         "Notifications are blocked in the browser. Enable them from Safari/Chrome site settings for mtmdash.com.",
       );
+      return;
+    }
+    if (!result.ok) {
+      window.alert(pushFailureMessage(result.reason));
     }
   }, []);
 
@@ -201,8 +214,8 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
           Chats
         </Box>
         <Box sx={chatStyles.sidebarActions}>
-          {notificationPermission !== "granted" &&
-            notificationPermission !== "unsupported" && (
+          {notificationPermission !== "unsupported" &&
+            !pushSubscribed && (
               <Box
                 component="button"
                 type="button"

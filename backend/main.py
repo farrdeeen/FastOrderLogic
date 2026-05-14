@@ -22,6 +22,7 @@ from routes.serial_search import router as serial_search_router
 from routes.payment_webhook import router as payment_webhook_router
 from routes.media import router as media_router
 from routes.auth import router as auth_router
+from routes.notifications import router as notifications_router
 
 
 
@@ -38,6 +39,7 @@ app.add_middleware(
 
 app.include_router(media_router)
 app.include_router(auth_router)
+app.include_router(notifications_router)
 app.include_router(orders.router)
 app.include_router(wix_sync.router)
 app.include_router(zoho.router)

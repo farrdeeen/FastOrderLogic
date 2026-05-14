@@ -5,6 +5,8 @@ import requests
 from fastapi import Request, HTTPException
 from jose import jwt, JWTError
 
+from services.access_control import access_from_metadata, fetch_clerk_metadata, metadata_from_jwt
+
 
 CLERK_ISSUER = os.getenv(
     "CLERK_ISSUER",
@@ -50,9 +52,29 @@ def get_current_user(request: Request):
             issuer=CLERK_ISSUER,
         )
 
-        request.state.user_id = payload["sub"]
+        user_id = payload["sub"]
+        metadata = metadata_from_jwt(payload)
+        try:
+            clerk_metadata = fetch_clerk_metadata(user_id)
+            if clerk_metadata:
+                metadata = {**metadata, **clerk_metadata}
+        except Exception:
+            # If CLERK_SECRET_KEY is missing or Clerk API is unavailable, fall back
+            # to token metadata. Empty metadata remains denied by default.
+            pass
+
+        access = access_from_metadata(metadata, default_allowed=False)
+        if not access["is_admin"] and not access["allowed_pages"]:
+            raise HTTPException(status_code=403, detail="Access not assigned")
+
+        request.state.user_id = user_id
+        request.state.user_access = access
+        payload["fol_access"] = access["allowed_pages"]
+        payload["fol_is_admin"] = access["is_admin"]
         return payload
 
+    except HTTPException:
+        raise
     except JWTError as e:
         print("Clerk auth error:", e)
         raise HTTPException(status_code=401, detail="Invalid or expired token")

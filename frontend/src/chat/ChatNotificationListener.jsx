@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 import { fetchRecentUserMessages, getChatWsUrl } from "./chatApi";
+import {
+  ensureChatPushSubscription,
+  registerChatNotificationWorker,
+} from "./pushNotifications";
 
 function claimNotificationKey(key) {
   if (typeof window === "undefined") return true;
@@ -20,17 +24,20 @@ export default function ChatNotificationListener() {
   const workerRegistrationRef = useRef(null);
 
   useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-    const isSecure =
-      window.location.protocol === "https:" ||
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1";
-    if (!isSecure) return;
-
-    navigator.serviceWorker
-      .register("/chat-notifications-sw.js")
-      .then((registration) => {
+    registerChatNotificationWorker()
+      .then(({ supported, registration }) => {
+        if (!supported) return;
         workerRegistrationRef.current = registration;
+        if ("Notification" in window && Notification.permission === "granted") {
+          ensureChatPushSubscription({ prompt: false }).catch(() => {
+            window.__folPushSubscribed = false;
+            window.dispatchEvent(
+              new CustomEvent("chat:push-subscription-changed", {
+                detail: { subscribed: false },
+              }),
+            );
+          });
+        }
       })
       .catch(() => {
         workerRegistrationRef.current = null;
@@ -40,6 +47,7 @@ export default function ChatNotificationListener() {
   const showBrowserNotification = useCallback(
     async ({ sessionId, name, phone, body, key, conversation }) => {
       if (typeof window === "undefined") return;
+      if (window.__folPushSubscribed) return;
       if (!("Notification" in window) || Notification.permission !== "granted")
         return;
       if (

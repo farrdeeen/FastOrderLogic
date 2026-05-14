@@ -68,7 +68,7 @@ function parseAccessValue(value) {
   return null;
 }
 
-export function accessFromMetadata(metadata = {}, defaultAllowed = true) {
+export function accessFromMetadata(metadata = {}, defaultAllowed = false) {
   const meta = metadata || {};
   if (meta.active === false || isTruthy(meta.blocked) || isTruthy(meta.disabled)) {
     return { allowedPages: [], isAdmin: false };
@@ -98,7 +98,7 @@ export function accessFromMetadata(metadata = {}, defaultAllowed = true) {
   };
 }
 
-export function accessFromServer(serverAccess, user, defaultAllowed = true) {
+export function accessFromServer(serverAccess, user, defaultAllowed = false) {
   if (serverAccess?.allowed_pages || serverAccess?.allowedPages) {
     const pages = serverAccess.allowed_pages || serverAccess.allowedPages || [];
     return {
