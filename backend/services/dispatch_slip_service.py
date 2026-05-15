@@ -1,6 +1,8 @@
 import logging
+import os
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
@@ -17,6 +19,15 @@ from services.order_preferences import ensure_order_preference_columns
 from services.whatsapp_service import send_document_message, send_image_message, send_text_message
 
 logger = logging.getLogger(__name__)
+
+DISPATCH_WEBSITE = "www.mtm-store.com"
+DISPATCH_SELLER_PHONE = "9355754722"
+DISPATCH_SELLER_EMAIL = "orders@mtm-store.com"
+DISPATCH_SELLER_NAME = os.getenv("DELHIVERY_SELLER_NAME") or "Maseehum Task Manager Pvt. Ltd."
+DISPATCH_SELLER_ADDRESS = os.getenv("DELHIVERY_SELLER_ADDRESS") or (
+    "722B, 7th Floor, Hemkunt Chambers Nehru Place South Delhi Delhi 110019 India"
+)
+DISPATCH_LOGO_PATH = Path(__file__).resolve().parents[2] / "frontend/src/assets/logo.png"
 
 
 def _font(size: int, bold: bool = False):
@@ -38,6 +49,33 @@ def _money(value) -> str:
         return f"Rs. {float(value):,.0f}"
     except Exception:
         return "Rs. -"
+
+
+def _paste_logo(image: Image.Image, x: int, y: int, max_w: int = 170, max_h: int = 100) -> int:
+    try:
+        logo = Image.open(DISPATCH_LOGO_PATH).convert("RGBA")
+        logo.thumbnail((max_w, max_h))
+        image.paste(logo, (x, y), logo)
+        return y + logo.height
+    except Exception:
+        return y
+
+
+def _draw_centered(draw: ImageDraw.ImageDraw, center_x: int, y: int, text_value: str, font, fill="#111111") -> None:
+    bbox = draw.textbbox((0, 0), str(text_value or ""), font=font)
+    width = bbox[2] - bbox[0]
+    draw.text((center_x - width / 2, y), str(text_value or ""), fill=fill, font=font)
+
+
+def _format_dispatch_date(value) -> str:
+    if hasattr(value, "strftime"):
+        return value.strftime("%d %b %Y")
+    if value:
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "")).strftime("%d %b %Y")
+        except Exception:
+            pass
+    return datetime.now().strftime("%d %b %Y")
 
 
 def _wrap(draw: ImageDraw.ImageDraw, text_value: str, font, width: int) -> list[str]:
@@ -135,9 +173,13 @@ def build_dispatch_slip_pdf(db, order_id: str) -> Optional[dict]:
     body_font = _font(23)
     small_font = _font(19)
 
-    x, y = 90, 80
-    draw.text((x, y), "Dispatch Slip", fill="#111111", font=title_font)
-    y += 62
+    x, y = 90, 70
+    logo_bottom = _paste_logo(image, x, y)
+    _draw_centered(draw, 600, y + 54, DISPATCH_WEBSITE, _font(32, bold=True))
+    _draw_centered(draw, 980, y, str(order.get("order_id") or ""), title_font)
+    _draw_centered(draw, 980, y + 52, f"Status: {(order.get('payment_status') or '-').upper()}", head_font)
+    _draw_centered(draw, 980, y + 84, _format_dispatch_date(order.get("created_at")), small_font, "#333333")
+    y = max(logo_bottom + 38, 190)
     draw.line((x, y, 1150, y), fill="#111111", width=3)
     y += 32
 
@@ -147,7 +189,6 @@ def build_dispatch_slip_pdf(db, order_id: str) -> Optional[dict]:
         draw.text((x + 230, y), str(value or "-"), fill="#111111", font=font)
         y += 42
 
-    line("Order ID", order.get("order_id"))
     line("AWB", awb)
     line("Amount", _money(order.get("total_amount")))
     line("Payment", order.get("payment_status"))
@@ -167,6 +208,20 @@ def build_dispatch_slip_pdf(db, order_id: str) -> Optional[dict]:
     for part in address_parts:
         if not part:
             continue
+        for wrapped in _wrap(draw, part, body_font, 980):
+            draw.text((x, y), wrapped, fill="#111111", font=body_font)
+            y += 34
+
+    y += 28
+    draw.text((x, y), "Seller / Return Address", fill="#111111", font=head_font)
+    y += 40
+    seller_parts = [
+        DISPATCH_SELLER_NAME,
+        DISPATCH_SELLER_ADDRESS,
+        f"Phone: {DISPATCH_SELLER_PHONE}",
+        f"Email: {DISPATCH_SELLER_EMAIL}",
+    ]
+    for part in seller_parts:
         for wrapped in _wrap(draw, part, body_font, 980):
             draw.text((x, y), wrapped, fill="#111111", font=body_font)
             y += 34

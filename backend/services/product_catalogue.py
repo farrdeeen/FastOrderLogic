@@ -17,11 +17,13 @@ import re
 import asyncio
 import logging
 import httpx
+import mimetypes
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus, unquote, urlparse
 
-from services.chat_media_service import media_public_url
+from services.chat_media_service import media_public_url, save_media_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,9 @@ _REFRESH_MINS  = int(os.getenv("CATALOGUE_REFRESH_MINUTES", "60"))
 
 # Your Wix store URL — used for product links sent to customers
 _WIX_STORE_URL = (os.getenv("WIX_STORE_URL") or os.getenv("STORE_BASE_URL") or "https://www.cspbank.in").rstrip("/")
-_PRODUCT_IMAGE_PUBLIC_BASE_URL = (os.getenv("PRODUCT_IMAGE_PUBLIC_BASE_URL") or "").rstrip("/")
+_PRODUCT_IMAGE_PUBLIC_BASE_URL = (
+    os.getenv("PRODUCT_IMAGE_PUBLIC_BASE_URL") or "https://mtm-store.com/api/static"
+).rstrip("/")
 
 _PRODUCTS_API  = "https://www.wixapis.com/stores/v1/products/query"
 
@@ -214,6 +218,55 @@ async def refresh_catalogue() -> dict:
         "product_count": len(_catalogue),
         "last_fetched":  _last_fetched.isoformat() if _last_fetched else None,
     }
+
+
+async def download_product_image_to_media(
+    image_url: str,
+    product_sku: str = "",
+    product_name: str = "",
+    public_base_url: str = "",
+) -> Optional[dict]:
+    """
+    Download a product image from the public mtm-store static route into local
+    chat media, so WhatsApp receives a stable media URL from this app.
+    """
+    source_url = _normalise_product_image_url(image_url)
+    if not source_url:
+        return None
+    if not source_url.startswith("https://mtm-store.com/api/static/"):
+        logger.info("Skipping product image download for non-mtm static URL: %s", source_url[:120])
+        return None
+
+    parsed_path = unquote(urlparse(source_url).path)
+    suffix = Path(parsed_path).suffix.lower() or ".jpg"
+    filename_source = product_sku or product_name or "product"
+    filename = f"{filename_source}{suffix}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            resp = await client.get(source_url)
+            resp.raise_for_status()
+
+        content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        guessed_type = mimetypes.guess_type(filename)[0] or "image/jpeg"
+        is_image = content_type.startswith("image/") or guessed_type.startswith("image/")
+        if not is_image:
+            raise ValueError(f"Product image URL did not return an image content type: {content_type or 'unknown'}")
+        if len(resp.content) > 8 * 1024 * 1024:
+            raise ValueError("Product image is larger than 8 MB")
+
+        saved = save_media_bytes(
+            resp.content,
+            filename=filename,
+            folder="chat/products",
+            content_type=content_type or guessed_type,
+            public_base_url=public_base_url or None,
+        )
+        saved["source_url"] = source_url
+        return saved
+    except Exception as exc:
+        logger.warning("Product image download failed for %s: %s", source_url[:160], exc)
+        return None
 
 
 # ─── Internal Wix fetch ───────────────────────────────────────────────────────
@@ -467,7 +520,9 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
                     WHERE pi.product_id = mp.product_id
                       AND pi.image_url IS NOT NULL
                       AND pi.image_url != ''
-                    ORDER BY pi.image_id ASC
+                    ORDER BY
+                        CASE WHEN pi.color_id IS NULL THEN 0 ELSE 1 END,
+                        pi.image_id ASC
                     LIMIT 2
                 """),
                 {"sku": sku},
@@ -485,7 +540,9 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
                     WHERE LOWER(p.name) LIKE :name
                       AND pi.image_url IS NOT NULL
                       AND pi.image_url != ''
-                    ORDER BY pi.image_id ASC
+                    ORDER BY
+                        CASE WHEN pi.color_id IS NULL THEN 0 ELSE 1 END,
+                        pi.image_id ASC
                     LIMIT 2
                 """),
                 {"name": f"%{product_name.lower()[:40]}%"},
@@ -543,16 +600,13 @@ def _normalise_product_image_url(raw_url: str) -> str:
     parsed = urlparse(url)
     path = unquote(parsed.path.lstrip("/")) if parsed.scheme else unquote(url.lstrip("/"))
 
-    if path.startswith("media/"):
-        if path.startswith("media/product_images/") and not _PRODUCT_IMAGE_PUBLIC_BASE_URL:
-            return ""
-        if path.startswith("media/product_images/") and _PRODUCT_IMAGE_PUBLIC_BASE_URL:
-            return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path}"
-        return media_public_url(path)
+    if path.startswith("media/product_images/"):
+        return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path.removeprefix('media/')}"
     if path.startswith("product_images/"):
-        if _PRODUCT_IMAGE_PUBLIC_BASE_URL:
-            return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path}"
-        return ""
+        return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path}"
+
+    if path.startswith("media/"):
+        return media_public_url(path)
 
     if parsed.scheme in ("http", "https"):
         return url

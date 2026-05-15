@@ -1908,7 +1908,7 @@ export default function ChatWindow({
     setInput(e.target.value);
     const el = textareaRef.current;
     if (el) {
-      el.style.height = "22px";
+      el.style.height = "24px";
       el.style.height = Math.min(el.scrollHeight, 120) + "px";
     }
   };
@@ -1944,7 +1944,7 @@ export default function ChatWindow({
       },
     ]);
     setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = "22px";
+    if (textareaRef.current) textareaRef.current.style.height = "24px";
     setSending(true);
     try {
       await sendChatMessage(chat.id, msg);
@@ -1970,7 +1970,7 @@ export default function ChatWindow({
       const result = await uploadChatMedia(chat.id, file, caption);
       if (caption) {
         setInput("");
-        if (textareaRef.current) textareaRef.current.style.height = "22px";
+        if (textareaRef.current) textareaRef.current.style.height = "24px";
       }
       await loadMessages(chat.id, false);
       if (!result?.success) {
@@ -2072,7 +2072,7 @@ export default function ChatWindow({
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
       if (textareaRef.current) {
-        textareaRef.current.style.height = "22px";
+        textareaRef.current.style.height = "24px";
         textareaRef.current.style.height =
           Math.min(textareaRef.current.scrollHeight, 120) + "px";
       }
@@ -2088,7 +2088,7 @@ export default function ChatWindow({
       await loadMessages(chat.id, false);
       setSavedRepliesOpen(false);
       if (options.clearInput) setInput("");
-      if (textareaRef.current && options.clearInput) textareaRef.current.style.height = "22px";
+      if (textareaRef.current && options.clearInput) textareaRef.current.style.height = "24px";
       if (!result?.success) {
         setError("Saved reply logged, but WhatsApp send failed.");
         showToast("Saved reply logged, but WhatsApp send failed.", "error");
@@ -2181,7 +2181,7 @@ export default function ChatWindow({
         setInput(refined);
         requestAnimationFrame(() => {
           if (textareaRef.current) {
-            textareaRef.current.style.height = "22px";
+            textareaRef.current.style.height = "24px";
             textareaRef.current.style.height =
               Math.min(textareaRef.current.scrollHeight, 120) + "px";
             textareaRef.current.focus();

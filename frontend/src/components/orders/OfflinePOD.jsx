@@ -8,6 +8,9 @@ const SIZE_CONFIG = {
   A5: { w: "148mm", h: "210mm", pad: "8mm", fontSize: "11.5pt", barcodeH: 68 },
   A6: { w: "105mm", h: "148mm", pad: "6mm", fontSize: "9.5pt", barcodeH: 50 },
 };
+const DISPATCH_WEBSITE = "www.mtm-store.com";
+const DISPATCH_PHONE = "9355754722";
+const DISPATCH_EMAIL = "orders@mtm-store.com";
 
 function buildPrintHtml({ data, cfg, paperSize }) {
   const addr = data.address || {};
@@ -36,7 +39,13 @@ function buildPrintHtml({ data, cfg, paperSize }) {
       <td><strong>${fmtCurrency(total)}</strong></td>
     </tr>`;
 
-  const logoHtml = `<img src="${logoSrc}" alt="Logo" style="max-height:84px;max-width:170px;object-fit:contain;" />`;
+  const sellerPhone = DISPATCH_PHONE;
+  const sellerEmail = DISPATCH_EMAIL;
+  const sellerWebsite = DISPATCH_WEBSITE;
+  const logoHtml = `
+    <div class="pod-logo-block">
+      <img src="${logoSrc}" alt="Logo" style="max-height:84px;max-width:170px;object-fit:contain;" />
+    </div>`;
 
   const barcodeScript = hasAwb
     ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
@@ -78,11 +87,14 @@ function buildPrintHtml({ data, cfg, paperSize }) {
     }
     .pod-label { width: 100%; height: 100%; display: flex; flex-direction: column; }
     .pod-header {
-      display:flex; justify-content:space-between; align-items:flex-start;
+      display:grid; grid-template-columns:1fr auto 1fr; align-items:start;
       border-bottom:2px solid #000; padding-bottom:4mm; margin-bottom:4mm; gap:8px; flex-shrink:0;
     }
-    .pod-meta-right { text-align:right; }
+    .pod-logo-block { display:flex; flex-direction:column; align-items:flex-start; }
+    .pod-website { align-self:center; font-weight:700; font-size:1.2em; line-height:1.1; padding-top:8mm; white-space:nowrap; }
+    .pod-meta-right { text-align:center; justify-self:end; min-width:34mm; }
     .pod-order-id { font-family:'DM Mono',monospace; font-size:1.3em; font-weight:700; }
+    .pod-status-line { font-size:0.86em; color:#111; margin-top:1px; font-weight:700; }
     .pod-date-line { font-size:0.75em; color:#555; margin-top:1px; font-family:'DM Mono',monospace; }
     .pod-barcode-area {
       border:1.5px dashed #999; border-radius:4px; padding:4px 6px; margin-bottom:4mm;
@@ -111,14 +123,16 @@ function buildPrintHtml({ data, cfg, paperSize }) {
   <div class="pod-label">
     <div class="pod-header">
       ${logoHtml}
+      <div class="pod-website">${sellerWebsite}</div>
       <div class="pod-meta-right">
         <div class="pod-order-id">${data.order_id}</div>
-        <div class="pod-date-line">${fmtDate(data.created_at)} &nbsp; Status: <strong>${(data.payment_status || "—").toUpperCase()}</strong></div>
+        <div class="pod-status-line">Status: ${(data.payment_status || "—").toUpperCase()}</div>
+        <div class="pod-date-line">${fmtDate(data.created_at)}</div>
       </div>
     </div>
     ${barcodeArea}
     <div class="pod-section">
-      <div class="pod-section-title">Deliver To</div>
+      <div class="pod-section-title">Ship To</div>
       <div class="pod-address-box">
         <div class="pod-address-name">${addr.name || ""}</div>
         <div>${addr.address_line || ""}${addr.locality ? `, ${addr.locality}` : ""}</div>
@@ -128,10 +142,12 @@ function buildPrintHtml({ data, cfg, paperSize }) {
       </div>
     </div>
     <div class="pod-section">
-      <div class="pod-section-title">From</div>
+      <div class="pod-section-title">Seller / Return Address</div>
       <div class="pod-from-box">
         <strong>${seller.name || ""}</strong><br/>
-        ${seller.address || ""}${seller.phone ? `<br/>📞 ${seller.phone}` : ""}
+        ${seller.address || ""}
+        <br/>Phone: ${sellerPhone}
+        <br/>Email: ${sellerEmail}
       </div>
     </div>
     <div class="pod-items-section">
@@ -154,6 +170,9 @@ export default function OfflinePOD({ data, onClose }) {
 
   const addr = data.address || {};
   const seller = data.seller || {};
+  const sellerPhone = DISPATCH_PHONE;
+  const sellerEmail = DISPATCH_EMAIL;
+  const sellerWebsite = DISPATCH_WEBSITE;
   const items = data.items || [];
   const total = items.reduce((s, i) => s + parseFloat(i.total_price || 0), 0);
   const hasAwb = data.awb_number && data.awb_number !== "To be assigned";
@@ -268,9 +287,15 @@ export default function OfflinePOD({ data, onClose }) {
         <div className="pod-preview-wrap">
           <div className={previewClass}>
             <div className="pod-header">
-              <img src={logoSrc} alt="Logo" className="pod-logo" />
+              <div className="pod-logo-block">
+                <img src={logoSrc} alt="Logo" className="pod-logo" />
+              </div>
+              <div className="pod-website">{sellerWebsite}</div>
               <div className="pod-meta-right">
                 <div className="pod-order-id">{data.order_id}</div>
+                <div className="pod-status-line">
+                  Status: {(data.payment_status || "—").toUpperCase()}
+                </div>
                 <div className="pod-date-line">{fmtDate(data.created_at)}</div>
                 {data.invoice_number && (
                   <div className="pod-date-line">
@@ -298,7 +323,7 @@ export default function OfflinePOD({ data, onClose }) {
             </div>
 
             <div className="pod-section">
-              <div className="pod-section-title">Deliver To</div>
+              <div className="pod-section-title">Ship To</div>
               <div className="pod-address-box">
                 <div className="pod-address-name">{addr.name}</div>
                 <div>
@@ -317,17 +342,15 @@ export default function OfflinePOD({ data, onClose }) {
             </div>
 
             <div className="pod-section">
-              <div className="pod-section-title">From</div>
+              <div className="pod-section-title">Seller / Return Address</div>
               <div className="pod-from-box">
                 <strong>{seller.name}</strong>
                 <br />
                 {seller.address}
-                {seller.phone ? (
-                  <>
-                    <br />
-                    📞 {seller.phone}
-                  </>
-                ) : null}
+                <br />
+                Phone: {sellerPhone}
+                <br />
+                Email: {sellerEmail}
               </div>
             </div>
 
@@ -393,7 +416,7 @@ export default function OfflinePOD({ data, onClose }) {
 
             <div className="pod-fine-print">
               Computer-generated document.
-              {seller.phone ? ` Queries: ${seller.phone}` : ""}
+              {` Queries: ${sellerPhone} | ${sellerEmail}`}
             </div>
           </div>
         </div>

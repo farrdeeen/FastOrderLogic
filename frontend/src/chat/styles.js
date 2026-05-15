@@ -616,10 +616,10 @@ export const chatStyles = {
 
   inputArea: {
     display: "flex",
-    alignItems: "flex-end",
+    alignItems: "center",
     gap: "8px",
-    padding: "10px 12px",
-    paddingBottom: "max(10px, env(safe-area-inset-bottom, 10px))",
+    padding: "8px 12px",
+    paddingBottom: "max(8px, env(safe-area-inset-bottom, 8px))",
     background: WA.bgInput,
     borderTop: `1px solid ${WA.border}`,
     flexShrink: 0,
@@ -650,7 +650,7 @@ export const chatStyles = {
 
   composerMain: {
     display: "flex",
-    alignItems: "flex-end",
+    alignItems: "center",
     gap: "8px",
     flex: 1,
     minWidth: 0,
@@ -681,9 +681,11 @@ export const chatStyles = {
     borderRadius: "24px",
     border: `1px solid ${WA.border}`,
     display: "flex",
-    alignItems: "flex-end",
-    padding: "6px 12px",
+    alignItems: "center",
+    padding: "8px 12px",
     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+    minHeight: "44px",
+    boxSizing: "border-box",
     minWidth: 0,
     "@media (max-width: 768px)": {
       borderRadius: "18px",
@@ -703,7 +705,7 @@ export const chatStyles = {
     background: "transparent",
     color: WA.textPrimary,
     fontFamily: "inherit",
-    minHeight: "22px",
+    minHeight: "24px",
     maxHeight: "120px",
     overflowY: "auto",
     padding: 0,

@@ -682,6 +682,7 @@ async def send_chat_product(
     db: Session = Depends(get_db),
 ):
     from services.product_catalogue import (
+        download_product_image_to_media,
         format_product_card,
         get_product_images_by_sku,
         search_products,
@@ -722,6 +723,17 @@ async def send_chat_product(
     product_name = (product.get("name") or "").strip()
     images = await get_product_images_by_sku(product_sku, product_name=product_name)
     image_url = _absolute_media_url(images[0], request) if images else ""
+    downloaded_image = (
+        await download_product_image_to_media(
+            image_url,
+            product_sku=product_sku,
+            product_name=product_name,
+            public_base_url=_public_base_from_request(request),
+        )
+        if image_url
+        else None
+    )
+    wa_image_url = (downloaded_image or {}).get("public_url") or ""
     phone = session["phone_number"]
 
     meta = {
@@ -737,15 +749,17 @@ async def send_chat_product(
     success = False
 
     try:
-        if image_url:
+        if wa_image_url:
             try:
-                wa_resp = await send_image_message(phone, image_url, caption=text_message[:1024])
+                wa_resp = await send_image_message(phone, wa_image_url, caption=text_message[:1024])
                 meta.update({
                     "media_type": "image",
-                    "mime_type": "image/*",
-                    "media_url": image_url,
-                    "download_url": image_url,
-                    "file_name": f"{product_sku or product_name or 'product'}.jpg",
+                    "mime_type": downloaded_image.get("content_type") or "image/*",
+                    "media_url": wa_image_url,
+                    "download_url": downloaded_image.get("download_url") or wa_image_url,
+                    "file_name": downloaded_image.get("filename") or f"{product_sku or product_name or 'product'}.jpg",
+                    "file_size": downloaded_image.get("size"),
+                    "source_image_url": image_url,
                 })
             except Exception as image_exc:
                 logger.warning(
@@ -759,12 +773,15 @@ async def send_chat_product(
                     "link_preview": True,
                     "product_has_photo": False,
                     "image_send_error": str(image_exc),
+                    "source_image_url": image_url,
                 })
         else:
             wa_resp = await send_text_message(phone, text_message, preview_url=True)
             meta.update({
                 "link_preview": True,
                 "product_has_photo": False,
+                "source_image_url": image_url,
+                "image_downloaded": False,
             })
         wa_id = _wa_message_id(wa_resp)
         meta["wa_send_status"] = "sent"

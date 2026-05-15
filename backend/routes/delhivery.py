@@ -558,7 +558,9 @@ async def get_pod_data(order_id: str, db: Session = Depends(get_db)):
         "seller": {
             "name":    SELLER_NAME,
             "address": SELLER_ADDRESS,
-            "phone":   SELLER_PHONE,
+            "phone":   "9355754722",
+            "email":   "orders@mtm-store.com",
+            "website": "www.mtm-store.com",
             "gst":     SELLER_GST,
         },
         "customer":  customer,

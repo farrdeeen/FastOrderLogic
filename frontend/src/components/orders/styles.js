@@ -502,12 +502,18 @@ export const STYLES = `
   .pod-size-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
   .pod-header {
-    display: flex; justify-content: space-between; align-items: flex-start;
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: start;
     border-bottom: 2px solid #000; padding-bottom: 5mm; margin-bottom: 5mm; gap: 8px;
   }
+  .pod-logo-block { display: flex; flex-direction: column; align-items: flex-start; }
   .pod-logo { max-height: 44px; max-width: 130px; object-fit: contain; }
-  .pod-meta-right { text-align: right; }
+  .pod-website {
+    align-self: center; padding-top: 3mm; white-space: nowrap;
+    font-weight: 700; font-size: 1.08em; line-height: 1.1; color: #000;
+  }
+  .pod-meta-right { text-align: center; justify-self: end; min-width: 34mm; }
   .pod-order-id { font-family: 'DM Mono', monospace; font-size: 1.25em; font-weight: 700; }
+  .pod-status-line { font-size: 0.86em; color: #111; margin-top: 1px; font-weight: 700; }
   .pod-date-line { font-size: 0.78em; color: #555; margin-top: 2px; font-family: 'DM Mono', monospace; }
 
   .pod-barcode-area {

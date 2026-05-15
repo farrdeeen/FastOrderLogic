@@ -1,4 +1,4 @@
-import { SignedIn, SignedOut, SignIn, UserButton } from "@clerk/clerk-react";
+import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import api from "./api/axiosInstance";
@@ -8,6 +8,7 @@ import SearchBar from "./components/SearchBar";
 import NavDrawer from "./components/NavDrawer";
 import ChatPage from "./chat/ChatPage";
 import ChatNotificationListener from "./chat/ChatNotificationListener";
+import PublicSite from "./landing/PublicSite";
 import DeviceTransactionForm from "./components/DeviceTransactionForm";
 import DashboardPage from "./dashboard/DashboardPage";
 import SerialSearchPage from "./components/SerialSearchPage";
@@ -482,25 +483,7 @@ export default function App() {
     <>
       {/* ═════════════ SIGNED OUT ═════════════ */}
       <SignedOut>
-        <Box
-          sx={{
-            flexGrow: 1,
-
-            p: 2, // reduce padding (important)
-
-            background: "#f7f6f3",
-
-            height: "100vh",
-
-            overflow: "hidden", // 🔥 CRITICAL
-
-            display: "flex",
-
-            flexDirection: "column",
-          }}
-        >
-          <SignIn />
-        </Box>
+        <PublicSite />
       </SignedOut>
 
       {/* ═════════════ SIGNED IN ═════════════ */}
