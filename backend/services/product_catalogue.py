@@ -31,6 +31,7 @@ _REFRESH_MINS  = int(os.getenv("CATALOGUE_REFRESH_MINUTES", "60"))
 
 # Your Wix store URL — used for product links sent to customers
 _WIX_STORE_URL = (os.getenv("WIX_STORE_URL") or os.getenv("STORE_BASE_URL") or "https://www.cspbank.in").rstrip("/")
+_PRODUCT_IMAGE_PUBLIC_BASE_URL = (os.getenv("PRODUCT_IMAGE_PUBLIC_BASE_URL") or "").rstrip("/")
 
 _PRODUCTS_API  = "https://www.wixapis.com/stores/v1/products/query"
 
@@ -543,9 +544,15 @@ def _normalise_product_image_url(raw_url: str) -> str:
     path = unquote(parsed.path.lstrip("/")) if parsed.scheme else unquote(url.lstrip("/"))
 
     if path.startswith("media/"):
+        if path.startswith("media/product_images/") and not _PRODUCT_IMAGE_PUBLIC_BASE_URL:
+            return ""
+        if path.startswith("media/product_images/") and _PRODUCT_IMAGE_PUBLIC_BASE_URL:
+            return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path}"
         return media_public_url(path)
     if path.startswith("product_images/"):
-        return media_public_url(path)
+        if _PRODUCT_IMAGE_PUBLIC_BASE_URL:
+            return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path}"
+        return ""
 
     if parsed.scheme in ("http", "https"):
         return url

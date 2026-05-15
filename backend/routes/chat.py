@@ -738,14 +738,28 @@ async def send_chat_product(
 
     try:
         if image_url:
-            wa_resp = await send_image_message(phone, image_url, caption=text_message[:1024])
-            meta.update({
-                "media_type": "image",
-                "mime_type": "image/*",
-                "media_url": image_url,
-                "download_url": image_url,
-                "file_name": f"{product_sku or product_name or 'product'}.jpg",
-            })
+            try:
+                wa_resp = await send_image_message(phone, image_url, caption=text_message[:1024])
+                meta.update({
+                    "media_type": "image",
+                    "mime_type": "image/*",
+                    "media_url": image_url,
+                    "download_url": image_url,
+                    "file_name": f"{product_sku or product_name or 'product'}.jpg",
+                })
+            except Exception as image_exc:
+                logger.warning(
+                    "Product image send failed for %s (%s); falling back to link preview: %s",
+                    product_sku or product_name,
+                    image_url,
+                    image_exc,
+                )
+                wa_resp = await send_text_message(phone, text_message, preview_url=True)
+                meta.update({
+                    "link_preview": True,
+                    "product_has_photo": False,
+                    "image_send_error": str(image_exc),
+                })
         else:
             wa_resp = await send_text_message(phone, text_message, preview_url=True)
             meta.update({

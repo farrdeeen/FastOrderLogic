@@ -690,6 +690,13 @@ function SavedRepliesPanel({
         boxShadow: "0 -8px 24px rgba(17,27,33,0.08)",
         zIndex: 3,
         flexShrink: 0,
+        "@media (max-width: 768px)": {
+          borderRadius: "16px 16px 0 0",
+          overflow: "hidden",
+          maxHeight: "58dvh",
+          display: "flex",
+          flexDirection: "column",
+        },
       }}
     >
       <Box
@@ -721,7 +728,11 @@ function SavedRepliesPanel({
           overflowY: "auto",
           padding: replies.length ? "6px 8px" : "12px",
           borderBottom: `1px solid ${WA.border}`,
-          "@media (max-width: 768px)": { maxHeight: "34dvh" },
+          "@media (max-width: 768px)": {
+            maxHeight: "30dvh",
+            flex: "1 1 auto",
+            padding: replies.length ? "6px" : "12px",
+          },
         }}
       >
         {replies.length === 0 ? (
@@ -744,7 +755,8 @@ function SavedRepliesPanel({
                   borderRadius: "8px",
                   "&:hover": { background: WA.bgHeader },
                   "@media (max-width: 520px)": {
-                    gridTemplateColumns: mediaUrl ? "40px 1fr" : "1fr",
+                    gridTemplateColumns: mediaUrl ? "40px minmax(0, 1fr) auto" : "minmax(0, 1fr) auto",
+                    gap: "8px",
                   },
                 }}
               >
@@ -794,8 +806,8 @@ function SavedRepliesPanel({
                     gap: "4px",
                     justifyContent: "flex-end",
                     "@media (max-width: 520px)": {
-                      gridColumn: mediaUrl ? "2 / 3" : "1 / 2",
-                      justifyContent: "flex-start",
+                      gridColumn: "auto",
+                      justifyContent: "flex-end",
                     },
                   }}
                 >
@@ -868,6 +880,8 @@ function SavedRepliesPanel({
           background: WA.bgHeader,
           "@media (max-width: 768px)": {
             gridTemplateColumns: "1fr",
+            gap: "7px",
+            padding: "9px 10px max(9px, env(safe-area-inset-bottom, 9px))",
           },
         }}
       >
@@ -914,7 +928,17 @@ function SavedRepliesPanel({
             boxSizing: "border-box",
           }}
         />
-        <Box sx={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            minWidth: 0,
+            "@media (max-width: 768px)": {
+              justifyContent: "space-between",
+            },
+          }}
+        >
           {file && (
             <Typography
               sx={{
@@ -924,6 +948,9 @@ function SavedRepliesPanel({
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
+                "@media (max-width: 768px)": {
+                  maxWidth: "calc(100vw - 170px)",
+                },
               }}
               title={file.name}
             >
@@ -1045,6 +1072,11 @@ function SlashSavedReplyPanel({ query, replies, sendingReplyId, onSend }) {
         overflow: "hidden",
         zIndex: 4,
         flexShrink: 0,
+        "@media (max-width: 768px)": {
+          margin: "0 10px 7px",
+          borderRadius: "14px",
+          maxHeight: "34dvh",
+        },
       }}
     >
       <Box
@@ -1154,6 +1186,16 @@ function AttachMenu({ onProduct, onPayment, onFile, onClose }) {
     color: WA.textPrimary,
     fontWeight: 700,
     fontSize: 13,
+    minWidth: 0,
+    "@media (max-width: 620px)": {
+      flexDirection: "column",
+      justifyContent: "center",
+      gap: "5px",
+      minHeight: 68,
+      padding: "9px 6px",
+      fontSize: 12,
+      lineHeight: 1.15,
+    },
   };
 
   return (
@@ -1171,7 +1213,13 @@ function AttachMenu({ onProduct, onPayment, onFile, onClose }) {
         zIndex: 4,
         flexShrink: 0,
         position: "relative",
-        "@media (max-width: 620px)": { gridTemplateColumns: "1fr" },
+        "@media (max-width: 620px)": {
+          margin: "0 10px 7px",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: "7px",
+          padding: "9px 34px 9px 9px",
+          borderRadius: "14px",
+        },
       }}
     >
       <Box
@@ -1210,6 +1258,16 @@ function AttachMenu({ onProduct, onPayment, onFile, onClose }) {
           color: WA.textSub,
           cursor: "pointer",
           display: "flex",
+          "@media (max-width: 620px)": {
+            right: 8,
+            top: 8,
+            width: 24,
+            height: 24,
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: "50%",
+            background: WA.bgHeader,
+          },
         }}
       >
         <X size={15} />
@@ -1236,6 +1294,10 @@ function PaymentRequestPanel({
         overflow: "hidden",
         zIndex: 4,
         flexShrink: 0,
+        "@media (max-width: 768px)": {
+          margin: "0 10px 7px",
+          borderRadius: "14px",
+        },
       }}
     >
       <Box
@@ -1348,6 +1410,13 @@ function ProductPickerPanel({
         overflow: "hidden",
         zIndex: 4,
         flexShrink: 0,
+        "@media (max-width: 768px)": {
+          margin: "0 10px 7px",
+          borderRadius: "14px",
+          maxHeight: "46dvh",
+          display: "flex",
+          flexDirection: "column",
+        },
       }}
     >
       <Box
@@ -1392,7 +1461,10 @@ function ProductPickerPanel({
         sx={{
           maxHeight: "280px",
           overflowY: "auto",
-          "@media (max-width: 768px)": { maxHeight: "34dvh" },
+          "@media (max-width: 768px)": {
+            maxHeight: "36dvh",
+            flex: "1 1 auto",
+          },
         }}
       >
         {loading ? (
