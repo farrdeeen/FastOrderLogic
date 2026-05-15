@@ -39,6 +39,26 @@ const PAGE_SIZE = 500;
 const PARALLEL_PAGES = 3;
 const ACCESS_DEFAULT_ALLOWED =
   (import.meta.env.VITE_CLERK_ACCESS_DEFAULT || "deny").toLowerCase() === "allow";
+const STOCK_RECON_STORAGE_KEY = "fol_stock_recon_in_progress";
+
+function readStoredStockReconBanner() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(STOCK_RECON_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed?.active ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatStockReconDate(value) {
+  if (!value) return "";
+  return new Date(value).toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+  });
+}
 
 function PaymentRedirectPage() {
   const token = decodeURIComponent(
@@ -114,6 +134,9 @@ export default function App() {
   const [invoiceLoading, setInvoiceLoading] = useState({});
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [serverAccess, setServerAccess] = useState(null);
+  const [stockReconBanner, setStockReconBanner] = useState(() =>
+    readStoredStockReconBanner(),
+  );
 
   const fetchRunRef = useRef(0);
 
@@ -148,6 +171,25 @@ export default function App() {
     [access],
   );
   const hasAnyAccess = access.allowedPages.length > 0;
+
+  useEffect(() => {
+    const handleStockReconStatus = (event) => {
+      const detail = event.detail;
+      setStockReconBanner(detail?.active ? detail : null);
+    };
+    const handleStorage = (event) => {
+      if (event.key === STOCK_RECON_STORAGE_KEY) {
+        setStockReconBanner(readStoredStockReconBanner());
+      }
+    };
+
+    window.addEventListener("stock-recon:status", handleStockReconStatus);
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("stock-recon:status", handleStockReconStatus);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
 
   useEffect(() => {
     const handleAppNavigate = (event) => {
@@ -464,6 +506,69 @@ export default function App() {
       {/* ═════════════ SIGNED IN ═════════════ */}
       <SignedIn>
         {canAccess("chat") && <ChatNotificationListener />}
+        {stockReconBanner?.active && (
+          <Box
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (canAccess("dashboard")) setActivePage("dashboard");
+              setMobileNavOpen(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                if (canAccess("dashboard")) setActivePage("dashboard");
+              }
+            }}
+            sx={{
+              position: "fixed",
+              top: { xs: 8, sm: 12 },
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 1800,
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              maxWidth: { xs: "calc(100vw - 20px)", sm: 520 },
+              width: { xs: "calc(100vw - 20px)", sm: "auto" },
+              px: { xs: 1.5, sm: 2 },
+              py: 1,
+              borderRadius: 2,
+              border: "1px solid #fde68a",
+              background: "#fffbeb",
+              boxShadow: "0 10px 28px rgba(15, 23, 42, 0.18)",
+              color: "#78350f",
+              cursor: canAccess("dashboard") ? "pointer" : "default",
+            }}
+          >
+            <Typography
+              sx={{
+                fontSize: 13,
+                fontWeight: 800,
+                lineHeight: 1.2,
+                whiteSpace: "nowrap",
+              }}
+            >
+              Stock recon in progress
+            </Typography>
+            {stockReconBanner.week_start && stockReconBanner.week_end && (
+              <Typography
+                sx={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#92400e",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  minWidth: 0,
+                }}
+              >
+                {formatStockReconDate(stockReconBanner.week_start)} -{" "}
+                {formatStockReconDate(stockReconBanner.week_end)}
+              </Typography>
+            )}
+          </Box>
+        )}
         <Box
           sx={{
             display: "flex",

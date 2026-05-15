@@ -3,18 +3,36 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Box, Typography } from "@mui/material";
 import {
   ArrowLeft,
+  Bookmark,
   Download,
   FileText,
   Film,
+  FolderOpen,
+  ImagePlus,
+  IndianRupee,
   Music,
   MoreVertical,
   Paperclip,
+  Package,
+  QrCode,
+  Save,
+  Search,
   Send,
+  Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import {
+  createSavedReply,
+  deleteSavedReply,
+  fetchSavedReplies,
   fetchMessages,
+  refineChatMessage,
+  searchChatProducts,
   sendChatMessage,
+  sendChatPaymentRequest,
+  sendChatProduct,
+  sendSavedReply,
   uploadChatMedia,
 } from "./chatApi";
 import { chatStyles, avatarColor, WA } from "./styles";
@@ -104,6 +122,14 @@ function formatBytes(size) {
 
 function isMediaPlaceholder(message) {
   return /^\[(image|file|media:|video:|audio:)/i.test((message || "").trim());
+}
+
+function hostFromUrl(url) {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return "Product link";
+  }
 }
 
 // ── Media extraction from meta ────────────────────────────────────────────────
@@ -464,6 +490,93 @@ function MediaAttachment({ meta, onPreview }) {
   );
 }
 
+function ProductLinkPreview({ meta }) {
+  const link = meta.product_link || meta.link || "";
+  if (!link) return null;
+  const title = meta.product_name || "Product";
+  const price = meta.product_price || "";
+  const sku = meta.sku || "";
+  const stock = meta.product_in_stock;
+
+  return (
+    <Box
+      component="a"
+      href={link}
+      target="_blank"
+      rel="noreferrer"
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "42px 1fr",
+        gap: "9px",
+        width: "min(320px, 100%)",
+        padding: "9px",
+        marginTop: "6px",
+        borderRadius: "8px",
+        background: "rgba(255,255,255,0.72)",
+        border: `1px solid ${WA.borderMid}`,
+        color: WA.textPrimary,
+        textDecoration: "none",
+        boxSizing: "border-box",
+      }}
+    >
+      <Box
+        sx={{
+          width: 42,
+          height: 42,
+          borderRadius: "8px",
+          background: `${WA.greenDark}12`,
+          border: `1px solid ${WA.border}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: WA.greenDark,
+        }}
+      >
+        <Package size={19} />
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography
+          sx={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: WA.textPrimary,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {title}
+        </Typography>
+        <Typography
+          sx={{
+            fontSize: 12,
+            color: WA.textSub,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {[sku, price, stock === true ? "In stock" : stock === false ? "Out of stock" : ""]
+            .filter(Boolean)
+            .join(" · ")}
+        </Typography>
+        <Typography
+          sx={{
+            fontSize: 11,
+            color: WA.greenDark,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            mt: "2px",
+          }}
+        >
+          {hostFromUrl(link)}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
 // ── Full-screen image preview ─────────────────────────────────────────────────
 function ImagePreview({ media, onClose }) {
   if (!media) return null;
@@ -549,6 +662,823 @@ function ImagePreview({ media, onClose }) {
   );
 }
 
+// ── Saved replies ────────────────────────────────────────────────────────────
+function SavedRepliesPanel({
+  replies,
+  title,
+  message,
+  file,
+  saving,
+  sendingReplyId,
+  onTitleChange,
+  onMessageChange,
+  onPickFile,
+  onClearFile,
+  onSave,
+  onInsert,
+  onSend,
+  onDelete,
+  onClose,
+}) {
+  const canSave = Boolean(title.trim() && (message.trim() || file));
+
+  return (
+    <Box
+      sx={{
+        background: "#fff",
+        borderTop: `1px solid ${WA.border}`,
+        boxShadow: "0 -8px 24px rgba(17,27,33,0.08)",
+        zIndex: 3,
+        flexShrink: 0,
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 12px",
+          borderBottom: `1px solid ${WA.border}`,
+        }}
+      >
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: WA.textPrimary }}>
+          Saved replies
+        </Typography>
+        <Box
+          component="button"
+          type="button"
+          onClick={onClose}
+          aria-label="Close saved replies"
+          sx={{ ...chatStyles.iconCircleBtn, width: 32, height: 32 }}
+        >
+          <X size={17} />
+        </Box>
+      </Box>
+
+      <Box
+        sx={{
+          maxHeight: "230px",
+          overflowY: "auto",
+          padding: replies.length ? "6px 8px" : "12px",
+          borderBottom: `1px solid ${WA.border}`,
+          "@media (max-width: 768px)": { maxHeight: "34dvh" },
+        }}
+      >
+        {replies.length === 0 ? (
+          <Typography sx={{ fontSize: 13, color: WA.textSub }}>
+            No saved replies yet.
+          </Typography>
+        ) : (
+          replies.map((reply) => {
+            const mediaUrl = resolveMediaUrl(reply.media_url);
+            const isSending = Number(sendingReplyId) === Number(reply.id);
+            return (
+              <Box
+                key={reply.id}
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: mediaUrl ? "44px 1fr auto" : "1fr auto",
+                  gap: "10px",
+                  alignItems: "center",
+                  padding: "8px",
+                  borderRadius: "8px",
+                  "&:hover": { background: WA.bgHeader },
+                  "@media (max-width: 520px)": {
+                    gridTemplateColumns: mediaUrl ? "40px 1fr" : "1fr",
+                  },
+                }}
+              >
+                {mediaUrl && (
+                  <Box
+                    component="img"
+                    src={mediaUrl}
+                    alt={reply.title}
+                    sx={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: "6px",
+                      objectFit: "cover",
+                      border: `1px solid ${WA.border}`,
+                    }}
+                  />
+                )}
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    sx={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: WA.textPrimary,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {reply.title}
+                  </Typography>
+                  <Typography
+                    sx={{
+                      fontSize: 12,
+                      color: WA.textSub,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {reply.message || (mediaUrl ? "Photo reply" : "")}
+                  </Typography>
+                </Box>
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    justifyContent: "flex-end",
+                    "@media (max-width: 520px)": {
+                      gridColumn: mediaUrl ? "2 / 3" : "1 / 2",
+                      justifyContent: "flex-start",
+                    },
+                  }}
+                >
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => (mediaUrl ? onSend(reply) : onInsert(reply))}
+                    disabled={mediaUrl ? isSending : !reply.message}
+                    sx={{
+                      border: `1px solid ${WA.borderMid}`,
+                      background: "#fff",
+                      color: WA.textPrimary,
+                      borderRadius: "16px",
+                      height: 30,
+                      padding: "0 11px",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: mediaUrl || reply.message ? "pointer" : "not-allowed",
+                      opacity: mediaUrl || reply.message ? 1 : 0.45,
+                    }}
+                  >
+                    {mediaUrl ? "Send" : "Use"}
+                  </Box>
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => onSend(reply)}
+                    disabled={isSending}
+                    title="Send saved reply"
+                    aria-label="Send saved reply"
+                    sx={{
+                      ...chatStyles.iconCircleBtn,
+                      width: 32,
+                      height: 32,
+                      color: WA.greenDark,
+                      opacity: isSending ? 0.55 : 1,
+                    }}
+                  >
+                    <Send size={15} />
+                  </Box>
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => onDelete(reply)}
+                    title="Delete saved reply"
+                    aria-label="Delete saved reply"
+                    sx={{
+                      ...chatStyles.iconCircleBtn,
+                      width: 32,
+                      height: 32,
+                      color: "#C62828",
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </Box>
+                </Box>
+              </Box>
+            );
+          })
+        )}
+      </Box>
+
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "180px 1fr auto",
+          gap: "8px",
+          alignItems: "end",
+          padding: "10px 12px",
+          background: WA.bgHeader,
+          "@media (max-width: 768px)": {
+            gridTemplateColumns: "1fr",
+          },
+        }}
+      >
+        <Box
+          component="input"
+          value={title}
+          onChange={(e) => onTitleChange(e.target.value)}
+          placeholder="Reply title"
+          spellCheck
+          lang="en-IN"
+          sx={{
+            width: "100%",
+            border: `1px solid ${WA.borderMid}`,
+            borderRadius: "8px",
+            padding: "9px 10px",
+            font: "inherit",
+            fontSize: 13,
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+        <Box
+          component="textarea"
+          value={message}
+          onChange={(e) => onMessageChange(e.target.value)}
+          placeholder="Saved message"
+          rows={1}
+          spellCheck
+          lang="en-IN"
+          autoCorrect="on"
+          autoCapitalize="sentences"
+          sx={{
+            width: "100%",
+            minHeight: 38,
+            maxHeight: 84,
+            border: `1px solid ${WA.borderMid}`,
+            borderRadius: "8px",
+            padding: "8px 10px",
+            font: "inherit",
+            fontSize: 13,
+            lineHeight: 1.35,
+            resize: "vertical",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+        <Box sx={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+          {file && (
+            <Typography
+              sx={{
+                maxWidth: 150,
+                fontSize: 11,
+                color: WA.textSub,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={file.name}
+            >
+              {file.name}
+            </Typography>
+          )}
+          {file && (
+            <Box
+              component="button"
+              type="button"
+              onClick={onClearFile}
+              aria-label="Remove saved reply photo"
+              sx={{ ...chatStyles.iconCircleBtn, width: 32, height: 32 }}
+            >
+              <X size={15} />
+            </Box>
+          )}
+          <Box
+            component="button"
+            type="button"
+            onClick={onPickFile}
+            aria-label="Attach saved reply photo"
+            title="Attach saved reply photo"
+            sx={{ ...chatStyles.iconCircleBtn, width: 36, height: 36 }}
+          >
+            <ImagePlus size={17} />
+          </Box>
+          <Box
+            component="button"
+            type="button"
+            onClick={onSave}
+            disabled={saving || !canSave}
+            aria-label="Save reply"
+            title="Save reply"
+            sx={{
+              ...chatStyles.sendBtn,
+              width: 38,
+              height: 38,
+              opacity: saving || !canSave ? 0.55 : 1,
+            }}
+          >
+            <Save size={16} />
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function ChatToast({ toast, onClose }) {
+  if (!toast) return null;
+  const colors =
+    toast.type === "error"
+      ? { bg: "#FCEBEB", border: "#F2B8B5", text: "#8A1C1C" }
+      : { bg: "#E8F5E9", border: "#B8E0C1", text: "#1B5E20" };
+  return (
+    <Box
+      sx={{
+        position: "absolute",
+        left: "50%",
+        bottom: "86px",
+        transform: "translateX(-50%)",
+        zIndex: 20,
+        maxWidth: "min(420px, calc(100% - 28px))",
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        padding: "10px 12px",
+        borderRadius: "8px",
+        background: colors.bg,
+        border: `1px solid ${colors.border}`,
+        color: colors.text,
+        boxShadow: "0 10px 30px rgba(17,27,33,0.16)",
+        fontSize: 13,
+        fontWeight: 700,
+        "@media (max-width: 768px)": {
+          bottom: "132px",
+        },
+      }}
+    >
+      <span style={{ flex: 1 }}>{toast.message}</span>
+      <Box
+        component="button"
+        type="button"
+        onClick={onClose}
+        aria-label="Close notification"
+        sx={{
+          border: "none",
+          background: "transparent",
+          color: "inherit",
+          cursor: "pointer",
+          padding: 0,
+          display: "flex",
+        }}
+      >
+        <X size={15} />
+      </Box>
+    </Box>
+  );
+}
+
+function SlashSavedReplyPanel({ query, replies, sendingReplyId, onSend }) {
+  const needle = (query || "").trim().toLowerCase();
+  const filtered = replies
+    .filter((reply) => {
+      if (!needle) return true;
+      return String(reply.title || "").toLowerCase().includes(needle);
+    })
+    .slice(0, 6);
+
+  return (
+    <Box
+      sx={{
+        margin: "0 12px 8px",
+        background: "#fff",
+        border: `1px solid ${WA.border}`,
+        borderRadius: "10px",
+        boxShadow: "0 12px 32px rgba(17,27,33,0.12)",
+        overflow: "hidden",
+        zIndex: 4,
+        flexShrink: 0,
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "8px 10px",
+          color: WA.textSub,
+          fontSize: 12,
+          borderBottom: `1px solid ${WA.border}`,
+          background: WA.bgHeader,
+        }}
+      >
+        <Search size={14} />
+        <span>{needle ? `Saved replies matching "${query}"` : "Saved replies"}</span>
+      </Box>
+      {filtered.length === 0 ? (
+        <Typography sx={{ p: "10px 12px", fontSize: 13, color: WA.textSub }}>
+          No saved reply found.
+        </Typography>
+      ) : (
+        filtered.map((reply) => {
+          const mediaUrl = resolveMediaUrl(reply.media_url);
+          const isSending = Number(sendingReplyId) === Number(reply.id);
+          return (
+            <Box
+              key={reply.id}
+              component="button"
+              type="button"
+              onClick={() => onSend(reply)}
+              disabled={isSending}
+              sx={{
+                width: "100%",
+                border: "none",
+                borderBottom: `1px solid ${WA.border}`,
+                background: "#fff",
+                padding: "9px 10px",
+                display: "grid",
+                gridTemplateColumns: mediaUrl ? "36px 1fr auto" : "1fr auto",
+                gap: "9px",
+                alignItems: "center",
+                textAlign: "left",
+                cursor: isSending ? "wait" : "pointer",
+                "&:hover": { background: WA.bgHeader },
+                "&:last-of-type": { borderBottom: "none" },
+              }}
+            >
+              {mediaUrl && (
+                <Box
+                  component="img"
+                  src={mediaUrl}
+                  alt={reply.title}
+                  sx={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: "6px",
+                    objectFit: "cover",
+                    border: `1px solid ${WA.border}`,
+                  }}
+                />
+              )}
+              <Box sx={{ minWidth: 0 }}>
+                <Typography
+                  sx={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: WA.textPrimary,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {reply.title}
+                </Typography>
+                <Typography
+                  sx={{
+                    fontSize: 12,
+                    color: WA.textSub,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {reply.message || (mediaUrl ? "Photo reply" : "")}
+                </Typography>
+              </Box>
+              <Send size={15} color={WA.greenDark} />
+            </Box>
+          );
+        })
+      )}
+    </Box>
+  );
+}
+
+function AttachMenu({ onProduct, onPayment, onFile, onClose }) {
+  const itemSx = {
+    border: `1px solid ${WA.borderMid}`,
+    background: WA.bgHeader,
+    borderRadius: "10px",
+    padding: "12px",
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    cursor: "pointer",
+    color: WA.textPrimary,
+    fontWeight: 700,
+    fontSize: 13,
+  };
+
+  return (
+    <Box
+      sx={{
+        margin: "0 12px 8px",
+        background: "#fff",
+        border: `1px solid ${WA.border}`,
+        borderRadius: "12px",
+        boxShadow: "0 12px 32px rgba(17,27,33,0.14)",
+        padding: "8px",
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr 1fr",
+        gap: "8px",
+        zIndex: 4,
+        flexShrink: 0,
+        position: "relative",
+        "@media (max-width: 620px)": { gridTemplateColumns: "1fr" },
+      }}
+    >
+      <Box
+        component="button"
+        type="button"
+        onClick={onProduct}
+        sx={itemSx}
+      >
+        <Package size={18} color={WA.greenDark} />
+        Product
+      </Box>
+      <Box component="button" type="button" onClick={onPayment} sx={itemSx}>
+        <QrCode size={18} color={WA.greenDark} />
+        Payment
+      </Box>
+      <Box
+        component="button"
+        type="button"
+        onClick={onFile}
+        sx={itemSx}
+      >
+        <FolderOpen size={18} color={WA.greenDark} />
+        File
+      </Box>
+      <Box
+        component="button"
+        type="button"
+        onClick={onClose}
+        aria-label="Close attach menu"
+        sx={{
+          position: "absolute",
+          right: 16,
+          top: 10,
+          border: "none",
+          background: "transparent",
+          color: WA.textSub,
+          cursor: "pointer",
+          display: "flex",
+        }}
+      >
+        <X size={15} />
+      </Box>
+    </Box>
+  );
+}
+
+function PaymentRequestPanel({
+  amount,
+  sending,
+  onAmountChange,
+  onSend,
+  onClose,
+}) {
+  return (
+    <Box
+      sx={{
+        margin: "0 12px 8px",
+        background: "#fff",
+        border: `1px solid ${WA.border}`,
+        borderRadius: "12px",
+        boxShadow: "0 12px 32px rgba(17,27,33,0.14)",
+        overflow: "hidden",
+        zIndex: 4,
+        flexShrink: 0,
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "10px 12px",
+          borderBottom: `1px solid ${WA.border}`,
+          background: WA.bgHeader,
+        }}
+      >
+        <QrCode size={17} color={WA.greenDark} />
+        <Typography sx={{ flex: 1, fontSize: 14, fontWeight: 700, color: WA.textPrimary }}>
+          Razorpay payment
+        </Typography>
+        <Box
+          component="button"
+          type="button"
+          onClick={onClose}
+          aria-label="Close payment request"
+          sx={{ ...chatStyles.iconCircleBtn, width: 32, height: 32 }}
+        >
+          <X size={16} />
+        </Box>
+      </Box>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto",
+          gap: "8px",
+          padding: "12px",
+          alignItems: "center",
+          "@media (max-width: 520px)": { gridTemplateColumns: "1fr" },
+        }}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            border: `1px solid ${WA.borderMid}`,
+            borderRadius: "10px",
+            padding: "0 10px",
+            background: "#fff",
+            minHeight: 42,
+          }}
+        >
+          <IndianRupee size={16} color={WA.textSub} />
+          <Box
+            component="input"
+            type="number"
+            min="1"
+            step="1"
+            value={amount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            placeholder="Enter amount"
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              border: "none",
+              outline: "none",
+              font: "inherit",
+              fontSize: 15,
+              color: WA.textPrimary,
+            }}
+          />
+        </Box>
+        <Box
+          component="button"
+          type="button"
+          onClick={onSend}
+          disabled={sending || !Number(amount)}
+          sx={{
+            ...chatStyles.sendBtn,
+            borderRadius: "10px",
+            width: "auto",
+            minWidth: 104,
+            height: 42,
+            gap: "7px",
+            padding: "0 14px",
+            opacity: sending || !Number(amount) ? 0.55 : 1,
+          }}
+        >
+          <Send size={16} />
+          Send
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+function ProductPickerPanel({
+  query,
+  products,
+  loading,
+  sendingProductKey,
+  onQueryChange,
+  onSendProduct,
+  onClose,
+}) {
+  return (
+    <Box
+      sx={{
+        margin: "0 12px 8px",
+        background: "#fff",
+        border: `1px solid ${WA.border}`,
+        borderRadius: "12px",
+        boxShadow: "0 12px 32px rgba(17,27,33,0.14)",
+        overflow: "hidden",
+        zIndex: 4,
+        flexShrink: 0,
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "9px 10px",
+          borderBottom: `1px solid ${WA.border}`,
+          background: WA.bgHeader,
+        }}
+      >
+        <Search size={16} color={WA.textSub} />
+        <Box
+          component="input"
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          autoFocus
+          placeholder="Search product or SKU"
+          sx={{
+            flex: 1,
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            font: "inherit",
+            fontSize: 14,
+            color: WA.textPrimary,
+            minWidth: 0,
+          }}
+        />
+        <Box
+          component="button"
+          type="button"
+          onClick={onClose}
+          aria-label="Close product picker"
+          sx={{ ...chatStyles.iconCircleBtn, width: 32, height: 32 }}
+        >
+          <X size={16} />
+        </Box>
+      </Box>
+      <Box
+        sx={{
+          maxHeight: "280px",
+          overflowY: "auto",
+          "@media (max-width: 768px)": { maxHeight: "34dvh" },
+        }}
+      >
+        {loading ? (
+          <Typography sx={{ p: "12px", fontSize: 13, color: WA.textSub }}>
+            Loading products…
+          </Typography>
+        ) : products.length === 0 ? (
+          <Typography sx={{ p: "12px", fontSize: 13, color: WA.textSub }}>
+            No products found.
+          </Typography>
+        ) : (
+          products.map((product) => {
+            const key = product.sku || product.id || product.name;
+            const imageUrl = resolveMediaUrl(product.image_url);
+            const isSending = String(sendingProductKey) === String(key);
+            return (
+              <Box
+                key={key}
+                component="button"
+                type="button"
+                onClick={() => onSendProduct(product)}
+                disabled={isSending}
+                sx={{
+                  width: "100%",
+                  border: "none",
+                  borderBottom: `1px solid ${WA.border}`,
+                  background: "#fff",
+                  padding: "9px 10px",
+                  display: "grid",
+                  gridTemplateColumns: imageUrl ? "42px 1fr auto" : "1fr auto",
+                  gap: "10px",
+                  alignItems: "center",
+                  textAlign: "left",
+                  cursor: isSending ? "wait" : "pointer",
+                  "&:hover": { background: WA.bgHeader },
+                }}
+              >
+                {imageUrl && (
+                  <Box
+                    component="img"
+                    src={imageUrl}
+                    alt={product.name}
+                    sx={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: "7px",
+                      objectFit: "cover",
+                      border: `1px solid ${WA.border}`,
+                    }}
+                  />
+                )}
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    sx={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: WA.textPrimary,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {product.name}
+                  </Typography>
+                  <Typography
+                    sx={{
+                      fontSize: 12,
+                      color: WA.textSub,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {product.sku || "No SKU"} · {product.price_display || "Price unavailable"}
+                  </Typography>
+                </Box>
+                <Send size={15} color={WA.greenDark} />
+              </Box>
+            );
+          })
+        )}
+      </Box>
+    </Box>
+  );
+}
+
 // ── Message bubble ────────────────────────────────────────────────────────────
 function MessageBubble({ msg, onPreview }) {
   const { sender } = msg;
@@ -562,6 +1492,10 @@ function MessageBubble({ msg, onPreview }) {
     meta.image_url ||
     meta.qr_url,
   );
+  const hasProductLinkPreview =
+    meta.flow === "operator_product_share" &&
+    meta.product_link &&
+    !hasMedia;
   // Only show the text if it's NOT a pure media placeholder string
   const showText =
     msg.message && (!hasMedia || !isMediaPlaceholder(msg.message));
@@ -651,16 +1585,20 @@ function MessageBubble({ msg, onPreview }) {
           ...chatStyles.bubble(sender),
           display: "flex",
           flexDirection: "column",
-          gap: hasMedia ? "8px" : 0,
-          padding: hasMedia ? "6px" : chatStyles.bubble(sender).padding,
+          gap: hasMedia || hasProductLinkPreview ? "8px" : 0,
+          padding:
+            hasMedia || hasProductLinkPreview
+              ? "6px"
+              : chatStyles.bubble(sender).padding,
         }}
       >
         {showText && (
-          <span style={{ padding: hasMedia ? "2px 4px" : 0 }}>
+          <span style={{ padding: hasMedia || hasProductLinkPreview ? "2px 4px" : 0 }}>
             {msg.message}
           </span>
         )}
         {hasMedia && <MediaAttachment meta={meta} onPreview={onPreview} />}
+        {hasProductLinkPreview && <ProductLinkPreview meta={meta} />}
       </Box>
       <Box sx={chatStyles.msgMeta(sender)}>
         <span>{time}</span>
@@ -734,10 +1672,31 @@ export default function ChatWindow({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [mediaPreview, setMediaPreview] = useState(null);
+  const [savedReplies, setSavedReplies] = useState([]);
+  const [savedRepliesOpen, setSavedRepliesOpen] = useState(false);
+  const [savedRepliesLoaded, setSavedRepliesLoaded] = useState(false);
+  const [savedReplyTitle, setSavedReplyTitle] = useState("");
+  const [savedReplyMessage, setSavedReplyMessage] = useState("");
+  const [savedReplyFile, setSavedReplyFile] = useState(null);
+  const [savingReply, setSavingReply] = useState(false);
+  const [sendingSavedReplyId, setSendingSavedReplyId] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [productPickerOpen, setProductPickerOpen] = useState(false);
+  const [productQuery, setProductQuery] = useState("");
+  const [productResults, setProductResults] = useState([]);
+  const [productLoading, setProductLoading] = useState(false);
+  const [sendingProductKey, setSendingProductKey] = useState(null);
+  const [paymentPanelOpen, setPaymentPanelOpen] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [sendingPayment, setSendingPayment] = useState(false);
+  const [refiningInput, setRefiningInput] = useState(false);
 
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const savedReplyFileInputRef = useRef(null);
+  const toastTimerRef = useRef(null);
 
   // Expose fill handle for quick replies
   useEffect(() => {
@@ -758,6 +1717,18 @@ export default function ChatWindow({
     });
   }, []);
 
+  const showToast = useCallback((message, type = "success") => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ message, type });
+    toastTimerRef.current = setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
   const loadMessages = useCallback(
     async (sessionId, reset = false) => {
       if (!sessionId) return;
@@ -776,12 +1747,60 @@ export default function ChatWindow({
     [scrollToBottom],
   );
 
+  const loadSavedReplies = useCallback(async () => {
+    try {
+      const data = await fetchSavedReplies();
+      setSavedReplies(data);
+      setSavedRepliesLoaded(true);
+    } catch (err) {
+      setError(err?.response?.data?.detail || "Failed to load saved replies.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (savedRepliesOpen && !savedRepliesLoaded) loadSavedReplies();
+  }, [savedRepliesOpen, savedRepliesLoaded, loadSavedReplies]);
+
+  const slashActive = input.startsWith("/");
+  const slashQuery = slashActive ? input.slice(1).trim() : "";
+
+  useEffect(() => {
+    if (slashActive && !savedRepliesLoaded) loadSavedReplies();
+  }, [slashActive, savedRepliesLoaded, loadSavedReplies]);
+
+  useEffect(() => {
+    if (!productPickerOpen) return undefined;
+    let cancelled = false;
+    setProductLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const data = await searchChatProducts(productQuery.trim());
+        if (!cancelled) setProductResults(data);
+      } catch (err) {
+        if (!cancelled) {
+          setProductResults([]);
+          setError(err?.response?.data?.detail || "Failed to load products.");
+        }
+      } finally {
+        if (!cancelled) setProductLoading(false);
+      }
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [productPickerOpen, productQuery]);
+
   useEffect(() => {
     if (!chat?.id) return;
     window.__folActiveChatId = chat.id;
     setMessages([]);
     setError("");
     setInput("");
+    setAttachMenuOpen(false);
+    setProductPickerOpen(false);
+    setPaymentPanelOpen(false);
+    setSavedRepliesOpen(false);
     loadMessages(chat.id, true);
     return () => {
       if (Number(window.__folActiveChatId) === Number(chat.id)) {
@@ -825,6 +1844,21 @@ export default function ChatWindow({
   const handleSend = async () => {
     const msg = input.trim();
     if (!msg || sending || !chat) return;
+    if (msg.startsWith("/")) {
+      const needle = msg.slice(1).trim().toLowerCase();
+      const match = savedReplies
+        .filter((reply) => {
+          if (!needle) return true;
+          return String(reply.title || "").toLowerCase().includes(needle);
+        })
+        .slice(0, 1)[0];
+      if (match) {
+        await handleSendSavedReply(match, { clearInput: true });
+      } else {
+        showToast("No saved reply found for that title.", "error");
+      }
+      return;
+    }
     const tempId = Date.now();
     setMessages((prev) => [
       ...prev,
@@ -846,6 +1880,7 @@ export default function ChatWindow({
     } catch {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setError("Failed to send message.");
+      showToast("Failed to send message.", "error");
     } finally {
       setSending(false);
     }
@@ -866,12 +1901,228 @@ export default function ChatWindow({
         if (textareaRef.current) textareaRef.current.style.height = "22px";
       }
       await loadMessages(chat.id, false);
-      if (!result?.success)
+      if (!result?.success) {
         setError("File saved in chat, but WhatsApp send may have failed.");
+        showToast("File saved, but WhatsApp send may have failed.", "error");
+      } else {
+        showToast("File sent.");
+      }
     } catch (err) {
-      setError(err?.response?.data?.detail || "Failed to upload file.");
+      const detail = err?.response?.data?.detail || "Failed to upload file.";
+      setError(detail);
+      showToast(detail, "error");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const openProductPicker = () => {
+    setAttachMenuOpen(false);
+    setPaymentPanelOpen(false);
+    setProductPickerOpen(true);
+    setSavedRepliesOpen(false);
+    setProductQuery("");
+  };
+
+  const openPaymentPanel = () => {
+    setAttachMenuOpen(false);
+    setProductPickerOpen(false);
+    setSavedRepliesOpen(false);
+    setPaymentPanelOpen(true);
+  };
+
+  const handleToggleSavedReplies = () => {
+    setAttachMenuOpen(false);
+    setProductPickerOpen(false);
+    setPaymentPanelOpen(false);
+    setSavedRepliesOpen((open) => {
+      const next = !open;
+      if (next && input.trim() && !savedReplyMessage.trim()) {
+        setSavedReplyMessage(input.trim());
+      }
+      return next;
+    });
+  };
+
+  const handleSavedReplyFileChange = (e) => {
+    const file = e.target.files?.[0] || null;
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Saved reply media must be a photo.");
+      return;
+    }
+    setSavedReplyFile(file);
+  };
+
+  const handleSaveSavedReply = async () => {
+    const title = savedReplyTitle.trim();
+    const message = savedReplyMessage.trim();
+    if (!title) {
+      setError("Saved reply title is required.");
+      return;
+    }
+    if (!message && !savedReplyFile) {
+      setError("Add a saved message or photo.");
+      return;
+    }
+    setSavingReply(true);
+    setError(null);
+    try {
+      const created = await createSavedReply({
+        title,
+        message,
+        file: savedReplyFile,
+      });
+      setSavedReplies((prev) =>
+        [...prev, created].sort((a, b) =>
+          String(a.title || "").localeCompare(String(b.title || "")),
+        ),
+      );
+      setSavedRepliesLoaded(true);
+      setSavedReplyTitle("");
+      setSavedReplyMessage("");
+      setSavedReplyFile(null);
+      showToast("Saved reply created.");
+    } catch (err) {
+      const detail = err?.response?.data?.detail || "Failed to save reply.";
+      setError(detail);
+      showToast(detail, "error");
+    } finally {
+      setSavingReply(false);
+    }
+  };
+
+  const handleInsertSavedReply = (reply) => {
+    if (!reply?.message) return;
+    setInput(reply.message);
+    setSavedRepliesOpen(false);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "22px";
+        textareaRef.current.style.height =
+          Math.min(textareaRef.current.scrollHeight, 120) + "px";
+      }
+    });
+  };
+
+  const handleSendSavedReply = async (reply, options = {}) => {
+    if (!reply?.id || !chat?.id || sendingSavedReplyId) return;
+    setSendingSavedReplyId(reply.id);
+    setError(null);
+    try {
+      const result = await sendSavedReply(chat.id, reply.id);
+      await loadMessages(chat.id, false);
+      setSavedRepliesOpen(false);
+      if (options.clearInput) setInput("");
+      if (textareaRef.current && options.clearInput) textareaRef.current.style.height = "22px";
+      if (!result?.success) {
+        setError("Saved reply logged, but WhatsApp send failed.");
+        showToast("Saved reply logged, but WhatsApp send failed.", "error");
+      } else {
+        showToast("Saved reply sent.");
+      }
+    } catch (err) {
+      const detail = err?.response?.data?.detail || "Failed to send saved reply.";
+      setError(detail);
+      showToast(detail, "error");
+    } finally {
+      setSendingSavedReplyId(null);
+    }
+  };
+
+  const handleDeleteSavedReply = async (reply) => {
+    if (!reply?.id) return;
+    const ok = window.confirm(`Delete saved reply "${reply.title}"?`);
+    if (!ok) return;
+    try {
+      await deleteSavedReply(reply.id);
+      setSavedReplies((prev) => prev.filter((item) => item.id !== reply.id));
+      showToast("Saved reply deleted.");
+    } catch (err) {
+      const detail = err?.response?.data?.detail || "Failed to delete saved reply.";
+      setError(detail);
+      showToast(detail, "error");
+    }
+  };
+
+  const handleSendProduct = async (product) => {
+    if (!chat?.id || !product || sendingProductKey) return;
+    const key = product.sku || product.id || product.name;
+    setSendingProductKey(key);
+    setError(null);
+    try {
+      const result = await sendChatProduct(chat.id, product);
+      await loadMessages(chat.id, false);
+      setProductPickerOpen(false);
+      if (!result?.success) {
+        setError("Product saved in chat, but WhatsApp send failed.");
+        showToast("Product saved in chat, but WhatsApp send failed.", "error");
+      } else {
+        showToast("Product shared.");
+      }
+    } catch (err) {
+      const detail = err?.response?.data?.detail || "Failed to share product.";
+      setError(detail);
+      showToast(detail, "error");
+    } finally {
+      setSendingProductKey(null);
+    }
+  };
+
+  const handleSendPaymentRequest = async () => {
+    const amount = Number(paymentAmount);
+    if (!chat?.id || sendingPayment || !amount || amount <= 0) return;
+    setSendingPayment(true);
+    setError(null);
+    try {
+      const result = await sendChatPaymentRequest(chat.id, amount);
+      await loadMessages(chat.id, false);
+      setPaymentPanelOpen(false);
+      setPaymentAmount("");
+      if (!result?.success) {
+        const detail = result?.errors?.join(", ") || "Payment request saved, but WhatsApp send failed.";
+        setError(detail);
+        showToast(detail, "error");
+      } else {
+        showToast("Payment link and QR sent.");
+      }
+    } catch (err) {
+      const detail = err?.response?.data?.detail || "Failed to send payment request.";
+      setError(detail);
+      showToast(detail, "error");
+    } finally {
+      setSendingPayment(false);
+    }
+  };
+
+  const handleRefineInput = async () => {
+    const draft = input.trim();
+    if (!draft || refiningInput) return;
+    setRefiningInput(true);
+    setError(null);
+    try {
+      const result = await refineChatMessage(draft);
+      const refined = (result?.message || "").trim();
+      if (refined) {
+        setInput(refined);
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            textareaRef.current.style.height = "22px";
+            textareaRef.current.style.height =
+              Math.min(textareaRef.current.scrollHeight, 120) + "px";
+            textareaRef.current.focus();
+          }
+        });
+        showToast("Message refined.");
+      }
+    } catch (err) {
+      const detail = err?.response?.data?.detail || "AI refine failed.";
+      setError(detail);
+      showToast(detail, "error");
+    } finally {
+      setRefiningInput(false);
     }
   };
 
@@ -893,12 +2144,14 @@ export default function ChatWindow({
         flexDirection: "column",
         height: "100%",
         overflow: "hidden",
+        position: "relative",
       }}
     >
       <ImagePreview
         media={mediaPreview}
         onClose={() => setMediaPreview(null)}
       />
+      <ChatToast toast={toast} onClose={() => setToast(null)} />
 
       {/* ── Header ── */}
       <Box sx={chatStyles.chatHeader}>
@@ -975,6 +2228,69 @@ export default function ChatWindow({
         )}
       </Box>
 
+      {savedRepliesOpen && (
+        <SavedRepliesPanel
+          replies={savedReplies}
+          title={savedReplyTitle}
+          message={savedReplyMessage}
+          file={savedReplyFile}
+          saving={savingReply}
+          sendingReplyId={sendingSavedReplyId}
+          onTitleChange={setSavedReplyTitle}
+          onMessageChange={setSavedReplyMessage}
+          onPickFile={() => savedReplyFileInputRef.current?.click()}
+          onClearFile={() => setSavedReplyFile(null)}
+          onSave={handleSaveSavedReply}
+          onInsert={handleInsertSavedReply}
+          onSend={handleSendSavedReply}
+          onDelete={handleDeleteSavedReply}
+          onClose={() => setSavedRepliesOpen(false)}
+        />
+      )}
+
+      {slashActive && (
+        <SlashSavedReplyPanel
+          query={slashQuery}
+          replies={savedReplies}
+          sendingReplyId={sendingSavedReplyId}
+          onSend={(reply) => handleSendSavedReply(reply, { clearInput: true })}
+        />
+      )}
+
+      {productPickerOpen && (
+        <ProductPickerPanel
+          query={productQuery}
+          products={productResults}
+          loading={productLoading}
+          sendingProductKey={sendingProductKey}
+          onQueryChange={setProductQuery}
+          onSendProduct={handleSendProduct}
+          onClose={() => setProductPickerOpen(false)}
+        />
+      )}
+
+      {paymentPanelOpen && (
+        <PaymentRequestPanel
+          amount={paymentAmount}
+          sending={sendingPayment}
+          onAmountChange={setPaymentAmount}
+          onSend={handleSendPaymentRequest}
+          onClose={() => setPaymentPanelOpen(false)}
+        />
+      )}
+
+      {attachMenuOpen && (
+        <AttachMenu
+          onProduct={openProductPicker}
+          onPayment={openPaymentPanel}
+          onFile={() => {
+            setAttachMenuOpen(false);
+            fileInputRef.current?.click();
+          }}
+          onClose={() => setAttachMenuOpen(false)}
+        />
+      )}
+
       {/* ── Input bar ── */}
       <Box sx={chatStyles.inputArea}>
         <input
@@ -983,53 +2299,101 @@ export default function ChatWindow({
           onChange={handleFileChange}
           style={{ display: "none" }}
         />
-        <Box
-          component="button"
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading || sending}
-          aria-label="Attach file"
-          title="Attach file"
-          sx={{
-            ...chatStyles.iconCircleBtn,
-            width: "44px",
-            height: "44px",
-            flexShrink: 0,
-            opacity: uploading ? 0.55 : 1,
-            cursor: uploading ? "not-allowed" : "pointer",
-          }}
-        >
-          <Paperclip size={19} strokeWidth={2.2} />
-        </Box>
-        <Box sx={chatStyles.textareaWrap}>
+        <input
+          ref={savedReplyFileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleSavedReplyFileChange}
+          style={{ display: "none" }}
+        />
+        <Box sx={chatStyles.composerTools}>
           <Box
-            ref={textareaRef}
-            component="textarea"
-            value={input}
-            onChange={handleInput}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
+            component="button"
+            type="button"
+            onClick={handleToggleSavedReplies}
+            disabled={uploading || sending}
+            aria-label="Saved replies"
+            title="Saved replies"
+            sx={{
+              ...chatStyles.iconCircleBtn,
+              ...chatStyles.composerToolBtn,
+              background: savedRepliesOpen ? WA.border : "transparent",
             }}
-            placeholder="Type a message"
-            rows={1}
-            sx={chatStyles.textarea}
-          />
+          >
+            <Bookmark size={18} strokeWidth={2.2} />
+          </Box>
+          <Box
+            component="button"
+            type="button"
+            onClick={() => {
+              setAttachMenuOpen((open) => !open);
+              setProductPickerOpen(false);
+              setPaymentPanelOpen(false);
+            }}
+            disabled={uploading || sending}
+            aria-label="Attach"
+            title="Attach"
+            sx={{
+              ...chatStyles.iconCircleBtn,
+              ...chatStyles.composerToolBtn,
+              background: attachMenuOpen ? WA.border : "transparent",
+              opacity: uploading ? 0.55 : 1,
+              cursor: uploading ? "not-allowed" : "pointer",
+            }}
+          >
+            <Paperclip size={19} strokeWidth={2.2} />
+          </Box>
         </Box>
-        <Box
-          component="button"
-          type="button"
-          onClick={handleSend}
-          disabled={sending || uploading || !input.trim()}
-          aria-label="Send"
-          sx={{
-            ...chatStyles.sendBtn,
-            opacity: sending || uploading || !input.trim() ? 0.55 : 1,
-          }}
-        >
-          <Send size={18} strokeWidth={2.5} />
+        <Box sx={chatStyles.composerMain}>
+          <Box sx={chatStyles.textareaWrap}>
+            <Box
+              ref={textareaRef}
+              component="textarea"
+              value={input}
+              onChange={handleInput}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Type a message"
+              rows={1}
+              spellCheck
+              lang="en-IN"
+              autoCorrect="on"
+              autoCapitalize="sentences"
+              inputMode="text"
+              sx={chatStyles.textarea}
+            />
+            <Box
+              component="button"
+              type="button"
+              onClick={handleRefineInput}
+              disabled={refiningInput || sending || uploading || !input.trim()}
+              aria-label="Refine with AI"
+              title="Refine with AI"
+              sx={chatStyles.refineBtn(
+                refiningInput,
+                sending || uploading || !input.trim(),
+              )}
+            >
+              <Sparkles size={17} />
+            </Box>
+          </Box>
+          <Box
+            component="button"
+            type="button"
+            onClick={handleSend}
+            disabled={sending || uploading || !input.trim()}
+            aria-label="Send"
+            sx={{
+              ...chatStyles.sendBtn,
+              opacity: sending || uploading || !input.trim() ? 0.55 : 1,
+            }}
+          >
+            <Send size={18} strokeWidth={2.5} />
+          </Box>
         </Box>
       </Box>
     </Box>

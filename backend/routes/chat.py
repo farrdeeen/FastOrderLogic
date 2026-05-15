@@ -135,6 +135,26 @@ class OrderConfirmationPayload(BaseModel):
     session_id: Optional[int] = None   # if provided, message is saved to that session
 
 
+class SavedReplySendPayload(BaseModel):
+    session_id: int
+
+
+class ProductSendPayload(BaseModel):
+    session_id: int
+    sku: Optional[str] = None
+    name: Optional[str] = None
+    query: Optional[str] = None
+
+
+class PaymentRequestPayload(BaseModel):
+    session_id: int
+    amount: float
+
+
+class RefineMessagePayload(BaseModel):
+    message: str
+
+
 def _wa_message_id(response: Optional[dict]) -> Optional[str]:
     try:
         return (response or {}).get("messages", [{}])[0].get("id")
@@ -171,6 +191,30 @@ def _attach_request_urls(saved: dict, request: Request) -> dict:
         base_url,
     )
     return saved
+
+
+def _saved_reply_to_dict(row, request: Request) -> dict:
+    item = dict(row._mapping if hasattr(row, "_mapping") else row)
+    base_url = _public_base_from_request(request)
+    relative_path = item.get("relative_path")
+    if relative_path:
+        item["media_url"] = media_public_url(relative_path, base_url)
+        item["download_url"] = media_download_url(
+            relative_path,
+            item.get("file_name") or "",
+            base_url,
+        )
+    return item
+
+
+def _absolute_media_url(url: str, request: Request) -> str:
+    if not url:
+        return ""
+    if str(url).startswith(("https://", "http://")):
+        return url
+    base_url = _public_base_from_request(request)
+    slash = "" if str(url).startswith("/") else "/"
+    return f"{base_url}{slash}{url}"
 
 
 # ─── GET /chat/conversations ─────────────────────────────────────────────────
@@ -356,6 +400,537 @@ def recent_user_messages(
         result.append(return_item)
 
     return result
+
+
+# ─── Saved replies ───────────────────────────────────────────────────────────
+
+@router.get("/saved-replies")
+def list_saved_replies(
+    request: Request,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(text("""
+        SELECT
+            id,
+            title,
+            message,
+            media_url,
+            download_url,
+            relative_path,
+            file_name,
+            mime_type,
+            file_size,
+            created_by,
+            is_active,
+            created_at,
+            updated_at
+        FROM chat_saved_replies
+        WHERE is_active = 1
+        ORDER BY title ASC, id DESC
+    """)).fetchall()
+    return [_saved_reply_to_dict(row, request) for row in rows]
+
+
+@router.post("/saved-replies")
+async def create_saved_reply(
+    request: Request,
+    title: str = Form(...),
+    message: str = Form(""),
+    file: Optional[UploadFile] = File(None),
+    user=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    clean_title = (title or "").strip()
+    clean_message = (message or "").strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if len(clean_title) > 120:
+        raise HTTPException(status_code=400, detail="Title must be 120 characters or less")
+
+    media = {}
+    if file and file.filename:
+        content_type = file.content_type or "application/octet-stream"
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="Saved reply media must be an image")
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Image cannot be empty")
+        media = _attach_request_urls(save_media_bytes(
+            data,
+            filename=file.filename or "saved-reply-photo",
+            folder="saved-replies",
+            content_type=content_type,
+        ), request)
+
+    if not clean_message and not media:
+        raise HTTPException(status_code=400, detail="Add a message or photo")
+
+    now = datetime.now()
+    result = db.execute(text("""
+        INSERT INTO chat_saved_replies (
+            title,
+            message,
+            media_url,
+            download_url,
+            relative_path,
+            file_name,
+            mime_type,
+            file_size,
+            created_by,
+            is_active,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            :title,
+            :message,
+            :media_url,
+            :download_url,
+            :relative_path,
+            :file_name,
+            :mime_type,
+            :file_size,
+            :created_by,
+            1,
+            :now,
+            :now
+        )
+    """), {
+        "title": clean_title,
+        "message": clean_message or None,
+        "media_url": media.get("public_url"),
+        "download_url": media.get("download_url"),
+        "relative_path": media.get("relative_path"),
+        "file_name": media.get("filename"),
+        "mime_type": media.get("content_type"),
+        "file_size": media.get("size"),
+        "created_by": user.get("sub") if isinstance(user, dict) else None,
+        "now": now,
+    })
+    db.commit()
+
+    row = db.execute(text("""
+        SELECT
+            id,
+            title,
+            message,
+            media_url,
+            download_url,
+            relative_path,
+            file_name,
+            mime_type,
+            file_size,
+            created_by,
+            is_active,
+            created_at,
+            updated_at
+        FROM chat_saved_replies
+        WHERE id = :id
+    """), {"id": result.lastrowid}).first()
+    return _saved_reply_to_dict(row, request)
+
+
+@router.delete("/saved-replies/{reply_id}")
+def delete_saved_reply(
+    reply_id: int,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    result = db.execute(text("""
+        UPDATE chat_saved_replies
+        SET is_active = 0, updated_at = :now
+        WHERE id = :id AND is_active = 1
+    """), {"id": reply_id, "now": datetime.now()})
+    db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Saved reply not found")
+    return {"success": True, "id": reply_id}
+
+
+@router.post("/saved-replies/{reply_id}/send")
+async def send_saved_reply(
+    request: Request,
+    reply_id: int,
+    payload: SavedReplySendPayload,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    session = db.execute(
+        text("SELECT id, phone_number FROM chat_sessions WHERE id = :sid"),
+        {"sid": payload.session_id},
+    ).mappings().first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    row = db.execute(text("""
+        SELECT
+            id,
+            title,
+            message,
+            media_url,
+            download_url,
+            relative_path,
+            file_name,
+            mime_type,
+            file_size
+        FROM chat_saved_replies
+        WHERE id = :id AND is_active = 1
+    """), {"id": reply_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Saved reply not found")
+
+    reply = _saved_reply_to_dict(row, request)
+    message = (reply.get("message") or "").strip()
+    media_url = reply.get("media_url") or ""
+    file_name = reply.get("file_name") or "saved-reply-photo"
+    mime_type = reply.get("mime_type") or ""
+    phone = session["phone_number"]
+
+    if not message and not media_url:
+        raise HTTPException(status_code=400, detail="Saved reply is empty")
+
+    meta = {
+        "flow": "saved_reply",
+        "saved_reply_id": reply_id,
+        "saved_reply_title": reply.get("title"),
+    }
+    wa_id = None
+    success = False
+    display_message = message or f"[image] {file_name}"
+
+    try:
+        if media_url:
+            wa_resp = await send_image_message(phone, media_url, caption=message[:1024])
+            meta.update({
+                "media_type": "image",
+                "mime_type": mime_type,
+                "media_url": media_url,
+                "download_url": reply.get("download_url"),
+                "file_name": file_name,
+                "file_size": reply.get("file_size"),
+            })
+        else:
+            wa_resp = await send_text_message(phone, message)
+        wa_id = _wa_message_id(wa_resp)
+        meta["wa_send_status"] = "sent"
+        success = True
+    except Exception as exc:
+        logger.exception("Failed to send saved reply %s to %s", reply_id, phone)
+        meta["wa_send_status"] = "failed"
+        meta["error"] = str(exc)
+
+    message_id = save_message(
+        db,
+        payload.session_id,
+        "ai",
+        display_message,
+        wa_message_id=wa_id,
+        meta=meta,
+    )
+
+    return {
+        "success": success,
+        "message_id": message_id,
+        "saved_reply_id": reply_id,
+    }
+
+
+# ─── Operator product sharing ────────────────────────────────────────────────
+
+def _product_result(product: dict, image_url: str = "") -> dict:
+    return {
+        "id": product.get("id"),
+        "name": product.get("name"),
+        "sku": product.get("sku"),
+        "price_display": product.get("effective_price") or product.get("price_display"),
+        "regular_price": product.get("price_display"),
+        "sale_price": product.get("sale_price_display"),
+        "on_sale": product.get("on_sale"),
+        "in_stock": product.get("in_stock"),
+        "link": product.get("link"),
+        "image_url": image_url,
+    }
+
+
+@router.get("/products/search")
+async def search_chat_products(
+    request: Request,
+    query: str = Query(""),
+    limit: int = Query(12, ge=1, le=30),
+    _=Depends(require_user),
+):
+    from services.product_catalogue import get_product_images_by_sku, search_products
+
+    products = await search_products(query or "", limit=limit)
+    result = []
+    for product in products:
+        images = await get_product_images_by_sku(
+            (product.get("sku") or "").strip(),
+            product_name=(product.get("name") or "").strip(),
+        )
+        image_url = _absolute_media_url(images[0], request) if images else ""
+        result.append(_product_result(product, image_url=image_url))
+    return result
+
+
+@router.post("/products/send")
+async def send_chat_product(
+    request: Request,
+    payload: ProductSendPayload,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    from services.product_catalogue import (
+        format_product_card,
+        get_product_images_by_sku,
+        search_products,
+    )
+
+    session = db.execute(
+        text("SELECT id, phone_number FROM chat_sessions WHERE id = :sid"),
+        {"sid": payload.session_id},
+    ).mappings().first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    query = (payload.query or payload.sku or payload.name or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Product search is required")
+
+    products = await search_products(query, limit=8)
+    product = None
+    sku = (payload.sku or "").strip().lower()
+    name = (payload.name or "").strip().lower()
+    if sku:
+        product = next(
+            (p for p in products if (p.get("sku") or "").strip().lower() == sku),
+            None,
+        )
+    if not product and name:
+        product = next(
+            (p for p in products if (p.get("name") or "").strip().lower() == name),
+            None,
+        )
+    if not product and products:
+        product = products[0]
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    text_message = format_product_card(product)
+    product_sku = (product.get("sku") or "").strip()
+    product_name = (product.get("name") or "").strip()
+    images = await get_product_images_by_sku(product_sku, product_name=product_name)
+    image_url = _absolute_media_url(images[0], request) if images else ""
+    phone = session["phone_number"]
+
+    meta = {
+        "flow": "operator_product_share",
+        "product_name": product_name,
+        "sku": product_sku,
+        "product_link": product.get("link"),
+        "product_price": product.get("effective_price") or product.get("price_display"),
+        "product_in_stock": product.get("in_stock"),
+    }
+    display_message = text_message
+    wa_id = None
+    success = False
+
+    try:
+        if image_url:
+            wa_resp = await send_image_message(phone, image_url, caption=text_message[:1024])
+            meta.update({
+                "media_type": "image",
+                "mime_type": "image/*",
+                "media_url": image_url,
+                "download_url": image_url,
+                "file_name": f"{product_sku or product_name or 'product'}.jpg",
+            })
+        else:
+            wa_resp = await send_text_message(phone, text_message, preview_url=True)
+            meta.update({
+                "link_preview": True,
+                "product_has_photo": False,
+            })
+        wa_id = _wa_message_id(wa_resp)
+        meta["wa_send_status"] = "sent"
+        success = True
+    except Exception as exc:
+        logger.exception("Failed to share product %s to %s", product_sku or product_name, phone)
+        meta["wa_send_status"] = "failed"
+        meta["error"] = str(exc)
+
+    message_id = save_message(
+        db,
+        payload.session_id,
+        "ai",
+        display_message,
+        wa_message_id=wa_id,
+        meta=meta,
+    )
+    return {
+        "success": success,
+        "message_id": message_id,
+        "product": _product_result(product, image_url=image_url),
+    }
+
+
+# ─── Operator payment request ────────────────────────────────────────────────
+
+@router.post("/payment-request")
+async def send_payment_request(
+    payload: PaymentRequestPayload,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    from services.payment_service import (
+        PaymentLinkError,
+        build_payment_qr_url,
+        create_payment_link_details,
+        create_payment_qr_details,
+    )
+
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+
+    session = db.execute(
+        text("SELECT id, phone_number, wa_contact_name FROM chat_sessions WHERE id = :sid"),
+        {"sid": payload.session_id},
+    ).mappings().first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    phone = session["phone_number"]
+    customer_name = session.get("wa_contact_name") or "Customer"
+    reference_id = f"CHAT-{payload.session_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    amount_label = f"₹{payload.amount:,.2f}".rstrip("0").rstrip(".")
+
+    try:
+        payment_link = await create_payment_link_details(
+            order_id=reference_id,
+            amount=payload.amount,
+            name=customer_name,
+            phone=phone,
+        )
+    except PaymentLinkError as exc:
+        raise HTTPException(status_code=400, detail=f"Razorpay payment link failed: {exc}") from exc
+
+    pay_url = payment_link.get("short_url") or ""
+    if not pay_url:
+        raise HTTPException(status_code=400, detail="Razorpay did not return a payment link")
+
+    qr_url = ""
+    razorpay_qr_id = None
+    try:
+        razorpay_qr = await create_payment_qr_details(
+            order_id=reference_id,
+            amount=payload.amount,
+            name=customer_name,
+        )
+        qr_url = razorpay_qr.get("image_url") or ""
+        razorpay_qr_id = razorpay_qr.get("id")
+    except Exception as exc:
+        logger.warning("Razorpay QR create failed for %s, using link QR fallback: %s", reference_id, exc)
+        qr_url = build_payment_qr_url(pay_url)
+
+    text_msg = (
+        f"Payment request for {amount_label}\n"
+        f"Please complete the payment here:\n{pay_url}"
+    )
+    result = {
+        "success": True,
+        "payment_url": pay_url,
+        "qr_url": qr_url,
+        "reference_id": reference_id,
+        "errors": [],
+    }
+
+    try:
+        wa_resp = await send_text_message(phone, text_msg, preview_url=True)
+        save_message(
+            db,
+            payload.session_id,
+            "ai",
+            text_msg,
+            wa_message_id=_wa_message_id(wa_resp),
+            meta={
+                "flow": "operator_payment_link",
+                "reference_id": reference_id,
+                "amount": payload.amount,
+                "payment_url": pay_url,
+                "razorpay_payment_link_id": payment_link.get("id"),
+                "link_preview": True,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Payment link send failed for session %s", payload.session_id)
+        result["success"] = False
+        result["errors"].append(f"payment_link_send:{exc}")
+        save_message(
+            db,
+            payload.session_id,
+            "ai",
+            f"[payment_link_send_failed] {reference_id}: {exc}",
+            meta={
+                "flow": "operator_payment_link_failed",
+                "reference_id": reference_id,
+                "amount": payload.amount,
+                "payment_url": pay_url,
+                "error": str(exc),
+            },
+        )
+
+    if qr_url:
+        try:
+            caption = f"Scan this QR to pay {amount_label}"
+            wa_resp = await send_image_message(phone, qr_url, caption=caption)
+            save_message(
+                db,
+                payload.session_id,
+                "ai",
+                caption,
+                wa_message_id=_wa_message_id(wa_resp),
+                meta={
+                    "flow": "payment_qr",
+                    "reference_id": reference_id,
+                    "amount": payload.amount,
+                    "payment_url": pay_url,
+                    "qr_url": qr_url,
+                    "razorpay_payment_link_id": payment_link.get("id"),
+                    "razorpay_qr_id": razorpay_qr_id,
+                    "media_type": "image",
+                    "mime_type": "image/png",
+                    "media_url": qr_url,
+                    "download_url": qr_url,
+                    "file_name": f"payment-qr-{reference_id}.png",
+                },
+            )
+        except Exception as exc:
+            logger.exception("Payment QR send failed for session %s", payload.session_id)
+            result["success"] = False
+            result["errors"].append(f"payment_qr_send:{exc}")
+
+    return result
+
+
+# ─── Operator AI refine ──────────────────────────────────────────────────────
+
+@router.post("/refine-message")
+async def refine_message(
+    payload: RefineMessagePayload,
+    _=Depends(require_user),
+):
+    draft = (payload.message or "").strip()
+    if not draft:
+        raise HTTPException(status_code=400, detail="Message is required")
+    try:
+        from services.ai_service import refine_operator_message
+
+        refined = await refine_operator_message(draft)
+    except Exception as exc:
+        logger.exception("Message refine failed")
+        raise HTTPException(status_code=502, detail=f"AI refine failed: {exc}") from exc
+    return {"message": refined or draft}
 
 
 # ─── GET /chat/messages/{session_id} ─────────────────────────────────────────

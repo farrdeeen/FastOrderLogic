@@ -6,7 +6,7 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import text
 
-from services.chat_media_service import is_public_http_url, save_media_bytes
+from services.chat_media_service import is_public_http_url, media_download_url, media_public_url, save_media_bytes
 from services.chat_service import (
     _wa_message_id,
     get_or_create_session,
@@ -14,7 +14,7 @@ from services.chat_service import (
     save_message,
 )
 from services.order_preferences import ensure_order_preference_columns
-from services.whatsapp_service import send_document_message, send_text_message
+from services.whatsapp_service import send_document_message, send_image_message, send_text_message
 
 logger = logging.getLogger(__name__)
 
@@ -318,4 +318,84 @@ async def send_order_dispatch_update(db, order_id: str, session_id: Optional[int
         )
 
     result["slip_url"] = slip["public_url"]
+    review_result = await _send_saved_reply_by_title(db, session_id, phone, "review")
+    result["review_reply"] = review_result
     return result
+
+
+async def _send_saved_reply_by_title(db, session_id: int, phone: str, title: str) -> dict:
+    row = db.execute(
+        text("""
+            SELECT id, title, message, media_url, download_url, relative_path,
+                   file_name, mime_type, file_size
+            FROM chat_saved_replies
+            WHERE is_active = 1 AND LOWER(title) = LOWER(:title)
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+        """),
+        {"title": title},
+    ).mappings().first()
+    if not row:
+        logger.info("Saved reply titled %r not found; dispatch review message skipped", title)
+        return {"sent": False, "reason": "saved_reply_not_found", "title": title}
+
+    message = (row.get("message") or "").strip()
+    media_url = row.get("media_url") or ""
+    relative_path = row.get("relative_path") or ""
+    file_name = row.get("file_name") or "saved-reply-photo"
+    if relative_path:
+        media_url = media_public_url(relative_path)
+        download_url = media_download_url(relative_path, file_name)
+    else:
+        download_url = row.get("download_url") or media_url
+
+    if not message and not media_url:
+        return {"sent": False, "reason": "saved_reply_empty", "title": title, "id": row.get("id")}
+
+    meta = {
+        "flow": "dispatch_saved_reply",
+        "saved_reply_id": row.get("id"),
+        "saved_reply_title": row.get("title"),
+    }
+    display_message = message or f"[image] {file_name}"
+    try:
+        if media_url:
+            if not is_public_http_url(media_url):
+                raise RuntimeError(
+                    "Public media URL missing for saved reply. Set CHAT_MEDIA_PUBLIC_BASE_URL or PUBLIC_BACKEND_URL."
+                )
+            wa_resp = await send_image_message(phone, media_url, caption=message[:1024])
+            meta.update({
+                "media_type": "image",
+                "mime_type": row.get("mime_type") or "image/*",
+                "media_url": media_url,
+                "download_url": download_url,
+                "file_name": file_name,
+                "file_size": row.get("file_size"),
+            })
+        else:
+            wa_resp = await send_text_message(phone, message)
+        save_message(
+            db,
+            session_id,
+            "system",
+            display_message,
+            wa_message_id=_wa_message_id(wa_resp),
+            meta=meta,
+        )
+        return {"sent": True, "title": title, "id": row.get("id")}
+    except Exception as exc:
+        logger.exception("Dispatch saved reply %r failed for session %s", title, session_id)
+        save_message(
+            db,
+            session_id,
+            "system",
+            f"[dispatch_saved_reply_failed] {title}: {exc}",
+            meta={
+                "flow": "dispatch_saved_reply_failed",
+                "saved_reply_id": row.get("id"),
+                "saved_reply_title": row.get("title"),
+                "error": str(exc),
+            },
+        )
+        return {"sent": False, "reason": str(exc), "title": title, "id": row.get("id")}

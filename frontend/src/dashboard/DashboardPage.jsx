@@ -5,10 +5,17 @@ import {
   fetchAiFailures,
   fetchRecentConversations,
   fetchInvoicePending,
+  fetchStockReconStatus,
+  fetchStockReconLogs,
+  startStockRecon,
+  stopStockRecon,
+  completeStockRecon,
   fetchTrainingDocInfo,
   uploadTrainingDoc,
   deleteTrainingDoc,
 } from "./dashboardApi";
+
+const STOCK_RECON_STORAGE_KEY = "fol_stock_recon_in_progress";
 
 // ─── Tiny sparkline SVG ───────────────────────────────────────────────────────
 function Sparkline({ data, color = "#6ee7b7", height = 36 }) {
@@ -145,6 +152,28 @@ function useIsMobile(maxWidth = 768) {
   return isMobile;
 }
 
+function publishStockReconBanner(run) {
+  if (typeof window === "undefined") return;
+  const payload = run
+    ? {
+        active: true,
+        run_id: run.run_id,
+        week_start: run.week_start,
+        week_end: run.week_end,
+      }
+    : { active: false };
+
+  if (run) {
+    window.localStorage.setItem(STOCK_RECON_STORAGE_KEY, JSON.stringify(payload));
+  } else {
+    window.localStorage.removeItem(STOCK_RECON_STORAGE_KEY);
+  }
+
+  window.dispatchEvent(
+    new CustomEvent("stock-recon:status", { detail: payload }),
+  );
+}
+
 function InvoicePendingSection({ items, loading, isMobile = false }) {
   const customers = items || [];
   const pendingOrders = customers.reduce(
@@ -279,6 +308,237 @@ function InvoicePendingSection({ items, loading, isMobile = false }) {
   );
 }
 
+function formatDateLabel(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function StockReconSection({
+  status,
+  logs,
+  items,
+  counts,
+  loading,
+  submitting,
+  message,
+  onStart,
+  onCountChange,
+  onStop,
+  onComplete,
+  isMobile = false,
+}) {
+  const activeRun = status?.in_progress;
+  const currentWeek =
+    status?.current_week_start && status?.current_week_end
+      ? `${formatDateLabel(status.current_week_start)} - ${formatDateLabel(
+          status.current_week_end,
+        )}`
+      : "Current week";
+  const enteredCount = items.filter((item) => counts[item.model_name] !== undefined && counts[item.model_name] !== "").length;
+
+  return (
+    <div>
+      <div style={isMobile ? { ...styles.card, ...styles.cardMobile } : styles.card}>
+        <SectionHeader
+          title="Stock Recon"
+          action={
+            activeRun ? (
+              <Badge label="In Progress" variant="warning" />
+            ) : (
+              <span style={styles.sectionMeta}>{currentWeek}</span>
+            )
+          }
+        />
+
+        {message && (
+          <div
+            style={{
+              ...styles.reconMsg,
+              ...(message.type === "error" ? styles.reconMsgError : styles.reconMsgSuccess),
+            }}
+          >
+            {message.text}
+          </div>
+        )}
+
+        {!activeRun ? (
+          <div style={styles.reconStartPanel}>
+            <div style={styles.reconStartText}>
+              <strong>Weekly physical count</strong>
+              <span>
+                Start recon to load device model names. DB stock counts stay hidden
+                during counting.
+              </span>
+            </div>
+            <button
+              type="button"
+              style={styles.reconPrimaryBtn}
+              onClick={onStart}
+              disabled={loading || submitting}
+            >
+              {submitting ? "Starting..." : "Start Recon"}
+            </button>
+          </div>
+        ) : (
+          <div>
+            <div style={styles.reconLivePanel}>
+              <div>
+                <strong>Recon in progress</strong>
+                <span>
+                  Week {formatDateLabel(activeRun.week_start)} -{" "}
+                  {formatDateLabel(activeRun.week_end)}
+                </span>
+              </div>
+              <span style={styles.reconProgressText}>
+                {enteredCount}/{items.length} counted
+              </span>
+            </div>
+
+            {items.length === 0 ? (
+              <div style={styles.reconEmptyWarning}>
+                No model names returned from stock. Refresh once; if it stays empty,
+                check that `vw_mtm_stock` has rows.
+              </div>
+            ) : (
+              <div style={styles.reconInputGrid}>
+                {items.map((item) => (
+                  <label
+                    key={item.model_name}
+                    style={
+                      isMobile
+                        ? { ...styles.reconInputRow, ...styles.reconInputRowMobile }
+                        : styles.reconInputRow
+                    }
+                  >
+                    <span style={styles.reconModelName}>{item.model_name}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      inputMode="numeric"
+                      value={counts[item.model_name] ?? ""}
+                      onChange={(event) =>
+                        onCountChange(item.model_name, event.target.value)
+                      }
+                      style={styles.reconCountInput}
+                      placeholder="Count"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+
+            <div style={styles.reconFooter}>
+              <button
+                type="button"
+                style={styles.reconStopBtn}
+                onClick={onStop}
+                disabled={submitting}
+              >
+                Stop Recon
+              </button>
+              <button
+                type="button"
+                style={styles.reconPrimaryBtn}
+                onClick={onComplete}
+                disabled={submitting || items.length === 0}
+              >
+                {submitting ? "Saving..." : "Complete Recon"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={isMobile ? { ...styles.card, ...styles.cardMobile } : styles.card}>
+        <SectionHeader
+          title="Stock Recon Logs"
+          action={<span style={styles.sectionMeta}>{logs.length} weeks</span>}
+        />
+        {loading ? (
+          <div style={styles.emptyState}>Loading...</div>
+        ) : logs.length === 0 ? (
+          <div style={styles.emptyState}>No recon logs yet.</div>
+        ) : (
+          <div style={styles.reconLogList}>
+            {logs.map((run) => {
+              const runLogs = run.logs || [];
+              return (
+                <div key={run.run_id} style={styles.reconLogCard}>
+                  <div style={styles.reconLogHeader}>
+                    <div>
+                      <strong style={styles.reconWeekTitle}>
+                        Week {formatDateLabel(run.week_start)} -{" "}
+                        {formatDateLabel(run.week_end)}
+                      </strong>
+                      <div style={styles.reconLogSub}>
+                        {run.completed_at
+                          ? `Completed ${new Date(run.completed_at).toLocaleString([], {
+                              day: "numeric",
+                              month: "short",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}`
+                          : run.status === "missed"
+                            ? "Not completed"
+                            : "In progress"}
+                      </div>
+                    </div>
+                    <Badge
+                      label={run.status === "missed" ? "Didn't Recon" : run.status}
+                      variant={
+                        run.status === "completed"
+                          ? runLogs.length
+                            ? "warning"
+                            : "success"
+                          : run.status === "missed"
+                            ? "danger"
+                            : "info"
+                      }
+                    />
+                  </div>
+
+                  {run.status === "completed" && runLogs.length === 0 ? (
+                    <div style={styles.reconCleanState}>No mismatch found.</div>
+                  ) : (
+                    <div style={styles.reconMismatchList}>
+                      {runLogs.map((log) =>
+                        log.log_type === "missed" ? (
+                          <div key={log.log_id || `${run.run_id}-missed`} style={styles.reconMissedLine}>
+                            Didn't recon for this week.
+                          </div>
+                        ) : (
+                          <div key={log.log_id || `${run.run_id}-${log.model_name}`} style={styles.reconMismatchLine}>
+                            <span style={styles.reconMismatchModel}>
+                              {log.model_name}
+                            </span>
+                            <strong
+                              style={{
+                                ...styles.reconMismatchCount,
+                                color:
+                                  log.log_type === "extra" ? "#0369a1" : "#b91c1c",
+                              }}
+                            >
+                              {log.log_type === "extra" ? "Extra" : "Missing"}{" "}
+                              {log.mismatch_count}
+                            </strong>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const isMobile = useIsMobile();
@@ -286,12 +546,48 @@ export default function DashboardPage() {
   const [failures, setFailures] = useState([]);
   const [recent, setRecent] = useState([]);
   const [invoicePending, setInvoicePending] = useState([]);
+  const [stockReconStatus, setStockReconStatus] = useState(null);
+  const [stockReconLogs, setStockReconLogs] = useState([]);
+  const [stockReconItems, setStockReconItems] = useState([]);
+  const [stockReconCounts, setStockReconCounts] = useState({});
+  const [stockReconLoading, setStockReconLoading] = useState(false);
+  const [stockReconSubmitting, setStockReconSubmitting] = useState(false);
+  const [stockReconMsg, setStockReconMsg] = useState(null);
   const [docInfo, setDocInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [docUploading, setDocUploading] = useState(false);
   const [docMsg, setDocMsg] = useState(null);
-  const [activeTab, setActiveTab] = useState("overview"); // overview | failures | invoice_pending | training
+  const [activeTab, setActiveTab] = useState("overview");
   const fileRef = useRef(null);
+
+  const loadStockRecon = useCallback(async (silent = false) => {
+    if (!silent) setStockReconLoading(true);
+    try {
+      const status = await fetchStockReconStatus();
+      const logs = await fetchStockReconLogs(24);
+      setStockReconStatus(status);
+      setStockReconLogs(logs);
+      setStockReconItems(status?.items || []);
+      if (status?.in_progress) {
+        publishStockReconBanner(status.in_progress);
+      } else {
+        publishStockReconBanner(null);
+      }
+      setStockReconMsg(null);
+    } catch (err) {
+      console.error("Stock recon load error:", err);
+      publishStockReconBanner(null);
+      const detail = err?.response?.data?.detail;
+      setStockReconMsg({
+        type: "error",
+        text:
+          (typeof detail === "string" ? detail : detail?.message) ||
+          "Stock recon tables are not ready or could not be loaded.",
+      });
+    } finally {
+      setStockReconLoading(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -312,13 +608,138 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+    loadStockRecon(true);
+  }, [loadStockRecon]);
 
   useEffect(() => {
     load();
     const t = setInterval(load, 60000); // refresh every 60s
     return () => clearInterval(t);
   }, [load]);
+
+  const handleStartStockRecon = async () => {
+    setStockReconSubmitting(true);
+    setStockReconMsg(null);
+    try {
+      const res = await startStockRecon();
+      setStockReconStatus((prev) => ({
+        ...(prev || {}),
+        in_progress: res.run,
+        items: res.items || [],
+      }));
+      setStockReconItems(res.items || []);
+      setStockReconCounts({});
+      publishStockReconBanner(res.run);
+      const freshStatus = await fetchStockReconStatus();
+      setStockReconStatus(freshStatus);
+      setStockReconItems(freshStatus?.items?.length ? freshStatus.items : res.items || []);
+      setStockReconMsg({
+        type: "success",
+        text: "Stock recon started. Count the physical stock and submit once done.",
+      });
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setStockReconMsg({
+        type: "error",
+        text:
+          (typeof detail === "string" ? detail : detail?.message) ||
+          "Could not start stock recon.",
+      });
+    } finally {
+      setStockReconSubmitting(false);
+    }
+  };
+
+  const handleStockReconCountChange = (modelName, value) => {
+    setStockReconCounts((prev) => ({
+      ...prev,
+      [modelName]: value,
+    }));
+  };
+
+  const handleStopStockRecon = async () => {
+    const runId = stockReconStatus?.in_progress?.run_id;
+    if (!runId) return;
+    if (!window.confirm("Stop this stock recon? Current entered counts will be removed.")) {
+      return;
+    }
+
+    setStockReconSubmitting(true);
+    setStockReconMsg(null);
+    try {
+      await stopStockRecon(runId);
+      publishStockReconBanner(null);
+      setStockReconCounts({});
+      setStockReconItems([]);
+      await loadStockRecon(true);
+      setStockReconMsg({
+        type: "success",
+        text: "Stock recon stopped. You can start a fresh recon anytime.",
+      });
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setStockReconMsg({
+        type: "error",
+        text:
+          (typeof detail === "string" ? detail : detail?.message) ||
+          "Could not stop stock recon.",
+      });
+    } finally {
+      setStockReconSubmitting(false);
+    }
+  };
+
+  const handleCompleteStockRecon = async () => {
+    const missingModels = stockReconItems.filter(
+      (item) =>
+        stockReconCounts[item.model_name] === undefined ||
+        stockReconCounts[item.model_name] === "",
+    );
+    if (missingModels.length > 0) {
+      setStockReconMsg({
+        type: "error",
+        text: `Please enter counts for all models. Missing: ${missingModels
+          .slice(0, 3)
+          .map((item) => item.model_name)
+          .join(", ")}${missingModels.length > 3 ? "..." : ""}`,
+      });
+      return;
+    }
+
+    const runId = stockReconStatus?.in_progress?.run_id;
+    if (!runId) return;
+
+    setStockReconSubmitting(true);
+    setStockReconMsg(null);
+    try {
+      await completeStockRecon(
+        runId,
+        stockReconItems.map((item) => ({
+          model_name: item.model_name,
+          physical_count: Number(stockReconCounts[item.model_name] || 0),
+        })),
+      );
+      publishStockReconBanner(null);
+      setStockReconCounts({});
+      setStockReconItems([]);
+      await loadStockRecon(true);
+      setStockReconMsg({
+        type: "success",
+        text: "Stock recon completed and mismatch log saved.",
+      });
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setStockReconMsg({
+        type: "error",
+        text:
+          typeof detail === "string"
+            ? detail
+            : detail?.message || "Could not complete stock recon.",
+      });
+    } finally {
+      setStockReconSubmitting(false);
+    }
+  };
 
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -401,6 +822,10 @@ export default function DashboardPage() {
           {
             id: "invoice_pending",
             label: `Invoice Pending${invoicePending.length ? ` (${invoicePending.length})` : ""}`,
+          },
+          {
+            id: "stock_recon",
+            label: `Stock Recon${stockReconStatus?.in_progress ? " (Live)" : ""}`,
           },
           { id: "training", label: "Training Docs" },
         ].map((tab) => (
@@ -661,6 +1086,24 @@ export default function DashboardPage() {
         <InvoicePendingSection
           items={invoicePending}
           loading={loading}
+          isMobile={isMobile}
+        />
+      )}
+
+      {/* ══════════ STOCK RECON TAB ══════════ */}
+      {activeTab === "stock_recon" && (
+        <StockReconSection
+          status={stockReconStatus}
+          logs={stockReconLogs}
+          items={stockReconItems}
+          counts={stockReconCounts}
+          loading={stockReconLoading}
+          submitting={stockReconSubmitting}
+          message={stockReconMsg}
+          onStart={handleStartStockRecon}
+          onCountChange={handleStockReconCountChange}
+          onStop={handleStopStockRecon}
+          onComplete={handleCompleteStockRecon}
           isMobile={isMobile}
         />
       )}
@@ -1158,6 +1601,210 @@ const styles = {
     border: "1px solid #e2e8f0",
     borderRadius: 8,
     padding: "10px 12px",
+  },
+  reconMsg: {
+    fontSize: 12,
+    fontWeight: 600,
+    borderRadius: 8,
+    padding: "10px 12px",
+    marginBottom: 12,
+  },
+  reconMsgSuccess: {
+    background: "#f0fdf4",
+    color: "#166534",
+    border: "1px solid #bbf7d0",
+  },
+  reconMsgError: {
+    background: "#fef2f2",
+    color: "#991b1b",
+    border: "1px solid #fecaca",
+  },
+  reconStartPanel: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 14,
+    flexWrap: "wrap",
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 10,
+    padding: "14px 16px",
+  },
+  reconStartText: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    color: "#334155",
+    fontSize: 12,
+    lineHeight: 1.45,
+    minWidth: 0,
+    flex: "1 1 260px",
+  },
+  reconPrimaryBtn: {
+    border: "none",
+    background: "#0f172a",
+    color: "#ffffff",
+    borderRadius: 8,
+    padding: "10px 16px",
+    fontFamily: "inherit",
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  reconStopBtn: {
+    border: "1px solid #fecaca",
+    background: "#ffffff",
+    color: "#b91c1c",
+    borderRadius: 8,
+    padding: "10px 16px",
+    fontFamily: "inherit",
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  reconLivePanel: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    border: "1px solid #fde68a",
+    background: "#fffbeb",
+    color: "#92400e",
+    borderRadius: 10,
+    padding: "12px 14px",
+    marginBottom: 12,
+    fontSize: 12,
+    flexWrap: "wrap",
+  },
+  reconProgressText: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontWeight: 700,
+    color: "#78350f",
+  },
+  reconInputGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+    gap: 10,
+  },
+  reconInputRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) 94px",
+    alignItems: "center",
+    gap: 10,
+    border: "1px solid #e2e8f0",
+    borderRadius: 9,
+    padding: "10px 12px",
+    background: "#ffffff",
+  },
+  reconInputRowMobile: {
+    gridTemplateColumns: "1fr",
+    alignItems: "start",
+  },
+  reconModelName: {
+    fontSize: 13,
+    fontWeight: 700,
+    color: "#0f172a",
+    overflowWrap: "anywhere",
+  },
+  reconCountInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    padding: "9px 10px",
+    fontSize: 14,
+    fontFamily: "inherit",
+    color: "#0f172a",
+    outline: "none",
+  },
+  reconFooter: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 10,
+    flexWrap: "wrap",
+    marginTop: 14,
+  },
+  reconEmptyWarning: {
+    border: "1px solid #fde68a",
+    background: "#fffbeb",
+    color: "#92400e",
+    borderRadius: 8,
+    padding: "12px",
+    fontSize: 12,
+    fontWeight: 600,
+    lineHeight: 1.5,
+  },
+  reconLogList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  reconLogCard: {
+    border: "1px solid #e2e8f0",
+    borderRadius: 10,
+    padding: "12px 14px",
+    background: "#ffffff",
+  },
+  reconLogHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
+    flexWrap: "wrap",
+    marginBottom: 10,
+  },
+  reconWeekTitle: {
+    display: "block",
+    color: "#0f172a",
+    fontSize: 13,
+  },
+  reconLogSub: {
+    fontSize: 11,
+    color: "#64748b",
+    marginTop: 3,
+  },
+  reconCleanState: {
+    border: "1px solid #bbf7d0",
+    background: "#f0fdf4",
+    color: "#166534",
+    borderRadius: 8,
+    padding: "9px 10px",
+    fontSize: 12,
+    fontWeight: 700,
+  },
+  reconMismatchList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 7,
+  },
+  reconMismatchLine: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    border: "1px solid #f1f5f9",
+    borderRadius: 8,
+    padding: "8px 10px",
+    background: "#f8fafc",
+  },
+  reconMismatchModel: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#1e293b",
+    overflowWrap: "anywhere",
+  },
+  reconMismatchCount: {
+    fontSize: 12,
+    whiteSpace: "nowrap",
+  },
+  reconMissedLine: {
+    border: "1px solid #fecaca",
+    background: "#fef2f2",
+    color: "#991b1b",
+    borderRadius: 8,
+    padding: "9px 10px",
+    fontSize: 12,
+    fontWeight: 700,
   },
   table: {
     width: "100%",

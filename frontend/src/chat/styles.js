@@ -625,8 +625,53 @@ export const chatStyles = {
     flexShrink: 0,
     zIndex: 2,
     "@media (max-width: 768px)": {
-      padding: "8px 10px",
-      paddingBottom: "max(8px, env(safe-area-inset-bottom, 8px))",
+      flexDirection: "column",
+      alignItems: "stretch",
+      gap: "7px",
+      padding: "8px 10px 9px",
+      paddingBottom: "max(9px, env(safe-area-inset-bottom, 9px))",
+    },
+  },
+
+  composerTools: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    flexShrink: 0,
+    order: 1,
+    "@media (max-width: 768px)": {
+      order: 2,
+      width: "100%",
+      justifyContent: "flex-start",
+      gap: "8px",
+      paddingLeft: "2px",
+    },
+  },
+
+  composerMain: {
+    display: "flex",
+    alignItems: "flex-end",
+    gap: "8px",
+    flex: 1,
+    minWidth: 0,
+    order: 2,
+    "@media (max-width: 768px)": {
+      order: 1,
+      width: "100%",
+      gap: "9px",
+    },
+  },
+
+  composerToolBtn: {
+    width: "44px",
+    height: "44px",
+    flexShrink: 0,
+    "@media (max-width: 768px)": {
+      width: "40px",
+      height: "40px",
+      background: "#fff",
+      border: `1px solid ${WA.border}`,
+      boxShadow: "0 1px 2px rgba(17,27,33,0.04)",
     },
   },
 
@@ -639,6 +684,13 @@ export const chatStyles = {
     alignItems: "flex-end",
     padding: "6px 12px",
     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+    minWidth: 0,
+    "@media (max-width: 768px)": {
+      borderRadius: "18px",
+      padding: "9px 10px 9px 14px",
+      minHeight: "46px",
+      boxSizing: "border-box",
+    },
   },
 
   textarea: {
@@ -657,8 +709,33 @@ export const chatStyles = {
     padding: 0,
     "@media (max-width: 768px)": {
       fontSize: "16px",
+      lineHeight: "1.35",
+      minHeight: "24px",
+      maxHeight: "104px",
     },
   },
+
+  refineBtn: (isRefining, isDisabled) => ({
+    border: "none",
+    background: "transparent",
+    color: isRefining ? WA.greenDark : WA.textSub,
+    cursor: isDisabled ? "not-allowed" : "pointer",
+    width: "34px",
+    height: "34px",
+    borderRadius: "50%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    flexShrink: 0,
+    opacity: isRefining || isDisabled ? 0.6 : 1,
+    "&:hover": { background: WA.border },
+    "@media (max-width: 768px)": {
+      width: "36px",
+      height: "36px",
+      marginBottom: "-4px",
+    },
+  }),
 
   sendBtn: {
     width: "44px",
@@ -677,6 +754,11 @@ export const chatStyles = {
     "&:hover": { background: WA.greenDark },
     "&:active": { transform: "scale(0.93)" },
     "&:disabled": { background: WA.borderMid, cursor: "not-allowed" },
+    "@media (max-width: 768px)": {
+      width: "46px",
+      height: "46px",
+      boxShadow: "0 2px 8px rgba(7,94,84,0.22)",
+    },
   },
 
   // ── Info panel (slide-over overlay) ──────────────────────────────────────

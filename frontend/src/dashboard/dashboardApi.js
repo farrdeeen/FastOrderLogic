@@ -25,6 +25,38 @@ export async function fetchInvoicePending(limit = 50) {
   return res.data || [];
 }
 
+export async function fetchStockReconStatus() {
+  const res = await api.get("/dashboard/stock-recon/status");
+  return res.data;
+}
+
+export async function fetchStockReconLogs(limit = 20) {
+  const res = await api.get("/dashboard/stock-recon/logs", {
+    params: { limit },
+  });
+  return res.data || [];
+}
+
+export async function startStockRecon() {
+  const res = await api.post("/dashboard/stock-recon/start");
+  return res.data;
+}
+
+export async function stopStockRecon(runId) {
+  const res = await api.post("/dashboard/stock-recon/stop", {
+    run_id: runId,
+  });
+  return res.data;
+}
+
+export async function completeStockRecon(runId, counts) {
+  const res = await api.post("/dashboard/stock-recon/complete", {
+    run_id: runId,
+    counts,
+  });
+  return res.data;
+}
+
 export async function fetchTrainingDocInfo() {
   const res = await api.get("/dashboard/training-doc");
   return res.data;

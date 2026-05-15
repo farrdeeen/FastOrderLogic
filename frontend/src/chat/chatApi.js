@@ -87,6 +87,71 @@ export async function uploadChatMedia(sessionId, file, caption = "") {
   return res.data;
 }
 
+// GET /chat/saved-replies
+export async function fetchSavedReplies() {
+  const res = await api.get("/chat/saved-replies");
+  return res.data || [];
+}
+
+// POST /chat/saved-replies  (save reusable text + optional photo)
+export async function createSavedReply({ title, message = "", file = null }) {
+  const form = new FormData();
+  form.append("title", title || "");
+  form.append("message", message || "");
+  if (file) form.append("file", file);
+
+  const res = await api.post("/chat/saved-replies", form);
+  return res.data;
+}
+
+// DELETE /chat/saved-replies/{id}
+export async function deleteSavedReply(replyId) {
+  const res = await api.delete(`/chat/saved-replies/${replyId}`);
+  return res.data;
+}
+
+// POST /chat/saved-replies/{id}/send
+export async function sendSavedReply(sessionId, replyId) {
+  const res = await api.post(`/chat/saved-replies/${replyId}/send`, {
+    session_id: sessionId,
+  });
+  return res.data;
+}
+
+// GET /chat/products/search
+export async function searchChatProducts(query = "") {
+  const res = await api.get("/chat/products/search", {
+    params: { query, limit: 12 },
+  });
+  return res.data || [];
+}
+
+// POST /chat/products/send
+export async function sendChatProduct(sessionId, product) {
+  const res = await api.post("/chat/products/send", {
+    session_id: sessionId,
+    sku: product?.sku || "",
+    name: product?.name || "",
+    query: product?.sku || product?.name || "",
+  });
+  return res.data;
+}
+
+// POST /chat/payment-request
+export async function sendChatPaymentRequest(sessionId, amount) {
+  const res = await api.post("/chat/payment-request", {
+    session_id: sessionId,
+    amount: Number(amount),
+  });
+  return res.data;
+}
+
+// POST /chat/refine-message
+export async function refineChatMessage(message) {
+  const res = await api.post("/chat/refine-message", { message });
+  return res.data;
+}
+
 // POST /chat/send-dispatch-slip  (tracking link + dispatch PDF)
 export async function sendDispatchSlip({ sessionId, orderId }) {
   const res = await api.post("/chat/send-dispatch-slip", {

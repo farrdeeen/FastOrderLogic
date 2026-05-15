@@ -626,7 +626,29 @@ async def analyze_media(file_url: str, file_type: str) -> str:
             except Exception as exc:
                 logger.warning("analyze_media: OpenRouter failed: %s — using sales-agent handoff", exc)
 
-        return _AI_HANDOFF_MESSAGE
+    return _AI_HANDOFF_MESSAGE
+
+
+async def refine_operator_message(message: str) -> str:
+    """
+    Rewrite an operator draft into clear, professional Indian English.
+    Hinglish is translated to English; English is polished without changing facts.
+    """
+    draft = (message or "").strip()
+    if not draft:
+        return ""
+
+    system = (
+        "You refine WhatsApp messages written by Indian sales/support operators. "
+        "Return ONLY the final rewritten message. "
+        "If the input is Hinglish or Hindi, translate it into natural professional Indian English. "
+        "If the input is English, improve spelling, grammar, tone, and clarity. "
+        "Keep the same meaning, names, amounts, order IDs, links, and commitments. "
+        "Do not add new facts, discounts, guarantees, greetings, sign-offs, or explanations. "
+        "Keep it concise and suitable for a customer WhatsApp chat."
+    )
+    refined = await _call_openrouter(system, [], draft)
+    return refined.strip() or draft
 
     return "Thanks for sharing! If you have a question, please type it and I'll help."
 
