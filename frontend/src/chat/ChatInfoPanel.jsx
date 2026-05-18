@@ -5,9 +5,10 @@
 
 import { useEffect, useState } from "react";
 import { Box, Typography } from "@mui/material";
-import { X, ChevronRight, Package, Flag, Zap, Truck } from "lucide-react";
+import { X, ChevronRight, Package, Flag, Zap, Truck, Save } from "lucide-react";
 import {
   resolveSession,
+  saveChatContact,
   sendDispatchSlip,
   sendOrderConfirmation,
   updateSessionFlag,
@@ -215,6 +216,7 @@ export default function ChatInfoPanel({
   onQuickReply,
   onFlagChange,
   onModeChange,
+  onContactSaved,
 }) {
   const [resolving, setResolving] = useState(false);
   const [activeFlag, setActiveFlag] = useState(null);
@@ -224,6 +226,10 @@ export default function ChatInfoPanel({
   const [dispatchSending, setDispatchSending] = useState(false);
   const [dispatchSent, setDispatchSent] = useState(null);
   const [dispatchError, setDispatchError] = useState(null);
+  const [contactName, setContactName] = useState(chat?.name || "");
+  const [contactPhone, setContactPhone] = useState(chat?.phone || "");
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactStatus, setContactStatus] = useState(null);
 
   const currentFlag = activeFlag ?? chat?.flag ?? null;
   const isResolved = currentFlag === "resolved" || chat?.status === "resolved";
@@ -233,6 +239,9 @@ export default function ChatInfoPanel({
     setDispatchOrderId(chat?.linked_order_id || "");
     setDispatchSent(null);
     setDispatchError(null);
+    setContactName(chat?.name || "");
+    setContactPhone(chat?.phone || "");
+    setContactStatus(null);
   }, [chat?.id, chat?.flag, chat?.linked_order_id]);
 
   if (!chat) {
@@ -350,6 +359,45 @@ export default function ChatInfoPanel({
     }
   };
 
+  const handleSaveContact = async () => {
+    if (!chat?.id || savingContact) return;
+    const name = contactName.trim();
+    const phone = contactPhone.trim();
+    if (!name || !phone) {
+      setContactStatus({ type: "error", message: "Name and number are required." });
+      return;
+    }
+
+    setSavingContact(true);
+    setContactStatus(null);
+    try {
+      const result = await saveChatContact(chat.id, { name, phone });
+      setContactStatus({ type: "success", message: "Saved to customer table." });
+      if (onContactSaved) {
+        onContactSaved(chat.id, {
+          name: result?.name || name,
+          phone: chat.phone,
+          customer_id: result?.customer_id,
+        });
+      }
+      window.dispatchEvent(
+        new CustomEvent("chat:session-updated", {
+          detail: {
+            session_id: chat.id,
+            wa_contact_name: result?.name || name,
+          },
+        }),
+      );
+    } catch (err) {
+      setContactStatus({
+        type: "error",
+        message: err?.response?.data?.detail || "Failed to save contact.",
+      });
+    } finally {
+      setSavingContact(false);
+    }
+  };
+
   const alreadySent = orderSentFor === chat.id;
   const dispatchInputStyle = {
     width: "100%",
@@ -363,6 +411,18 @@ export default function ChatInfoPanel({
     fontFamily: "inherit",
     boxSizing: "border-box",
     marginBottom: "6px",
+  };
+  const contactInputStyle = {
+    width: "100%",
+    fontSize: "15px",
+    padding: "9px 12px",
+    borderRadius: "8px",
+    border: `1px solid ${WA.borderMid}`,
+    background: "#fff",
+    color: WA.textPrimary,
+    outline: "none",
+    fontFamily: "inherit",
+    boxSizing: "border-box",
   };
 
   const statusPillStyle = {
@@ -448,6 +508,52 @@ export default function ChatInfoPanel({
       {/* ── Details ── */}
       <Box sx={chatStyles.infoPanelSection}>
         <SectionLabel>Details</SectionLabel>
+        <Box sx={{ display: "grid", gap: "8px", mb: "10px" }}>
+          <input
+            value={contactName}
+            onChange={(e) => {
+              setContactName(e.target.value);
+              setContactStatus(null);
+            }}
+            placeholder="Customer name"
+            spellCheck
+            lang="en-IN"
+            style={contactInputStyle}
+          />
+          <input
+            value={contactPhone}
+            onChange={(e) => {
+              setContactPhone(e.target.value);
+              setContactStatus(null);
+            }}
+            placeholder="WhatsApp number"
+            inputMode="tel"
+            style={contactInputStyle}
+          />
+          <button
+            onClick={handleSaveContact}
+            disabled={savingContact}
+            style={{
+              ...chatStyles.actionBtn,
+              justifyContent: "center",
+              opacity: savingContact ? 0.65 : 1,
+              cursor: savingContact ? "wait" : "pointer",
+            }}
+          >
+            <Save size={15} />
+            {savingContact ? "Saving contact…" : "Save to customer"}
+          </button>
+          {contactStatus && (
+            <Typography
+              sx={{
+                fontSize: 12,
+                color: contactStatus.type === "success" ? "#2E7D32" : "#E53935",
+              }}
+            >
+              {contactStatus.message}
+            </Typography>
+          )}
+        </Box>
         <InfoRow
           label="Last message"
           value={

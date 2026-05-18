@@ -103,6 +103,12 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
                   : {}),
                 ...(detail.status ? { status: detail.status } : {}),
                 ...("flag" in detail ? { flag: detail.flag } : {}),
+                ...(detail.wa_contact_name
+                  ? { wa_contact_name: detail.wa_contact_name }
+                  : {}),
+                ...(detail.phone_number
+                  ? { phone_number: detail.phone_number }
+                  : {}),
               }
             : conv,
         ),

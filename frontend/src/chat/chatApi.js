@@ -161,6 +161,15 @@ export async function sendDispatchSlip({ sessionId, orderId }) {
   return res.data;
 }
 
+// POST /chat/sessions/{id}/save-contact  (save WA contact into customer table)
+export async function saveChatContact(sessionId, { name, phone }) {
+  const res = await api.post(`/chat/sessions/${sessionId}/save-contact`, {
+    name,
+    phone,
+  });
+  return res.data;
+}
+
 // POST /chat/send-order-confirmation  (sends the approved WA template)
 // phone must be E.164 without '+', e.g. "919311886444"
 export async function sendOrderConfirmation({

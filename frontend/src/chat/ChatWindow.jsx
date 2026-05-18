@@ -1413,7 +1413,7 @@ function ProductPickerPanel({
         "@media (max-width: 768px)": {
           margin: "0 10px 7px",
           borderRadius: "14px",
-          maxHeight: "46dvh",
+          maxHeight: "42dvh",
           display: "flex",
           flexDirection: "column",
         },
@@ -1442,7 +1442,7 @@ function ProductPickerPanel({
             outline: "none",
             background: "transparent",
             font: "inherit",
-            fontSize: 14,
+            fontSize: 16,
             color: WA.textPrimary,
             minWidth: 0,
           }}
@@ -1462,7 +1462,7 @@ function ProductPickerPanel({
           maxHeight: "280px",
           overflowY: "auto",
           "@media (max-width: 768px)": {
-            maxHeight: "36dvh",
+            maxHeight: "32dvh",
             flex: "1 1 auto",
           },
         }}
@@ -1500,6 +1500,11 @@ function ProductPickerPanel({
                   textAlign: "left",
                   cursor: isSending ? "wait" : "pointer",
                   "&:hover": { background: WA.bgHeader },
+                  "@media (max-width: 520px)": {
+                    gridTemplateColumns: imageUrl ? "38px minmax(0, 1fr) 28px" : "minmax(0, 1fr) 28px",
+                    padding: "8px 9px",
+                    gap: "8px",
+                  },
                 }}
               >
                 {imageUrl && (
@@ -1513,6 +1518,10 @@ function ProductPickerPanel({
                       borderRadius: "7px",
                       objectFit: "cover",
                       border: `1px solid ${WA.border}`,
+                      "@media (max-width: 520px)": {
+                        width: 38,
+                        height: 38,
+                      },
                     }}
                   />
                 )}

@@ -108,6 +108,57 @@ function PaymentRedirectPage() {
   );
 }
 
+function AppToast({ toast, onClose }) {
+  if (!toast) return null;
+  const palette =
+    toast.type === "error"
+      ? { bg: "#fef2f2", border: "#fecaca", text: "#991b1b" }
+      : { bg: "#ecfdf3", border: "#bbf7d0", text: "#166534" };
+
+  return (
+    <Box
+      sx={{
+        position: "fixed",
+        right: { xs: 12, sm: 20 },
+        bottom: { xs: 16, sm: 20 },
+        zIndex: 2400,
+        maxWidth: { xs: "calc(100vw - 24px)", sm: 420 },
+        px: 1.5,
+        py: 1.2,
+        borderRadius: 2,
+        border: `1px solid ${palette.border}`,
+        background: palette.bg,
+        color: palette.text,
+        boxShadow: "0 16px 38px rgba(15,23,42,0.18)",
+        display: "flex",
+        alignItems: "center",
+        gap: 1,
+        fontSize: 13,
+        fontWeight: 700,
+      }}
+    >
+      <span style={{ flex: 1 }}>{toast.message}</span>
+      <Box
+        component="button"
+        type="button"
+        onClick={onClose}
+        aria-label="Close notification"
+        sx={{
+          border: "none",
+          background: "transparent",
+          color: "inherit",
+          cursor: "pointer",
+          fontSize: 18,
+          lineHeight: 1,
+          px: 0.5,
+        }}
+      >
+        ×
+      </Box>
+    </Box>
+  );
+}
+
 export default function App() {
   const { isLoaded, isSignedIn } = useAuth();
   const { user } = useUser();
@@ -138,8 +189,23 @@ export default function App() {
   const [stockReconBanner, setStockReconBanner] = useState(() =>
     readStoredStockReconBanner(),
   );
+  const [invoiceConfirmOrderId, setInvoiceConfirmOrderId] = useState(null);
+  const [appToast, setAppToast] = useState(null);
 
   const fetchRunRef = useRef(0);
+  const appToastTimerRef = useRef(null);
+
+  const showAppToast = useCallback((message, type = "success") => {
+    if (appToastTimerRef.current) clearTimeout(appToastTimerRef.current);
+    setAppToast({ message, type });
+    appToastTimerRef.current = setTimeout(() => setAppToast(null), 3800);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (appToastTimerRef.current) clearTimeout(appToastTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) {
@@ -373,6 +439,30 @@ export default function App() {
     }
   };
 
+  const createZohoInvoice = async (orderId) => {
+    if (!orderId) return;
+    setInvoiceConfirmOrderId(null);
+    setInvoiceLoading((prev) => ({ ...prev, [orderId]: true }));
+    try {
+      const res = await api.post(`/zoho/invoice/${encodeURIComponent(orderId)}`);
+      showAppToast("Invoice created successfully.");
+      if (res.data?.invoice_number) {
+        handleOrdersUpdate([
+          { order_id: orderId, invoice_number: res.data.invoice_number },
+        ]);
+      }
+    } catch (err) {
+      console.error(err);
+      const detail =
+        err?.response?.data?.detail ||
+        err?.response?.data?.message ||
+        "Invoice creation failed.";
+      showAppToast(detail, "error");
+    } finally {
+      setInvoiceLoading((prev) => ({ ...prev, [orderId]: false }));
+    }
+  };
+
   // ── Action handler ────────────────────────────────────────────────────────
   const handleAction = async (orderId, action, payload) => {
     try {
@@ -420,23 +510,7 @@ export default function App() {
           );
           break;
         case "create-invoice":
-          setInvoiceLoading((prev) => ({ ...prev, [orderId]: true }));
-          try {
-            const res = await api.post(
-              `/zoho/invoice/${encodeURIComponent(orderId)}`,
-            );
-            alert("✅ Invoice created successfully");
-            if (res.data?.invoice_number) {
-              handleOrdersUpdate([
-                { order_id: orderId, invoice_number: res.data.invoice_number },
-              ]);
-            }
-          } catch (err) {
-            console.error(err);
-            alert("❌ Invoice creation failed");
-          } finally {
-            setInvoiceLoading((prev) => ({ ...prev, [orderId]: false }));
-          }
+          setInvoiceConfirmOrderId(orderId);
           return;
         case "download-invoice":
           window.open(
@@ -467,7 +541,7 @@ export default function App() {
       }
     } catch (err) {
       console.error(`Action "${action}" failed for ${orderId}:`, err);
-      alert("❌ Action failed");
+      showAppToast("Action failed. Please try again.", "error");
     }
   };
 
@@ -488,6 +562,55 @@ export default function App() {
 
       {/* ═════════════ SIGNED IN ═════════════ */}
       <SignedIn>
+        <AppToast toast={appToast} onClose={() => setAppToast(null)} />
+        <Dialog
+          open={Boolean(invoiceConfirmOrderId)}
+          onClose={() => setInvoiceConfirmOrderId(null)}
+          fullWidth
+          maxWidth="xs"
+          PaperProps={{
+            sx: {
+              borderRadius: 3,
+              boxShadow: "0 22px 60px rgba(15,23,42,0.24)",
+            },
+          }}
+        >
+          <DialogTitle sx={{ fontSize: 18, fontWeight: 800, pb: 1 }}>
+            Create Zoho invoice?
+          </DialogTitle>
+          <DialogContent sx={{ color: "#475569", fontSize: 14, pt: 0 }}>
+            This will create an invoice for order{" "}
+            <strong>{invoiceConfirmOrderId}</strong> in Zoho. Please confirm
+            before continuing.
+          </DialogContent>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 1,
+              p: 2,
+              pt: 1,
+            }}
+          >
+            <Button
+              variant="outlined"
+              onClick={() => setInvoiceConfirmOrderId(null)}
+              sx={{ borderRadius: 2 }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={() => createZohoInvoice(invoiceConfirmOrderId)}
+              disabled={Boolean(invoiceLoading[invoiceConfirmOrderId])}
+              sx={{ borderRadius: 2 }}
+            >
+              {invoiceLoading[invoiceConfirmOrderId]
+                ? "Creating..."
+                : "Create invoice"}
+            </Button>
+          </Box>
+        </Dialog>
         {canAccess("chat") && <ChatNotificationListener />}
         {stockReconBanner?.active && (
           <Box

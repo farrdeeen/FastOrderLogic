@@ -21,17 +21,18 @@ import hmac
 import hashlib
 import logging
 import os
-from datetime import datetime
 from urllib.parse import unquote
 from sqlalchemy import text
 from database import SessionLocal
-from services.chat_service import normalize_phone
 from services.payment_service import (
     PaymentLinkError,
     create_payment_link_details,
     decode_payment_order_token,
 )
-from services.whatsapp_service import send_order_confirmation, send_text_message
+from services.razorpay_confirmation_service import (
+    extract_razorpay_payment_details,
+    record_confirmed_razorpay_payment,
+)
 
 router = APIRouter()
 
@@ -76,85 +77,25 @@ async def razorpay_webhook(request: Request):
     event   = payload.get("event")
 
     if event in ("payment_link.paid", "qr_code.credited"):
-        payment_entity = {}
-        if event == "payment_link.paid":
-            entity     = (((payload.get("payload") or {}).get("payment_link") or {}).get("entity") or {})
-            order_id   = entity.get("reference_id") or (entity.get("notes") or {}).get("order_id")
-            raw_amount = entity.get("amount_paid") or entity.get("amount") or 0
-            utr_number = None
-        else:
-            entity         = (((payload.get("payload") or {}).get("qr_code") or {}).get("entity") or {})
-            payment_entity = (((payload.get("payload") or {}).get("payment") or {}).get("entity") or {})
-            notes          = entity.get("notes") or payment_entity.get("notes") or {}
-            order_id       = notes.get("order_id")
-            raw_amount     = payment_entity.get("amount") or entity.get("payment_amount") or 0
-            utr_number     = (payment_entity.get("acquirer_data") or {}).get("rrn")
-
-        try:
-            amount = float(raw_amount or 0) / 100
-        except (TypeError, ValueError):
-            amount = 0
+        details = extract_razorpay_payment_details(payload, event)
+        order_id = details["reference_id"]
 
         if not order_id:
-            logger.error("Razorpay %s webhook missing order_id: %s", event, entity)
+            logger.error("Razorpay %s webhook missing order_id: %s", event, details["entity"])
             return {"status": "missing_order_id"}
 
         db = SessionLocal()
         try:
-            result = db.execute(
-                text("""
-                    UPDATE orders
-                    SET payment_status = 'paid',
-                        order_status   = 'APPR',
-                        utr_number     = COALESCE(:utr_number, utr_number),
-                        updated_at     = :updated_at
-                    WHERE order_id = :oid
-                """),
-                {"oid": order_id, "utr_number": utr_number, "updated_at": datetime.now()},
+            result = await record_confirmed_razorpay_payment(
+                db,
+                order_id,
+                details["amount"],
+                utr_number=details["utr_number"],
+                razorpay_payment_id=details["razorpay_payment_id"],
             )
-            db.commit()
-
-            if result.rowcount == 0:
+            if result.get("status") == "order_not_found":
                 logger.warning("Razorpay payment received but order not found: %s", order_id)
-                return {"status": "order_not_found", "order_id": order_id}
-
-            try:
-                from routes.orders import notify_order_change
-                notify_order_change(order_id, "updated")
-            except Exception as exc:
-                logger.debug("WS notify failed after Razorpay webhook: %s", exc)
-
-            row = db.execute(
-                text("""
-                    SELECT
-                        COALESCE(c.mobile, oc.mobile)  AS mobile,
-                        COALESCE(c.name,   oc.name)    AS customer_name
-                    FROM orders o
-                    LEFT JOIN customer         c  ON c.customer_id  = o.customer_id
-                    LEFT JOIN offline_customer oc ON oc.customer_id = o.offline_customer_id
-                    WHERE o.order_id = :oid
-                """),
-                {"oid": order_id},
-            ).fetchone()
-
-            if row and row.mobile:
-                phone         = normalize_phone(row.mobile)
-                customer_name = row.customer_name or "Customer"
-                amount_text   = f"₹{amount:,.0f}" if amount else "—"
-                try:
-                    await send_order_confirmation(phone, customer_name, order_id, amount_text)
-                except Exception as exc:
-                    logger.error("Razorpay paid template WA failed for %s: %s", phone, exc)
-                    try:
-                        await send_text_message(
-                            phone,
-                            f"✅ Payment received for Order {order_id}!\n\n"
-                            "Your order is confirmed and will be shipped soon 🚚",
-                        )
-                    except Exception as fb_exc:
-                        logger.error("Razorpay paid text WA fallback failed for %s: %s", phone, fb_exc)
-            else:
-                logger.warning("Razorpay paid order has no customer phone: %s", order_id)
+                return result
         finally:
             db.close()
 

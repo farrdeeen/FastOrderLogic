@@ -92,6 +92,19 @@ export default function ChatPage({ onOpenNav }) {
       setActiveChat((p) => (p ? { ...p, is_human: isHuman } : null));
   };
 
+  const handleContactSaved = (sessionId, contact) => {
+    if (activeChat?.id === sessionId)
+      setActiveChat((p) =>
+        p
+          ? {
+              ...p,
+              name: contact?.name || p.name,
+              phone: contact?.phone || p.phone,
+            }
+          : null,
+      );
+  };
+
   const handleQuickReply = (text) => {
     if (fillInputRef.current) fillInputRef.current(text);
     setInfoPanelOpen(false);
@@ -154,6 +167,7 @@ export default function ChatPage({ onOpenNav }) {
             onResolved={handleResolved}
             onFlagChange={handleFlagChange}
             onModeChange={handleModeChange}
+            onContactSaved={handleContactSaved}
             onQuickReply={handleQuickReply}
           />
         </Box>

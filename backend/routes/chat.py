@@ -25,7 +25,12 @@ from sqlalchemy import text
 from database import SessionLocal
 from auth.clerk_auth import get_current_user as require_user
 from services.chat_media_service import media_download_url, media_public_url, save_media_bytes
-from services.chat_service import save_message, get_or_create_session, ensure_chat_session_columns
+from services.chat_service import (
+    ensure_chat_session_columns,
+    get_or_create_session,
+    normalize_local_phone,
+    save_message,
+)
 from services.whatsapp_service import (
     send_document_message,
     send_image_message,
@@ -153,6 +158,11 @@ class PaymentRequestPayload(BaseModel):
 
 class RefineMessagePayload(BaseModel):
     message: str
+
+
+class SaveContactPayload(BaseModel):
+    name: str
+    phone: Optional[str] = None
 
 
 def _wa_message_id(response: Optional[dict]) -> Optional[str]:
@@ -312,6 +322,66 @@ def get_conversation(
     if not row:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return dict(row._mapping)
+
+
+@router.post("/sessions/{session_id}/save-contact")
+def save_session_contact(
+    session_id: int,
+    payload: SaveContactPayload,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    session = db.execute(
+        text("SELECT id, phone_number, wa_contact_name FROM chat_sessions WHERE id = :sid"),
+        {"sid": session_id},
+    ).mappings().first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    name = (payload.name or session.get("wa_contact_name") or "").strip()
+    phone = normalize_local_phone(payload.phone or session.get("phone_number") or "")
+    if not name:
+        raise HTTPException(status_code=400, detail="Contact name is required")
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="A valid 10-digit mobile number is required")
+
+    try:
+        result = db.execute(
+            text("""
+                INSERT INTO customer (name, mobile)
+                VALUES (:name, :mobile)
+                ON DUPLICATE KEY UPDATE
+                    customer_id = LAST_INSERT_ID(customer_id),
+                    name = CASE
+                        WHEN VALUES(name) IS NOT NULL AND VALUES(name) <> '' THEN VALUES(name)
+                        ELSE name
+                    END
+            """),
+            {"name": name, "mobile": phone},
+        )
+        customer_id = result.lastrowid
+        db.execute(
+            text("""
+                UPDATE chat_sessions
+                SET wa_contact_name = :name, updated_at = :now
+                WHERE id = :sid
+            """),
+            {"name": name, "now": datetime.now(), "sid": session_id},
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to save chat contact for session %s", session_id)
+        raise HTTPException(status_code=500, detail="Failed to save contact") from exc
+
+    notify_chat_change(session_id, "session")
+    return {
+        "success": True,
+        "customer_id": customer_id,
+        "name": name,
+        "mobile": phone,
+        "session_id": session_id,
+    }
 
 
 @router.get("/recent-user-messages")
