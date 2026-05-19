@@ -5,6 +5,7 @@ import {
   fetchAiFailures,
   fetchRecentConversations,
   fetchInvoicePending,
+  updateInvoiceNumberForOrders,
   fetchStockReconStatus,
   fetchStockReconLogs,
   startStockRecon,
@@ -174,7 +175,16 @@ function publishStockReconBanner(run) {
   );
 }
 
-function InvoicePendingSection({ items, loading, isMobile = false }) {
+function InvoicePendingSection({
+  items,
+  loading,
+  isMobile = false,
+  invoiceValues = {},
+  invoiceSaving = {},
+  invoiceMessages = {},
+  onInvoiceChange,
+  onInvoiceSave,
+}) {
   const customers = items || [];
   const pendingOrders = customers.reduce(
     (sum, customer) => sum + Number(customer.order_count || 0),
@@ -203,6 +213,10 @@ function InvoicePendingSection({ items, loading, isMobile = false }) {
         <div style={styles.invoiceList}>
           {customers.map((customer) => {
             const devices = customer.devices || [];
+            const customerKey = customer.customer_key;
+            const invoiceValue = invoiceValues[customerKey] || "";
+            const saving = Boolean(invoiceSaving[customerKey]);
+            const message = invoiceMessages[customerKey];
             return (
               <div key={customer.customer_key} style={styles.invoiceRow}>
                 <div style={styles.invoiceHeaderRow}>
@@ -245,6 +259,55 @@ function InvoicePendingSection({ items, loading, isMobile = false }) {
                       {orderId}
                     </span>
                   ))}
+                </div>
+
+                <div
+                  style={
+                    isMobile
+                      ? { ...styles.invoiceBulkBox, ...styles.invoiceBulkBoxMobile }
+                      : styles.invoiceBulkBox
+                  }
+                >
+                  <div style={styles.invoiceBulkText}>
+                    <strong>Update invoice number</strong>
+                    <span>
+                      Applies to all {customer.order_count} pending orders above.
+                    </span>
+                  </div>
+                  <input
+                    value={invoiceValue}
+                    onChange={(event) =>
+                      onInvoiceChange?.(customerKey, event.target.value)
+                    }
+                    placeholder="Enter invoice number"
+                    disabled={saving}
+                    style={styles.invoiceBulkInput}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onInvoiceSave?.(customer)}
+                    disabled={saving || !invoiceValue.trim()}
+                    style={{
+                      ...styles.invoiceBulkBtn,
+                      ...(saving || !invoiceValue.trim()
+                        ? styles.invoiceBulkBtnDisabled
+                        : {}),
+                    }}
+                  >
+                    {saving ? "Updating..." : "Update all"}
+                  </button>
+                  {message && (
+                    <div
+                      style={{
+                        ...styles.invoiceBulkMsg,
+                        ...(message.type === "error"
+                          ? styles.invoiceBulkMsgError
+                          : styles.invoiceBulkMsgSuccess),
+                      }}
+                    >
+                      {message.text}
+                    </div>
+                  )}
                 </div>
 
                 {devices.length === 0 ? (
@@ -558,6 +621,9 @@ export default function DashboardPage() {
   const [docUploading, setDocUploading] = useState(false);
   const [docMsg, setDocMsg] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
+  const [invoiceUpdateValues, setInvoiceUpdateValues] = useState({});
+  const [invoiceUpdateSaving, setInvoiceUpdateSaving] = useState({});
+  const [invoiceUpdateMessages, setInvoiceUpdateMessages] = useState({});
   const fileRef = useRef(null);
 
   const loadStockRecon = useCallback(async (silent = false) => {
@@ -770,6 +836,85 @@ export default function DashboardPage() {
       setDocMsg({ type: "success", text: "Training document removed." });
     } catch {
       setDocMsg({ type: "error", text: "Failed to remove document." });
+    }
+  };
+
+  const handleInvoiceNumberChange = (customerKey, value) => {
+    setInvoiceUpdateValues((prev) => ({ ...prev, [customerKey]: value }));
+    setInvoiceUpdateMessages((prev) => {
+      if (!prev[customerKey]) return prev;
+      const next = { ...prev };
+      delete next[customerKey];
+      return next;
+    });
+  };
+
+  const handleInvoicePendingUpdate = async (customer) => {
+    const customerKey = customer?.customer_key;
+    const invoiceNumber = (invoiceUpdateValues[customerKey] || "").trim();
+    const orderIds = customer?.order_ids || [];
+
+    if (!customerKey || orderIds.length === 0) return;
+    if (!invoiceNumber) {
+      setInvoiceUpdateMessages((prev) => ({
+        ...prev,
+        [customerKey]: {
+          type: "error",
+          text: "Enter an invoice number first.",
+        },
+      }));
+      return;
+    }
+
+    setInvoiceUpdateSaving((prev) => ({ ...prev, [customerKey]: true }));
+    setInvoiceUpdateMessages((prev) => ({
+      ...prev,
+      [customerKey]: {
+        type: "success",
+        text: "Updating invoice numbers...",
+      },
+    }));
+
+    try {
+      const result = await updateInvoiceNumberForOrders(orderIds, invoiceNumber);
+      const fresh = await fetchInvoicePending(50);
+      setInvoicePending(fresh);
+
+      if (Number(result.updated_count || 0) !== orderIds.length) {
+        setInvoiceUpdateMessages((prev) => ({
+          ...prev,
+          [customerKey]: {
+            type: "error",
+            text: `${result.updated_count || 0} of ${orderIds.length} orders updated. Some orders may already have an invoice.`,
+          },
+        }));
+        return;
+      }
+
+      setInvoiceUpdateValues((prev) => {
+        const next = { ...prev };
+        delete next[customerKey];
+        return next;
+      });
+      setInvoiceUpdateMessages((prev) => ({
+        ...prev,
+        [customerKey]: {
+          type: "success",
+          text: `${result.updated_count || orderIds.length} orders updated with ${invoiceNumber}.`,
+        },
+      }));
+    } catch (err) {
+      setInvoiceUpdateMessages((prev) => ({
+        ...prev,
+        [customerKey]: {
+          type: "error",
+          text:
+            err?.response?.data?.detail ||
+            "Could not update invoice numbers.",
+        },
+      }));
+    } finally {
+      setInvoiceUpdateSaving((prev) => ({ ...prev, [customerKey]: false }));
     }
   };
 
@@ -1087,6 +1232,11 @@ export default function DashboardPage() {
           items={invoicePending}
           loading={loading}
           isMobile={isMobile}
+          invoiceValues={invoiceUpdateValues}
+          invoiceSaving={invoiceUpdateSaving}
+          invoiceMessages={invoiceUpdateMessages}
+          onInvoiceChange={handleInvoiceNumberChange}
+          onInvoiceSave={handleInvoicePendingUpdate}
         />
       )}
 
@@ -1493,6 +1643,72 @@ const styles = {
     border: "1px solid #e2e8f0",
     borderRadius: 6,
     padding: "3px 7px",
+  },
+  invoiceBulkBox: {
+    display: "grid",
+    gridTemplateColumns: "minmax(190px, 1fr) minmax(160px, 220px) auto",
+    alignItems: "center",
+    gap: 10,
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 9,
+    padding: "10px 12px",
+  },
+  invoiceBulkBoxMobile: {
+    gridTemplateColumns: "1fr",
+    alignItems: "stretch",
+  },
+  invoiceBulkText: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    minWidth: 0,
+    fontSize: 12,
+    color: "#334155",
+  },
+  invoiceBulkInput: {
+    width: "100%",
+    minWidth: 0,
+    boxSizing: "border-box",
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    padding: "9px 10px",
+    outline: "none",
+    fontSize: 14,
+    color: "#0f172a",
+    background: "#ffffff",
+  },
+  invoiceBulkBtn: {
+    border: "none",
+    borderRadius: 8,
+    background: "#0f766e",
+    color: "#ffffff",
+    padding: "9px 14px",
+    fontSize: 12,
+    fontWeight: 800,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  invoiceBulkBtnDisabled: {
+    opacity: 0.55,
+    cursor: "not-allowed",
+  },
+  invoiceBulkMsg: {
+    gridColumn: "1 / -1",
+    fontSize: 12,
+    fontWeight: 700,
+    borderRadius: 8,
+    padding: "8px 10px",
+  },
+  invoiceBulkMsgSuccess: {
+    background: "#ecfdf3",
+    color: "#166534",
+    border: "1px solid #bbf7d0",
+  },
+  invoiceBulkMsgError: {
+    background: "#fef2f2",
+    color: "#991b1b",
+    border: "1px solid #fecaca",
   },
   invoiceTotals: {
     display: "flex",

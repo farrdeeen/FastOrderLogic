@@ -105,11 +105,6 @@ export default function ChatPage({ onOpenNav }) {
       );
   };
 
-  const handleQuickReply = (text) => {
-    if (fillInputRef.current) fillInputRef.current(text);
-    setInfoPanelOpen(false);
-  };
-
   const openInfoPanel = () => setInfoPanelOpen(true);
   const closeInfoPanel = () => setInfoPanelOpen(false);
 
@@ -168,7 +163,6 @@ export default function ChatPage({ onOpenNav }) {
             onFlagChange={handleFlagChange}
             onModeChange={handleModeChange}
             onContactSaved={handleContactSaved}
-            onQuickReply={handleQuickReply}
           />
         </Box>
       </Box>

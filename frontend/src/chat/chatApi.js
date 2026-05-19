@@ -170,6 +170,12 @@ export async function saveChatContact(sessionId, { name, phone }) {
   return res.data;
 }
 
+// GET /chat/sessions/{id}/last-order
+export async function fetchChatLastOrder(sessionId) {
+  const res = await api.get(`/chat/sessions/${sessionId}/last-order`);
+  return res.data?.order || null;
+}
+
 // POST /chat/send-order-confirmation  (sends the approved WA template)
 // phone must be E.164 without '+', e.g. "919311886444"
 export async function sendOrderConfirmation({

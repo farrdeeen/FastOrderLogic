@@ -5,21 +5,16 @@
 
 import { useEffect, useState } from "react";
 import { Box, Typography } from "@mui/material";
-import { X, ChevronRight, Package, Flag, Zap, Truck, Save } from "lucide-react";
+import { X, ChevronRight, Package, Flag, Truck, Save, ReceiptText } from "lucide-react";
 import {
+  fetchChatLastOrder,
   resolveSession,
   saveChatContact,
   sendDispatchSlip,
   sendOrderConfirmation,
   updateSessionFlag,
 } from "./chatApi";
-import {
-  chatStyles,
-  FLAG_ACTIONS,
-  QUICK_REPLIES,
-  avatarColor,
-  WA,
-} from "./styles";
+import { chatStyles, FLAG_ACTIONS, avatarColor, WA } from "./styles";
 import HumanTogglePanel from "./HumanTogglePanel";
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
@@ -37,6 +32,320 @@ function SectionLabel({ children }) {
     <Typography component="span" sx={chatStyles.infoPanelLabel}>
       {children}
     </Typography>
+  );
+}
+
+function formatMoney(value) {
+  const amount = Number(value || 0);
+  return amount.toLocaleString("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  });
+}
+
+function formatOrderDate(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString([], {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function cleanLabel(value) {
+  if (!value) return "—";
+  return String(value)
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function statusTone(value) {
+  const text = String(value || "").toLowerCase();
+  if (text.includes("reject") || text.includes("fail") || text.includes("cancel")) {
+    return { bg: "#FEECEC", color: "#B42318", border: "#F3B8B8" };
+  }
+  if (text.includes("pending") || text.includes("not") || text.includes("unpaid")) {
+    return { bg: "#FFF7E6", color: "#A84A00", border: "#F2D69A" };
+  }
+  if (text.includes("paid") || text.includes("success") || text.includes("shipped")) {
+    return { bg: "#EAF7EF", color: "#087A3E", border: "#BFE7CE" };
+  }
+  return { bg: "#EEF4FF", color: "#2456A6", border: "#C8D9FF" };
+}
+
+function StatusPill({ label, value }) {
+  const tone = statusTone(value);
+  return (
+    <Box
+      sx={{
+        minWidth: 0,
+        padding: "7px 8px",
+        borderRadius: "8px",
+        border: `1px solid ${tone.border}`,
+        background: tone.bg,
+      }}
+    >
+      <Typography
+        sx={{
+          fontSize: 9.5,
+          lineHeight: 1,
+          color: "rgba(71,84,103,.78)",
+          fontWeight: 800,
+          textTransform: "uppercase",
+          letterSpacing: ".35px",
+          marginBottom: "4px",
+        }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        sx={{
+          fontSize: 12,
+          lineHeight: 1.15,
+          color: tone.color,
+          fontWeight: 800,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+        title={cleanLabel(value)}
+      >
+        {cleanLabel(value)}
+      </Typography>
+    </Box>
+  );
+}
+
+function MiniDetail({ label, value }) {
+  if (!value) return null;
+  return (
+    <Box
+      sx={{
+        minWidth: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "8px",
+        padding: "6px 0",
+        borderTop: `1px solid ${WA.border}`,
+      }}
+    >
+      <Typography
+        sx={{
+          fontSize: 10,
+          color: WA.textSub,
+          fontWeight: 800,
+          textTransform: "uppercase",
+          letterSpacing: ".35px",
+          flex: "0 0 auto",
+        }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        sx={{
+          minWidth: 0,
+          fontSize: 12.5,
+          color: WA.textPrimary,
+          fontWeight: 700,
+          textAlign: "right",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+        title={String(value)}
+      >
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
+function LastOrderCard({ order, loading, error }) {
+  if (loading) {
+    return (
+      <Box sx={chatStyles.orderCard}>
+        <Typography sx={{ fontSize: 13, color: WA.textSub }}>
+          Loading latest order…
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box sx={chatStyles.orderCard}>
+        <Typography sx={{ fontSize: 12, color: "#E53935" }}>{error}</Typography>
+      </Box>
+    );
+  }
+
+  if (!order) {
+    return (
+      <Box sx={chatStyles.orderCard}>
+        <Typography sx={{ fontSize: 13, color: WA.textSub }}>
+          No order found for this mobile number.
+        </Typography>
+      </Box>
+    );
+  }
+
+  const items = order.items || [];
+  const totalQty =
+    Number(order.total_items) ||
+    items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+  return (
+    <Box
+      sx={{
+        ...chatStyles.orderCard,
+        background: "linear-gradient(180deg, #ffffff 0%, #F8FBFA 100%)",
+        border: "1px solid #DCE7E3",
+        boxShadow: "0 1px 4px rgba(16, 24, 40, 0.06)",
+        padding: "12px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "9px",
+      }}
+    >
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) auto",
+          gap: "10px",
+          alignItems: "start",
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            sx={{
+              fontSize: 15,
+              lineHeight: 1.1,
+              fontWeight: 900,
+              color: WA.textPrimary,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {order.order_id}
+          </Typography>
+          <Typography
+            sx={{
+              fontSize: 11.5,
+              color: WA.textSub,
+              marginTop: "4px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={order.customer_name || ""}
+          >
+            {order.customer_name || order.customer_mobile || "Latest customer order"}
+          </Typography>
+        </Box>
+        <Box sx={{ textAlign: "right", minWidth: 78 }}>
+          <Typography
+            sx={{
+              fontSize: 16,
+              lineHeight: 1.05,
+              color: WA.greenDark,
+              fontWeight: 900,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {formatMoney(order.total_amount)}
+          </Typography>
+          <Typography sx={{ fontSize: 10.5, color: WA.textSub, marginTop: "4px" }}>
+            {formatOrderDate(order.created_at)}
+          </Typography>
+        </Box>
+      </Box>
+
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: "6px",
+          "@media (max-width: 390px)": { gridTemplateColumns: "1fr" },
+        }}
+      >
+        <StatusPill label="Payment" value={order.payment_status} />
+        <StatusPill label="Delivery" value={order.delivery_status} />
+        <StatusPill label="Status" value={order.order_status} />
+      </Box>
+
+      <Box sx={{ borderTop: `1px solid ${WA.border}`, paddingTop: "2px" }}>
+        <MiniDetail label="Mobile" value={order.customer_mobile} />
+        <MiniDetail
+          label="Qty"
+          value={totalQty ? `${totalQty} item${totalQty === 1 ? "" : "s"}` : null}
+        />
+        <MiniDetail label="Channel" value={cleanLabel(order.channel)} />
+        <MiniDetail label="AWB" value={order.awb_number} />
+        <MiniDetail label="Invoice" value={order.invoice_number} />
+      </Box>
+
+      {items.length > 0 && (
+        <Box
+          sx={{
+            border: `1px solid ${WA.border}`,
+            borderRadius: "8px",
+            overflow: "hidden",
+            background: "#fff",
+          }}
+        >
+          {items.slice(0, 3).map((item, index) => (
+            <Box
+              key={`${item.sku_id || item.product_name || index}-${index}`}
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) auto",
+                gap: "8px",
+                padding: "8px 10px",
+                borderTop: index ? `1px solid ${WA.border}` : "none",
+              }}
+            >
+              <Box sx={{ minWidth: 0 }}>
+                <Typography
+                  sx={{
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    color: WA.textPrimary,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {item.product_name || "Product"}
+                </Typography>
+                {item.sku_id && (
+                  <Typography sx={{ fontSize: 11, color: WA.textSub }}>
+                    {item.sku_id}
+                  </Typography>
+                )}
+              </Box>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, color: WA.textPrimary }}>
+                x{item.quantity || 1}
+              </Typography>
+            </Box>
+          ))}
+          {items.length > 3 && (
+            <Typography
+              sx={{
+                fontSize: 12,
+                color: WA.textSub,
+                padding: "8px 10px",
+                borderTop: `1px solid ${WA.border}`,
+              }}
+            >
+              +{items.length - 3} more items
+            </Typography>
+          )}
+        </Box>
+      )}
+    </Box>
   );
 }
 
@@ -213,7 +522,6 @@ export default function ChatInfoPanel({
   chat,
   onClose,
   onResolved,
-  onQuickReply,
   onFlagChange,
   onModeChange,
   onContactSaved,
@@ -230,6 +538,9 @@ export default function ChatInfoPanel({
   const [contactPhone, setContactPhone] = useState(chat?.phone || "");
   const [savingContact, setSavingContact] = useState(false);
   const [contactStatus, setContactStatus] = useState(null);
+  const [lastOrder, setLastOrder] = useState(null);
+  const [lastOrderLoading, setLastOrderLoading] = useState(false);
+  const [lastOrderError, setLastOrderError] = useState(null);
 
   const currentFlag = activeFlag ?? chat?.flag ?? null;
   const isResolved = currentFlag === "resolved" || chat?.status === "resolved";
@@ -242,7 +553,34 @@ export default function ChatInfoPanel({
     setContactName(chat?.name || "");
     setContactPhone(chat?.phone || "");
     setContactStatus(null);
+    setLastOrder(null);
+    setLastOrderError(null);
   }, [chat?.id, chat?.flag, chat?.linked_order_id]);
+
+  useEffect(() => {
+    if (!chat?.id) return undefined;
+    let cancelled = false;
+    setLastOrderLoading(true);
+    setLastOrderError(null);
+    fetchChatLastOrder(chat.id)
+      .then((order) => {
+        if (!cancelled) setLastOrder(order);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setLastOrder(null);
+          setLastOrderError(
+            err?.response?.data?.detail || "Could not load latest order.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLastOrderLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [chat?.id]);
 
   if (!chat) {
     return (
@@ -324,18 +662,6 @@ export default function ChatInfoPanel({
         }),
       );
     }
-  };
-
-  const handleQuickReply = (reply) => {
-    const text = reply.template({
-      customerName: chat.name,
-      orderId: chat.linked_order_id || "—",
-      address: chat.lastMsg || "—",
-      awb: "—",
-      invoiceNumber: "—",
-      amount: "—",
-    });
-    if (onQuickReply) onQuickReply(text);
   };
 
   const handleDispatchSlip = async () => {
@@ -706,10 +1032,10 @@ export default function ChatInfoPanel({
         })}
       </Box>
 
-      {/* ── Quick replies ── */}
+      {/* ── Last order ── */}
       <Box sx={chatStyles.infoPanelSection}>
         <SectionLabel>
-          <Zap
+          <ReceiptText
             size={10}
             style={{
               display: "inline",
@@ -717,17 +1043,13 @@ export default function ChatInfoPanel({
               verticalAlign: "middle",
             }}
           />
-          Quick Replies
+          Last Order
         </SectionLabel>
-        {QUICK_REPLIES.map((reply) => (
-          <button
-            key={reply.id}
-            onClick={() => handleQuickReply(reply)}
-            style={chatStyles.quickActionBtn}
-          >
-            {reply.label}
-          </button>
-        ))}
+        <LastOrderCard
+          order={lastOrder}
+          loading={lastOrderLoading}
+          error={lastOrderError}
+        />
       </Box>
 
       {/* ── Last message preview ── */}

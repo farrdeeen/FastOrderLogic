@@ -29,6 +29,10 @@ const STYLES = `
     margin-bottom: 16px;
     font-family: 'DM Sans', sans-serif;
   }
+  .sb-toolbar,
+  .sb-toolbar * {
+    box-sizing: border-box;
+  }
 
   .sb-search-wrap {
     position: relative;
@@ -55,6 +59,7 @@ const STYLES = `
     border-radius: var(--radius); background: var(--surface);
     font-family: inherit; font-size: 13px; font-weight: 500; color: var(--text2);
     cursor: pointer; transition: all .15s; white-space: nowrap;
+    box-sizing: border-box;
   }
   .sb-filter-btn:hover { background: var(--bg); border-color: var(--border2); }
   .sb-filter-btn.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
@@ -81,6 +86,9 @@ const STYLES = `
     font-weight: 500;
     color: var(--text2);
     white-space: nowrap;
+    box-sizing: border-box;
+    max-width: 100%;
+    overflow: hidden;
   }
   .sb-date-group label {
     font-size: 11px;
@@ -99,13 +107,16 @@ const STYLES = `
     outline: none;
     cursor: pointer;
     width: 120px;
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
   }
   .sb-date-input::-webkit-calendar-picker-indicator {
     opacity: 0.5;
     cursor: pointer;
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 768px) {
     .sb-toolbar {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -133,11 +144,23 @@ const STYLES = `
       text-align-last: center;
     }
     .sb-date-group {
-      justify-content: space-between;
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      justify-content: stretch;
+      align-items: center;
+      gap: 8px;
+      max-width: 100%;
     }
     .sb-date-input {
-      width: min(100%, 118px);
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
       font-size: 16px;
+      padding-right: 0;
+    }
+    .sb-date-input::-webkit-calendar-picker-indicator {
+      margin-left: 2px;
     }
   }
 
@@ -149,7 +172,11 @@ const STYLES = `
 `;
 
 function injectSearchBarStyles() {
-  if (document.getElementById("sb-styles")) return;
+  const existing = document.getElementById("sb-styles");
+  if (existing) {
+    if (existing.textContent !== STYLES) existing.textContent = STYLES;
+    return;
+  }
   const s = document.createElement("style");
   s.id = "sb-styles";
   s.textContent = STYLES;

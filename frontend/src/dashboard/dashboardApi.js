@@ -25,6 +25,14 @@ export async function fetchInvoicePending(limit = 50) {
   return res.data || [];
 }
 
+export async function updateInvoiceNumberForOrders(orderIds = [], invoiceNumber = "") {
+  const res = await api.put("/dashboard/invoice-pending/invoice-number", {
+    order_ids: orderIds,
+    invoice_number: invoiceNumber,
+  });
+  return res.data;
+}
+
 export async function fetchStockReconStatus() {
   const res = await api.get("/dashboard/stock-recon/status");
   return res.data;

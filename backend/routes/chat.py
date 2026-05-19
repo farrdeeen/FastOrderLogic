@@ -384,6 +384,78 @@ def save_session_contact(
     }
 
 
+@router.get("/sessions/{session_id}/last-order")
+def get_session_last_order(
+    session_id: int,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    session = db.execute(
+        text("SELECT id, phone_number FROM chat_sessions WHERE id = :sid"),
+        {"sid": session_id},
+    ).mappings().first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    local_phone = normalize_local_phone(session["phone_number"] or "")
+    if not local_phone:
+        return {"order": None}
+
+    order = db.execute(
+        text("""
+            SELECT
+                o.order_id,
+                o.created_at,
+                o.total_amount,
+                o.total_items,
+                o.payment_status,
+                o.delivery_status,
+                o.order_status,
+                o.awb_number,
+                o.invoice_number,
+                o.channel,
+                COALESCE(a.name, c.name, oc.name) AS customer_name,
+                COALESCE(a.mobile, c.mobile, oc.mobile) AS customer_mobile
+            FROM orders o
+            LEFT JOIN customer c ON c.customer_id = o.customer_id
+            LEFT JOIN offline_customer oc ON oc.customer_id = o.offline_customer_id
+            LEFT JOIN address a ON a.address_id = o.address_id
+            WHERE
+                RIGHT(REGEXP_REPLACE(COALESCE(c.mobile, ''), '[^0-9]', ''), 10) = :phone
+                OR RIGHT(REGEXP_REPLACE(COALESCE(oc.mobile, ''), '[^0-9]', ''), 10) = :phone
+                OR RIGHT(REGEXP_REPLACE(COALESCE(a.mobile, ''), '[^0-9]', ''), 10) = :phone
+            ORDER BY o.created_at DESC, o.order_id DESC
+            LIMIT 1
+        """),
+        {"phone": local_phone},
+    ).mappings().first()
+    if not order:
+        return {"order": None}
+
+    items = db.execute(
+        text("""
+            SELECT
+                p.name AS product_name,
+                p.sku_id,
+                oi.quantity,
+                oi.unit_price,
+                oi.total_price
+            FROM order_items oi
+            LEFT JOIN products p ON p.product_id = oi.product_id
+            WHERE oi.order_id = :oid
+            ORDER BY oi.item_id ASC
+        """),
+        {"oid": order["order_id"]},
+    ).mappings().all()
+
+    return {
+        "order": {
+            **dict(order),
+            "items": [dict(item) for item in items],
+        },
+    }
+
+
 @router.get("/recent-user-messages")
 def recent_user_messages(
     _=Depends(require_user),

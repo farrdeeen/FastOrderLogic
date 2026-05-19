@@ -47,6 +47,11 @@ class StockReconStopPayload(BaseModel):
     run_id: Optional[int] = None
 
 
+class InvoicePendingBulkUpdatePayload(BaseModel):
+    order_ids: list[str]
+    invoice_number: str
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -477,6 +482,67 @@ def get_invoice_pending(
 
     result.sort(key=lambda g: g["last_order_at"] or "", reverse=True)
     return result[:limit]
+
+
+@router.put("/invoice-pending/invoice-number")
+def update_invoice_pending_numbers(
+    payload: InvoicePendingBulkUpdatePayload,
+    _=Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    invoice_number = (payload.invoice_number or "").strip()
+    order_ids = []
+    seen = set()
+    for order_id in payload.order_ids or []:
+        oid = str(order_id or "").strip()
+        if oid and oid not in seen:
+            seen.add(oid)
+            order_ids.append(oid)
+
+    if not invoice_number:
+        raise HTTPException(status_code=400, detail="Invoice number is required")
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="Order IDs are required")
+    if len(order_ids) > 100:
+        raise HTTPException(status_code=400, detail="Cannot update more than 100 orders at once")
+
+    placeholders = ", ".join(f":oid_{idx}" for idx in range(len(order_ids)))
+    params = {
+        "invoice_number": invoice_number,
+        "updated_at": datetime.now(),
+        **{f"oid_{idx}": order_id for idx, order_id in enumerate(order_ids)},
+    }
+    result = db.execute(
+        text(f"""
+            UPDATE orders
+            SET invoice_number = :invoice_number,
+                updated_at = :updated_at
+            WHERE order_id IN ({placeholders})
+              AND (
+                  invoice_number IS NULL
+                  OR TRIM(invoice_number) = ''
+              )
+              AND UPPER(COALESCE(order_status, '')) <> 'REJECTED'
+        """),
+        params,
+    )
+    db.commit()
+
+    try:
+        from routes.orders import notify_order_change
+
+        for order_id in order_ids:
+            notify_order_change(order_id, "updated")
+    except Exception as exc:
+        logger.debug("Order websocket notify failed after bulk invoice update: %s", exc)
+
+    return {
+        "success": True,
+        "invoice_number": invoice_number,
+        "requested_count": len(order_ids),
+        "updated_count": result.rowcount or 0,
+        "order_ids": order_ids,
+    }
 
 
 # ─── Stock recon endpoints ───────────────────────────────────────────────────
