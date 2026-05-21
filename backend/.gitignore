@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 data/*.json
+datafeeds/
 .env
 .env.production
 backend/secrets/

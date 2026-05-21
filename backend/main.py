@@ -21,6 +21,7 @@ from routes.razorpay_webhook import router as razorpay_router
 from routes.serial_search import router as serial_search_router
 from routes.payment_webhook import router as payment_webhook_router
 from routes.media import router as media_router
+from routes.datafeed import router as datafeed_router
 from routes.auth import router as auth_router
 from routes.notifications import router as notifications_router
 
@@ -38,6 +39,7 @@ app.add_middleware(
 )
 
 app.include_router(media_router)
+app.include_router(datafeed_router)
 app.include_router(auth_router)
 app.include_router(notifications_router)
 app.include_router(orders.router)
@@ -73,3 +75,10 @@ async def on_startup():
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("Catalogue pre-warm failed: %s", exc)
+
+    try:
+        from services.meta_datafeed_service import start_meta_datafeed_auto_refresh
+        start_meta_datafeed_auto_refresh()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Meta datafeed auto-refresh failed: %s", exc)
