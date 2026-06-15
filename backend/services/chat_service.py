@@ -614,14 +614,17 @@ async def handle_inbound_message(
             logger.error("Order confirm send failed %s: %s", phone, exc)
 
         try:
-            await notify_order_created(
-                db=db,
-                phone=phone,
+            from services.order_notification_poller import notify_order_created_and_mark
+
+            await notify_order_created_and_mark(
                 order_id=order_id,
+                phone=phone,
                 customer_name=customer_name,
                 amount=amount_str,
                 address_line=order_data.get("address", ""),
                 payment_status=result.get("payment_status", "pending"),
+                source="ai_order",
+                send_followup_messages=False,
             )
         except Exception as exc:
             logger.error("notify_order_created failed %s: %s", phone, exc)
@@ -696,7 +699,7 @@ async def notify_order_created(
             logger.error("order_confirmation template failed for %s: %s", phone, exc)
             report["errors"].append(f"order_confirmation_template:{exc}")
 
-        if address_line:
+        if send_followup_messages and address_line:
             body = (
                 f"📦 Delivery address on file:\n{address_line}\n\n"
                 "Reply *YES* to confirm, or send your corrected address."

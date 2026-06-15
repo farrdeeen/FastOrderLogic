@@ -13,7 +13,8 @@ from pydantic import BaseModel
 from database import SessionLocal
 from models import Order
 from sqlalchemy import Table, MetaData
-from services.chat_service import notify_order_created, notify_order_shipped
+from services.chat_service import notify_order_shipped
+from services.order_notification_poller import notify_order_created_and_mark
 from services.order_preferences import ensure_order_preference_columns
 from services.chat_service import normalize_phone
 
@@ -421,22 +422,15 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
 
             asyncio.create_task(
 
-                notify_order_created(
-
-                    db,
-
-                    phone,
-
-                    order_id,
-
+                notify_order_created_and_mark(
+                    order_id=order_id,
+                    phone=phone,
                     customer_name=customer_name,
-
                     amount=f"₹{data.total_amount:,.0f}",
-
                     address_line=address_line,
-
                     payment_status=payment_status,
-
+                    source="orders_create",
+                    send_followup_messages=False,
                 )
 
             )

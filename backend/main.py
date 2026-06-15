@@ -24,6 +24,7 @@ from routes.media import router as media_router
 from routes.datafeed import router as datafeed_router
 from routes.auth import router as auth_router
 from routes.notifications import router as notifications_router
+from services.order_notification_poller import start_order_notify_poller
 
 
 
@@ -67,6 +68,7 @@ def home():
 @app.on_event("startup")
 async def on_startup():
     start_wix_auto_sync()
+    start_order_notify_poller()
 
     # Pre-warm the product catalogue so first WhatsApp message is fast
     try:

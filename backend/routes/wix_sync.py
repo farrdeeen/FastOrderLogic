@@ -122,19 +122,18 @@ def _notify_order_created_sync(
     if not phone or len(str(phone)) < 10:
         return
 
-    notify_db = SessionLocal()
     try:
-        from services.chat_service import notify_order_created
+        from services.order_notification_poller import notify_order_created_and_mark
 
         notify_result = asyncio.run(
-            notify_order_created(
-                db=notify_db,
+            notify_order_created_and_mark(
                 phone=phone,
                 order_id=order_id,
                 customer_name=customer_name,
                 amount=amount,
                 address_line=address_line,
                 payment_status=payment_status,
+                source="wix_sync",
                 send_followup_messages=False,
             )
         )
@@ -150,8 +149,6 @@ def _notify_order_created_sync(
         )
     except Exception as exc:
         logger.warning("WA notify failed for %s: %s", order_id, exc)
-    finally:
-        notify_db.close()
 
 # DB dependency
 def get_db():
