@@ -167,7 +167,11 @@ export default function OrderLightbox({
   const loadProducts = async () => {
     setProductsLoading(true);
     try {
-      const res = await api.get("/orders/products/list");
+      const res = await api
+        .get("/dropdowns/products/list", {
+          params: { include_price: 1, include_image: 1 },
+        })
+        .catch(() => api.get("/orders/products/list"));
       setAvailableProducts(res.data || []);
     } catch {
       setAvailableProducts([]);

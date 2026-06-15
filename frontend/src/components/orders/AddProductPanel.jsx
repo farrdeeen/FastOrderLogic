@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import api from "../../api/axiosInstance";
 import ProductSearchInput from "./ProductSearchInput";
 import { toast } from "./ToastSystem";
@@ -14,6 +14,65 @@ export default function AddProductPanel({
   const [qty, setQty] = useState(1);
   const [price, setPrice] = useState("");
   const [saving, setSaving] = useState(false);
+  const selectionRequestRef = useRef(0);
+
+  const handleProductChange = async (product) => {
+    const requestId = ++selectionRequestRef.current;
+
+    if (!product) {
+      setSelectedProduct(null);
+      setPrice("");
+      return;
+    }
+
+    const productId = product.id ?? product.product_id;
+    const baseProduct = { ...product, id: productId };
+    const listedPrice = product.selling_price ?? product.price ?? product.mrp;
+
+    setSelectedProduct(baseProduct);
+    setPrice(
+      listedPrice != null && listedPrice !== "" ? String(Number(listedPrice)) : "",
+    );
+
+    try {
+      const [detailRes, priceRes] = await Promise.allSettled([
+        api.get("/dropdowns/products/details", { params: { id: productId } }),
+        api.get("/dropdowns/products/get_price", {
+          params: { product_id: productId },
+        }),
+      ]);
+
+      if (selectionRequestRef.current !== requestId) return;
+
+      const detail =
+        detailRes.status === "fulfilled" ? (detailRes.value.data ?? {}) : {};
+      const priceVal =
+        priceRes.status === "fulfilled"
+          ? priceRes.value.data?.price
+          : undefined;
+      const resolvedPrice =
+        priceVal != null
+          ? Number(priceVal)
+          : detail.selling_price != null
+            ? Number(detail.selling_price)
+            : listedPrice != null
+              ? Number(listedPrice)
+              : "";
+
+      setSelectedProduct({
+        ...baseProduct,
+        ...detail,
+        id: productId,
+        selling_price: resolvedPrice,
+      });
+
+      if (resolvedPrice !== "" && Number.isFinite(resolvedPrice)) {
+        setPrice(String(resolvedPrice));
+      }
+    } catch {
+      // Keep the selected product usable even if price/detail enrichment fails.
+    }
+  };
 
   const handleAdd = async () => {
     if (!selectedProduct) {
@@ -57,7 +116,7 @@ export default function AddProductPanel({
           <ProductSearchInput
             products={products}
             value={selectedProduct?.id}
-            onChange={(p) => setSelectedProduct(p)}
+            onChange={handleProductChange}
             placeholder="Search by name or SKU…"
           />
         </div>

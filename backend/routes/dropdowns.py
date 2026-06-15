@@ -7,8 +7,20 @@ router = APIRouter()
 
 @router.get("/products/list")
 def get_products(db: Session = Depends(get_db)):
-    products = db.execute(text("SELECT product_id, name FROM products")).fetchall()
-    return [{"id": p.product_id, "name": p.name} for p in products]
+    products = db.execute(text("""
+        SELECT product_id, name, sku_id
+        FROM products
+        ORDER BY preference DESC, name ASC
+    """)).fetchall()
+    return [
+        {
+            "id": p.product_id,
+            "product_id": p.product_id,
+            "name": p.name,
+            "sku_id": p.sku_id,
+        }
+        for p in products
+    ]
 
 
 @router.get("/customers/list")
@@ -206,6 +218,7 @@ def get_states(db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/products/get_price")
 @router.get("/dropdowns/products/get_price")
 def get_product_price(product_id: int, db: Session = Depends(get_db)):
     product = db.execute(
