@@ -20,6 +20,9 @@ function formatApiError(err) {
 }
 
 export default function DelhiveryPushModal({ order, onClose, onSuccess }) {
+  const isPaidOrder =
+    String(order.payment_status || "").toLowerCase() === "paid" ||
+    Boolean(order.utr_number);
   const [serviceability, setServiceability] = useState(null);
   const [checking, setChecking] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -29,7 +32,9 @@ export default function DelhiveryPushModal({ order, onClose, onSuccess }) {
     breadth: "10",
     height: "10",
     payment_mode:
-      order.payment_type?.toUpperCase() === "COD" ? "COD" : "Prepaid",
+      !isPaidOrder && order.payment_type?.toUpperCase() === "COD"
+        ? "COD"
+        : "Prepaid",
     cod_amount: order.total_amount || 0,
     hsn_code: "",
     e_waybill: "",

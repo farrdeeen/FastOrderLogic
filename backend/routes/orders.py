@@ -750,11 +750,22 @@ def update_utr_number(order_id: str, payload: UTRUpdate, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Order not found")
     utr = payload.utr_number.strip()
     order.utr_number = utr if utr else None
+    if utr:
+        order.payment_status = "paid"
+        order.payment_type = "prepaid"
+        order.order_status = "APPR"
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
     notify_order_change(order_id, "updated")
-    return {"success": True, "order_id": order_id, "utr_number": order.utr_number}
+    return {
+        "success": True,
+        "order_id": order_id,
+        "utr_number": order.utr_number,
+        "payment_status": order.payment_status,
+        "payment_type": order.payment_type,
+        "order_status": order.order_status,
+    }
 
 
 # ================================
@@ -766,10 +777,15 @@ def mark_as_paid(order_id: str, db: Session = Depends(get_db)):
     if not order:
         raise HTTPException(404, "Order not found")
     order.payment_status = "paid"
+    order.payment_type = "prepaid"
     order.updated_at = datetime.now()
     db.commit()
     notify_order_change(order_id, "updated")
-    return {"message": "Marked as paid"}
+    return {
+        "message": "Marked as paid",
+        "payment_status": order.payment_status,
+        "payment_type": order.payment_type,
+    }
 
 
 @router.put("/{order_id:path}/mark-paid-utr")
@@ -781,6 +797,7 @@ def mark_paid_with_utr(order_id: str, payload: UTRPayload, db: Session = Depends
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     order.payment_status = "paid"
+    order.payment_type = "prepaid"
     order.order_status = "APPR"
     order.utr_number = utr
     order.updated_at = datetime.now()
@@ -788,7 +805,7 @@ def mark_paid_with_utr(order_id: str, payload: UTRPayload, db: Session = Depends
     db.refresh(order)
     notify_order_change(order_id, "updated")
     return {"message": f"Order {order_id} marked as paid", "payment_status": order.payment_status,
-            "utr_number": order.utr_number, "order_status": order.order_status}
+            "payment_type": order.payment_type, "utr_number": order.utr_number, "order_status": order.order_status}
 
 
 @router.put("/{order_id:path}/mark-fulfilled")
@@ -909,12 +926,18 @@ def toggle_payment(order_id: str, db: Session = Depends(get_db)):
         order.order_status = "PEND"
     else:
         order.payment_status = "paid"
+        order.payment_type = "prepaid"
         order.order_status = "APPR"
     order.updated_at = datetime.now()
     db.commit()
     db.refresh(order)
     notify_order_change(order_id, "updated")
-    return {"message": f"Payment toggled for {order_id}", "payment_status": order.payment_status, "order_status": order.order_status}
+    return {
+        "message": f"Payment toggled for {order_id}",
+        "payment_status": order.payment_status,
+        "payment_type": order.payment_type,
+        "order_status": order.order_status,
+    }
 
 
 @router.put("/{order_id}/delivery-status")
@@ -1099,6 +1122,8 @@ def get_order_details(order_id: str, db: Session = Depends(get_db)):
         "serial_status": serial_status,
         "serial_items": serial_items,
         "utr_number": order.utr_number,
+        "payment_status": order.payment_status,
+        "payment_type": order.payment_type,
         "customer": customer,
         "invoice_number": order.invoice_number,
         "fulfillment_status": order.fulfillment_status,

@@ -511,7 +511,11 @@ export default function OrdersTable({
         // Wrap in the same shape as delta-sync response
         const current = orders.find((o) => o.order_id === orderId);
         if (current) {
-          onOrdersUpdate([{ ...current, ...patch, order_id: orderId }]);
+          const updatedOrder = { ...current, ...patch, order_id: orderId };
+          onOrdersUpdate([updatedOrder]);
+          setActiveOrder((active) =>
+            active?.order_id === orderId ? { ...active, ...patch } : active,
+          );
         }
       }
     },
@@ -551,12 +555,14 @@ export default function OrdersTable({
         case "mark-paid":
           applyLocalUpdate(id, {
             payment_status: "paid",
+            payment_type: "prepaid",
             order_status: "APPR",
           });
           break;
         case "mark-paid-utr":
           applyLocalUpdate(id, {
             payment_status: "paid",
+            payment_type: "prepaid",
             order_status: "APPR",
             utr_number: payload?.utr_number || payload,
           });
@@ -571,6 +577,7 @@ export default function OrdersTable({
                 o.payment_status === "paid" ? "pending" : "paid";
               applyLocalUpdate(id, {
                 payment_status: newStatus,
+                ...(newStatus === "paid" ? { payment_type: "prepaid" } : {}),
                 order_status: newStatus === "paid" ? "APPR" : "PEND",
               });
             }
@@ -636,6 +643,18 @@ export default function OrdersTable({
             }
             if ("total_items" in res.data) {
               rowPatch.total_items = res.data.total_items;
+            }
+            if ("payment_status" in res.data) {
+              rowPatch.payment_status = res.data.payment_status;
+            }
+            if ("payment_type" in res.data) {
+              rowPatch.payment_type = res.data.payment_type;
+            }
+            if ("order_status" in res.data) {
+              rowPatch.order_status = res.data.order_status;
+            }
+            if ("utr_number" in res.data) {
+              rowPatch.utr_number = res.data.utr_number;
             }
             if (Object.keys(rowPatch).length > 0) {
               applyLocalUpdate(id, rowPatch);
