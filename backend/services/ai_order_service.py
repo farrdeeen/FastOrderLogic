@@ -70,9 +70,9 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
         product = _fetch_product_by_name(v["product_name"], db)
 
     if not product:
-        # Fallback to misc product (mirrors wix_sync behaviour)
+        # Fallback to misc product if one is configured
         misc_row = db.execute(
-            text("SELECT product_id, name, price, COALESCE(sale_price, discounted_price, offer_price, price) AS sale_price FROM products WHERE sku_id = 'misc' AND is_active = 1 LIMIT 1")
+            text(_PRODUCT_PRICE_SELECT + " WHERE p.sku_id = 'misc' LIMIT 1")
         ).fetchone()
         if misc_row:
             product = {
@@ -339,20 +339,27 @@ def _validate_order_data(data: dict) -> dict:
     }
 
 
+# Prices live in product_colors (price = selling price, original_price = MRP),
+# NOT on the products table. Each product has at least one product_colors row.
+_PRODUCT_PRICE_SELECT = """
+    SELECT
+        p.product_id,
+        p.name,
+        pc.original_price AS price,
+        pc.price          AS sale_price
+    FROM products p
+    JOIN product_colors pc ON pc.product_id = p.product_id
+"""
+
+
 def _fetch_product_by_sku(sku: str, db: Session) -> Optional[Dict]:
-    """Uses sku_id column — matches actual products table schema."""
+    """Look up product (+ price from product_colors) by exact sku_id."""
     if not sku:
         return None
     row = db.execute(
-        text("""
-            SELECT
-                product_id,
-                name,
-                price,
-                COALESCE(sale_price, discounted_price, offer_price, price) AS sale_price
-            FROM products
-            WHERE sku_id = :sku
-              AND is_active = 1
+        text(_PRODUCT_PRICE_SELECT + """
+            WHERE p.sku_id = :sku
+            ORDER BY pc.price ASC
             LIMIT 1
         """),
         {"sku": sku},
@@ -369,26 +376,22 @@ def _fetch_product_by_sku(sku: str, db: Session) -> Optional[Dict]:
 
 
 def _fetch_product_by_name(name: str, db: Session) -> Optional[Dict]:
-    """Fallback name lookup — mirrors wix_sync find_product_by_name."""
+    """Fallback name lookup (+ price from product_colors)."""
     if not name:
         return None
     row = db.execute(
-        text("""
-            SELECT product_id, name, price,
-                   COALESCE(sale_price, discounted_price, offer_price, price) AS sale_price
-            FROM products
-            WHERE LOWER(name) = :n AND is_active = 1
+        text(_PRODUCT_PRICE_SELECT + """
+            WHERE LOWER(p.name) = :n
+            ORDER BY pc.price ASC
             LIMIT 1
         """),
         {"n": name.lower()},
     ).fetchone()
     if not row:
         row = db.execute(
-            text("""
-                SELECT product_id, name, price,
-                       COALESCE(sale_price, discounted_price, offer_price, price) AS sale_price
-                FROM products
-                WHERE LOWER(name) LIKE :n AND is_active = 1
+            text(_PRODUCT_PRICE_SELECT + """
+                WHERE LOWER(p.name) LIKE :n
+                ORDER BY pc.price ASC
                 LIMIT 1
             """),
             {"n": f"%{name.lower()}%"},

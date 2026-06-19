@@ -331,7 +331,7 @@ def save_message(
     return message_id
 
 
-def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> list[dict]:
+def get_conversation_history(db: Session, session_id: int, limit: int = 40) -> list[dict]:
     rows = db.execute(
         text("""
             SELECT sender, message FROM chat_messages
@@ -344,8 +344,13 @@ def get_conversation_history(db: Session, session_id: int, limit: int = 20) -> l
 
     history = []
     for r in reversed(rows):
+        msg = r.message or ""
+        # Skip image/media stubs — they have no text value and crowd the context
+        # window, which made the AI forget the product / re-ask the address.
+        if msg.startswith("[image]") or msg.startswith("[media:"):
+            continue
         role = "user" if r.sender == "user" else "assistant"
-        history.append({"role": role, "content": r.message})
+        history.append({"role": role, "content": msg})
     return history
 
 
@@ -462,7 +467,7 @@ async def handle_inbound_message(
         return ""
 
     # ── Build history for context (exclude the user turn we just saved) ────────
-    history = get_conversation_history(db, session_id, limit=18)
+    history = get_conversation_history(db, session_id, limit=40)
     if history and history[-1]["role"] == "user" and history[-1]["content"] == text_body:
         history_for_context = history[:-1]
     else:
@@ -668,7 +673,9 @@ async def handle_inbound_message(
                         address_line=order_data.get("address", ""),
                         payment_status=result.get("payment_status", "pending"),
                         source="ai_order",
-                        send_followup_messages=False,
+                        # True → also send the payment link text + payment QR image
+                        # after the pending template (customer can pay immediately).
+                        send_followup_messages=True,
                     )
                 except Exception as exc:
                     logger.error("notify_order_created failed %s: %s", phone, exc)
@@ -737,7 +744,11 @@ async def notify_order_created(
 
     session    = get_or_create_session(db, phone)
     session_id = session["id"]
-    is_paid    = payment_status.lower() in ("paid", "success", "accepted")
+    # Only a confirmed payment skips the payment-pending template. Everything else
+    # — including "pending" and "pending_verification" (customer claims paid but
+    # not yet verified) — gets the payment-pending template + pay link/QR.
+    status_norm = (payment_status or "").lower()
+    is_paid     = status_norm in ("paid", "success", "accepted")
 
     if is_paid:
         try:

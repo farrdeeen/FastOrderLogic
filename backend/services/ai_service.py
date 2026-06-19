@@ -489,8 +489,14 @@ async def _call_openrouter(system: str, history: list[dict], user_msg: str) -> s
         raise ValueError("OPENROUTER_API_KEY not set")
 
     messages = [{"role": "system", "content": system}]
-    for m in history[-8:]:
-        messages.append({"role": m["role"], "content": m["content"]})
+    # Keep a generous window so the AI remembers the chosen product and the
+    # details already collected (no re-asking the address / forgetting the item).
+    for m in history[-20:]:
+        content = m.get("content") or ""
+        # Drop image/media stubs — they carry no text and waste context.
+        if content.startswith("[image]") or content.startswith("[media:"):
+            continue
+        messages.append({"role": m["role"], "content": content})
     messages.append({"role": "user", "content": user_msg})
 
     headers = {
@@ -726,7 +732,7 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
     """
     from services.product_catalogue import (
         search_products,
-        format_product_list_for_whatsapp,
+        format_product_card,
         get_product_images_by_sku,
     )
 
@@ -756,28 +762,25 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         logger.info("generate_product_reply: no products found for term=%r — deferring to AI", term)
         return None
 
+    # Show ONLY the single best-match product, so the link, price and photo all
+    # refer to the SAME product (no more "Falcon photo + Identi5 link" mismatch).
+    best = products[0]
     raw_lower = (user_query or "").lower()
     hinglish = any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya", "lena", "krna", "karna"))
-    intro = "Ji, ye options available hain:" if hinglish else f"Here's what I found for *{term}*:"
-    text  = format_product_list_for_whatsapp(products, intro=intro)
-
-    # Like the manual product share: after showing the product, nudge to order.
+    intro = "Ji, ye product available hai:" if hinglish else f"Here's the best match for *{term}*:"
     cta = (
         "\n\n👉 Order place karne ke liye apna naam, mobile aur pura address (pincode ke saath) bhej dein."
         if hinglish
         else "\n\n👉 To place your order, share your name, mobile and full address with pincode."
     )
-    text = f"{text}{cta}"
+    text = f"{intro}\n\n{format_product_card(best)}{cta}"
 
-    # Photos only for the BEST-match product (max 2). Sending photos for every
-    # result floods the chat and mixes in unrelated products.
-    images: list[str] = []
-    best = products[0]
+    # Photos for that SAME best-match product only (max 2).
     sku  = (best.get("sku") or "").strip()
     name = (best.get("name") or "").strip()
     logger.debug("generate_product_reply: image lookup sku=%r name=%r", sku, name)
-    imgs = await get_product_images_by_sku(sku, product_name=name)
-    for img in (imgs or []):
+    images: list[str] = []
+    for img in (await get_product_images_by_sku(sku, product_name=name)) or []:
         if img not in images:
             images.append(img)
         if len(images) >= 2:
@@ -787,8 +790,8 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         logger.warning("generate_product_reply: NO images returned for best product in query=%r", user_query)
 
     logger.info(
-        "generate_product_reply: returning %d product(s), %d image(s) for query=%r",
-        len(products), len(images), user_query,
+        "generate_product_reply: returning best product %r, %d image(s) for query=%r",
+        name, len(images), user_query,
     )
     return {"text": text, "images": images}
 
