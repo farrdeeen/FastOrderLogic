@@ -27,17 +27,21 @@ from services.chat_media_service import media_public_url, save_media_bytes
 
 logger = logging.getLogger(__name__)
 
-_WIX_API_KEY   = os.getenv("WIX_API_KEY", "")
-_WIX_SITE_ID   = os.getenv("WIX_SITE_ID", "")
 _REFRESH_MINS  = int(os.getenv("CATALOGUE_REFRESH_MINUTES", "60"))
 
-# Your Wix store URL — used for product links sent to customers
-_WIX_STORE_URL = (os.getenv("WIX_STORE_URL") or os.getenv("STORE_BASE_URL") or "https://www.cspbank.in").rstrip("/")
+# mtm-store.com online store — the source of the product catalogue, the product
+# links and the photos the AI sales agent shares with customers.
+# Product pages live at  {store}/shop/<slug>
+# Photos are served from the site root: /uploads/... and /product_images/...
+_STORE_URL = (
+    os.getenv("MTM_STORE_URL") or os.getenv("STORE_BASE_URL") or "https://mtm-store.com"
+).rstrip("/")
 _PRODUCT_IMAGE_PUBLIC_BASE_URL = (
-    os.getenv("PRODUCT_IMAGE_PUBLIC_BASE_URL") or "https://mtm-store.com/api/static"
+    os.getenv("PRODUCT_IMAGE_PUBLIC_BASE_URL") or _STORE_URL
 ).rstrip("/")
 
-_PRODUCTS_API  = "https://www.wixapis.com/stores/v1/products/query"
+# Public catalogue API on the mtm-store app (same host, served by Apache).
+_PRODUCTS_API = f"{_STORE_URL}/api/products"
 
 # ── In-memory store ───────────────────────────────────────────────────────────
 _catalogue: list[dict] = []           # list of normalised product dicts
@@ -71,7 +75,7 @@ async def get_catalogue(force_refresh: bool = False) -> list[dict]:
                 or datetime.now() - _last_fetched > timedelta(minutes=_REFRESH_MINS)
             )
             if still_needs:
-                await _fetch_from_wix()
+                await _fetch_catalogue()
 
     return _catalogue
 
@@ -151,8 +155,8 @@ def format_product_card(product: dict) -> str:
         lines.append(short_desc)
     if stock is not None:
         lines.append("✅ In Stock" if stock else "❌ Out of Stock")
-    if not link and _WIX_STORE_URL and name:
-        link = f"{_WIX_STORE_URL}/search?q={quote_plus(name)}"
+    if not link and _STORE_URL and name:
+        link = f"{_STORE_URL}/shop"
     if link:
         lines.append(f"🔗 {link}")
 
@@ -176,8 +180,8 @@ def format_product_list_for_whatsapp(products: list[dict], intro: str = "") -> s
         parts.append(intro)
     for p in products:
         parts.append(format_product_card(p))
-    if len(products) == 3 and _WIX_STORE_URL:
-        parts.append(f"👉 See full catalogue: {_WIX_STORE_URL}")
+    if len(products) == 3 and _STORE_URL:
+        parts.append(f"👉 See full catalogue: {_STORE_URL}/shop")
 
     return "\n\n".join(parts)
 
@@ -233,8 +237,8 @@ async def download_product_image_to_media(
     source_url = _normalise_product_image_url(image_url)
     if not source_url:
         return None
-    if not source_url.startswith("https://mtm-store.com/api/static/"):
-        logger.info("Skipping product image download for non-mtm static URL: %s", source_url[:120])
+    if not source_url.startswith(f"{_STORE_URL}/"):
+        logger.info("Skipping product image download for non-mtm-store URL: %s", source_url[:120])
         return None
 
     parsed_path = unquote(urlparse(source_url).path)
@@ -269,192 +273,137 @@ async def download_product_image_to_media(
         return None
 
 
-# ─── Internal Wix fetch ───────────────────────────────────────────────────────
+# ─── Internal mtm-store fetch ─────────────────────────────────────────────────
 
-async def _fetch_from_wix() -> None:
+async def _fetch_catalogue() -> None:
     """
-    Fetch all products from Wix Stores v1 API using pagination.
-    Normalises each product and stores in _catalogue.
+    Fetch all active products from the mtm-store.com catalogue API using
+    pagination (?limit=&skip=). Normalises each product and stores in _catalogue.
     """
     global _catalogue, _last_fetched
 
-    if not _WIX_API_KEY or not _WIX_SITE_ID:
-        logger.warning("Wix credentials not set — catalogue not loaded.")
-        return
-
-    headers = {
-        "Authorization": _WIX_API_KEY,
-        "wix-site-id":   _WIX_SITE_ID,
-        "Content-Type":  "application/json",
-    }
-
-    all_products = []
-    offset = 0
-    limit  = 100
+    all_products: list[dict] = []
+    skip  = 0
+    limit = 100  # API caps limit at 100
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             while True:
-                body = {
-                    "query": {
-                        "paging": {"limit": limit, "offset": offset},
-                        "filter": '{"productType": "physical"}',
-                    }
-                }
-                resp = await client.post(_PRODUCTS_API, json=body, headers=headers)
+                resp = await client.get(
+                    _PRODUCTS_API,
+                    params={"limit": limit, "skip": skip},
+                )
 
                 if resp.status_code != 200:
                     logger.error(
-                        "Wix Products API error %s: %s",
+                        "mtm-store Products API error %s: %s",
                         resp.status_code, resp.text[:300],
                     )
                     break
 
-                data = resp.json()
-                products = data.get("products") or []
-                all_products.extend(products)
+                data  = resp.json()
+                items = data.get("items") or []
+                all_products.extend(items)
 
-                metadata = data.get("metadata") or data.get("query", {}).get("paging", {})
-                total = (
-                    metadata.get("total")
-                    or data.get("totalResults")
-                    or len(all_products)
-                )
+                total = data.get("total") or len(all_products)
+                skip += limit
 
-                if len(products) < limit or len(all_products) >= total:
+                if not items or len(all_products) >= total or skip > 5000:
                     break
-                offset += limit
 
     except Exception as exc:
-        logger.exception("Failed to fetch Wix catalogue: %s", exc)
+        logger.exception("Failed to fetch mtm-store catalogue: %s", exc)
         return
 
     if not all_products:
-        logger.warning("Wix catalogue returned 0 products.")
+        logger.warning("mtm-store catalogue returned 0 products.")
         return
 
-    _catalogue    = [_normalise_product(p) for p in all_products]
+    _catalogue    = [
+        _normalise_product(p)
+        for p in all_products
+        if p.get("is_active", True)
+    ]
     _last_fetched = datetime.now()
     logger.info(
-        "Wix catalogue refreshed: %d products loaded at %s",
+        "mtm-store catalogue refreshed: %d products loaded at %s",
         len(_catalogue), _last_fetched.strftime("%H:%M:%S"),
     )
 
 
 def _normalise_product(raw: dict) -> dict:
     """
-    Convert a raw Wix product dict into a clean flat dict for the catalogue.
+    Convert a raw mtm-store product dict into a clean flat dict for the catalogue.
 
-    Wix price structure (v1 Stores API):
-    {
-      "price": {
-        "price":             <regular price as string/float>,
-        "discountedPrice":   <sale/discounted price — LOWER than price when on sale>,
-        "formatted": {
-          "price":           "₹X,XXX",
-          "discountedPrice": "₹X,XXX"
-        },
-        "currency": "INR"
+    mtm-store price structure (/api/products):
+      {
+        "price":             <selling price the customer pays>,
+        "compare_at_price":  <original MRP — HIGHER than price when on sale>,
+        "stock":             <integer units in stock>,
+        "slug":              "<seo-slug>",            # page = {store}/shop/<slug>
+        "image_url":         "/uploads/products/.../primary-....png",
+        "og_image_url":      "/product_images/..._sq.png",
       }
-    }
 
-    We ALWAYS show discountedPrice as the selling price when it is lower than
-    price (i.e. a sale is active). The original `price` is shown as the
-    crossed-out "was" price.
+    The selling `price` is shown as the live price; `compare_at_price` is shown
+    as the crossed-out "was" price when it is higher (i.e. a discount is active).
     """
-    product_id = raw.get("id") or raw.get("_id") or ""
+    def _to_float(value) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    product_id = raw.get("id") or ""
     name       = raw.get("name") or ""
-    _variants  = raw.get("variants") or []
-    _v0        = _variants[0] if _variants else {}
-    sku = (
-        raw.get("sku")
-        or _v0.get("sku")
-        or _v0.get("variantId", "")
-        or ""
-    )
-    sku = sku.strip()
-    logger.debug("_normalise_product: name=%r sku=%r", raw.get("name"), sku)
-    slug       = raw.get("slug") or ""
+    sku        = (raw.get("sku") or "").strip()
+    slug       = (raw.get("slug") or "").strip()
+    currency   = "INR"
+    logger.debug("_normalise_product: name=%r sku=%r slug=%r", name, sku, slug)
 
     # ── Price parsing ─────────────────────────────────────────────────────────
-    price_data = raw.get("price") or {}
-    currency   = "INR"
+    selling = _to_float(raw.get("price"))
+    mrp     = _to_float(raw.get("compare_at_price"))
+    on_sale = selling is not None and mrp is not None and mrp > selling
 
-    regular_amount:  Optional[float] = None
-    sale_amount:     Optional[float] = None
+    # Struck-through "regular" price = MRP when discounted, else the selling price.
+    regular_amount = mrp if on_sale else selling
+    sale_amount    = selling if on_sale else None
 
-    if isinstance(price_data, dict):
-        currency = price_data.get("currency") or "INR"
-
-        # Regular (list) price
-        raw_reg = price_data.get("price")
-        if raw_reg is not None:
-            try:
-                regular_amount = float(raw_reg)
-            except (TypeError, ValueError):
-                pass
-
-        # Discounted / sale price — Wix sets this even when there's no discount
-        # (in that case it equals the regular price). Only treat it as a sale
-        # price when it is strictly LESS THAN the regular price.
-        raw_disc = price_data.get("discountedPrice")
-        if raw_disc is not None:
-            try:
-                disc_val = float(raw_disc)
-                if regular_amount is not None and disc_val < regular_amount:
-                    sale_amount = disc_val
-                elif regular_amount is None:
-                    # No regular price found — use discounted as regular
-                    regular_amount = disc_val
-            except (TypeError, ValueError):
-                pass
-
-        # Prefer formatted strings from Wix when available (already locale-formatted)
-        formatted = price_data.get("formatted") or {}
-        fmt_reg  = formatted.get("price") or ""
-        fmt_disc = formatted.get("discountedPrice") or ""
-
-    elif isinstance(price_data, (int, float)):
-        regular_amount = float(price_data)
-        fmt_reg = fmt_disc = ""
-    else:
-        fmt_reg = fmt_disc = ""
-
-    def _fmt(amount: Optional[float], fmt_hint: str = "") -> Optional[str]:
-        """Return a display string for an amount, using Wix formatted hint when available."""
-        if fmt_hint:
-            return fmt_hint
+    def _fmt(amount: Optional[float]) -> Optional[str]:
         if amount is None:
             return None
         return f"₹{amount:,.0f}" if currency == "INR" else f"{currency} {amount:,.2f}"
 
-    on_sale           = sale_amount is not None
-    regular_display   = _fmt(regular_amount, fmt_reg)
-    sale_display      = _fmt(sale_amount, fmt_disc) if on_sale else None
-
-    # Effective price shown to customers = sale price if available, else regular
+    regular_display   = _fmt(regular_amount)
+    sale_display      = _fmt(sale_amount) if on_sale else None
     effective_display = sale_display if on_sale else regular_display
 
     # ── Stock ─────────────────────────────────────────────────────────────────
-    stock_info = raw.get("stock") or {}
-    in_stock   = stock_info.get("inStock") if isinstance(stock_info, dict) else None
+    stock_val = raw.get("stock")
+    if isinstance(stock_val, (int, float)):
+        in_stock = stock_val > 0
+    else:
+        in_stock = None
 
     # ── Description — strip HTML tags ─────────────────────────────────────────
-    desc_raw    = raw.get("description") or ""
+    desc_raw    = raw.get("description") or raw.get("short_description") or ""
     description = re.sub(r"<[^>]+>", " ", desc_raw).strip()
     description = re.sub(r"\s+", " ", description)
 
     # ── Product page link ─────────────────────────────────────────────────────
-    link = ""
-    if slug and _WIX_STORE_URL:
-        link = f"{_WIX_STORE_URL}/product-page/{slug}"
-    elif name and _WIX_STORE_URL:
-        link = f"{_WIX_STORE_URL}/search?q={quote_plus(name)}"
+    if slug:
+        link = f"{_STORE_URL}/shop/{slug}"
+    else:
+        link = f"{_STORE_URL}/shop"
 
-    # ── Main image URL ────────────────────────────────────────────────────────
-    media      = raw.get("media") or {}
-    main_media = media.get("mainMedia") or {}
-    image_url  = (main_media.get("image") or {}).get("url") or ""
+    # ── Image URLs (served from the mtm-store site root) ──────────────────────
+    # og_image_url is a square crop ideal for WhatsApp; primary is the full shot.
+    og_image_url = _normalise_product_image_url(raw.get("og_image_url") or "")
+    image_url    = _normalise_product_image_url(raw.get("image_url") or "")
+    primary_image = image_url or og_image_url
 
     return {
         "id":                 product_id,
@@ -474,21 +423,32 @@ def _normalise_product(raw: dict) -> dict:
         "in_stock":           in_stock,
         "description":        description[:500],   # cap for prompt injection
         "link":               link,
-        "image_url":          image_url,
+        "image_url":          primary_image,
+        "og_image_url":       og_image_url,
+        "category":           raw.get("category_name") or "",
     }
 
 async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[str]:
     """
     Fetch product image URLs from DB.
     Lookup order:
-      1. DB via sku_id exact match
-      2. DB via product name LIKE match (if sku misses)
-      3. In-memory catalogue image_url
+      1. In-memory mtm-store catalogue (primary + square og image)
+      2. DB product_images via sku_id exact match
+      3. DB product_images via product name LIKE match
     Returns max 2 absolute URLs.
     """
     if not sku and not product_name:
         logger.warning("get_product_images_by_sku: both sku and product_name are empty")
         return []
+
+    # ── 1. In-memory mtm-store catalogue (live, always-resolvable URLs) ─────
+    catalogue_urls = _catalogue_image_fallback(sku, product_name)
+    if catalogue_urls:
+        logger.info(
+            "Returning %d catalogue image(s) for sku=%r / name=%r",
+            len(catalogue_urls), sku, product_name,
+        )
+        return catalogue_urls
 
     db = None
     try:
@@ -554,10 +514,6 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
             logger.info("Returning %d DB image(s) for sku=%r / name=%r", len(urls), sku, product_name)
             return urls
 
-        catalogue_urls = _catalogue_image_fallback(sku, product_name)
-        if catalogue_urls:
-            return catalogue_urls
-
         logger.warning("No images found at all for sku=%r / name=%r", sku, product_name)
         return []
 
@@ -570,14 +526,20 @@ async def get_product_images_by_sku(sku: str, product_name: str = "") -> list[st
 
 
 def _catalogue_image_fallback(sku: str, product_name: str = "") -> list[str]:
+    sku_l  = (sku or "").lower().strip()
+    name_l = (product_name or "").lower().strip()
     for p in _catalogue:
         p_sku  = (p.get("sku") or "").lower()
         p_name = (p.get("name") or "").lower()
-        if (sku and p_sku == sku.lower()) or (product_name and product_name.lower()[:20] in p_name):
-            img = _normalise_product_image_url(p.get("image_url") or "")
-            if img:
-                logger.info("Catalogue fallback image for sku=%r: %s", sku, img[:80])
-                return [img]
+        if (sku_l and p_sku == sku_l) or (name_l and name_l[:20] in p_name):
+            urls: list[str] = []
+            for raw in (p.get("image_url"), p.get("og_image_url")):
+                img = _normalise_product_image_url(raw or "")
+                if img and img not in urls:
+                    urls.append(img)
+            if urls:
+                logger.info("Catalogue image(s) for sku=%r: %d found", sku, len(urls))
+                return urls[:2]
     return []
 
 
@@ -600,9 +562,13 @@ def _normalise_product_image_url(raw_url: str) -> str:
     parsed = urlparse(url)
     path = unquote(parsed.path.lstrip("/")) if parsed.scheme else unquote(url.lstrip("/"))
 
+    # mtm-store catalogue images live at the site root: /product_images/... and
+    # /uploads/...  (NOT under /api/static — that path 404s).
     if path.startswith("media/product_images/"):
         return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path.removeprefix('media/')}"
     if path.startswith("product_images/"):
+        return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path}"
+    if path.startswith("uploads/"):
         return f"{_PRODUCT_IMAGE_PUBLIC_BASE_URL}/{path}"
 
     if path.startswith("media/"):
@@ -611,5 +577,5 @@ def _normalise_product_image_url(raw_url: str) -> str:
     if parsed.scheme in ("http", "https"):
         return url
 
-    store = (_WIX_STORE_URL or "").rstrip("/")
+    store = (_STORE_URL or "").rstrip("/")
     return f"{store}/{url.lstrip('/')}" if store else url

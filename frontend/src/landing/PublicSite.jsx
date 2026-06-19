@@ -6,7 +6,7 @@ import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import logo from "../assets/logo.png";
 
 const productUrl = "https://mtm-store.com/products";
-const productImageBase = "https://mtm-store.com/api/static";
+const productImageBase = "https://mtm-store.com";
 const whatsAppUrl = "https://wa.me/message/SKD3PIKGJ7IYE1";
 
 function productImage(path) {

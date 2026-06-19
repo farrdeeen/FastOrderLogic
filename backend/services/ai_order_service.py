@@ -17,6 +17,7 @@ Schema facts (from actual CREATE TABLE):
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import logging
@@ -30,6 +31,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 AI_CHANNEL = "AI_ASSISTANT"
+_STORE_URL = (os.getenv("MTM_STORE_URL") or os.getenv("STORE_BASE_URL") or "https://mtm-store.com").rstrip("/")
 
 
 # ─── Public entry point ───────────────────────────────────────────────────────
@@ -292,7 +294,7 @@ def build_order_confirmation_message(result: dict, customer_name: str) -> str:
         f"🛒 {product_name} × {quantity}\n"
         f"💰 Total: ₹{total:,.0f}\n"
         f"💳 Payment: Pending\n\n"
-        f"Please complete your payment at https://www.cspbank.in to confirm shipment.\n"
+        f"Please complete your payment at {_STORE_URL} to confirm shipment.\n"
         f"Once paid, we'll ship within 1–2 business days 🚀\n\n"
         f"Powered by mTm AI Assistant[DāSh Store]"
     )
