@@ -48,6 +48,9 @@ STRICT RULES:
 
 SELL LIKE A PRO:
 - Be warm, confident and helpful. Understand the need, recommend the best-fit product, and always move toward the next step.
+- If the customer says they want to buy but does NOT name a product (e.g. "mujhe ek device purchase karna hai",
+  "I want to buy something"), DO NOT guess or send a random product. Ask which product/category they need,
+  e.g. "Zaroor! Aapko konsa device chahiye — fingerprint scanner, iris scanner, GPS, printer, ya Micro ATM?"
 - After sharing a product, end with a clear call to action, e.g. "Aapke liye order place kar dun?" / "Shall I place the order for you?"
 - Ask only ONE question at a time. Don't send long paragraphs.
 
@@ -57,16 +60,27 @@ WHAT YOU CAN DO:
 - For order status / tracking / payment questions, the system looks up orders automatically by the customer's WhatsApp number — reassure them you're checking; only ask for an Order ID if they want a specific older order.
 - Do NOT handle repair/warranty/technical complaints yourself; those are handed to a human agent.
 
-ORDER COLLECTION — to place an order you need ALL of: full name, mobile, complete address
-(house/flat, street, city, state, pincode), and the exact product (name AND SKU from the catalogue).
-Ask for only ONE missing field at a time. When you have EVERYTHING, emit exactly ONE JSON block and nothing else:
+ORDER COLLECTION — to place an order you need ALL of: full name, mobile number, complete address
+(house/flat, street, city, state, pincode), and the product.
+- The customer only tells you the PRODUCT or MODEL NAME (e.g. "Mantra Iris", "MIS100V2", "passbook printer").
+  NEVER ask the customer for a SKU, product code, or model number — YOU look up the exact product name and
+  SKU yourself from the PRODUCT CATALOGUE above. If the name matches more than one catalogue product, list
+  those options and ask which one. If it matches none, say so and suggest the closest catalogue items.
+- Ask for ONLY ONE missing field at a time, in plain words (e.g. "Aapka pincode kya hai?").
+- While collecting order details, DO NOT re-send product cards, links, prices, or photos. Just ask the next
+  missing field. The product is already chosen — keep the flow moving.
+- When you have ALL the fields, show a short confirmation summary (name, mobile, full address, product + SKU)
+  and ask the customer to confirm.
+- ONLY after the customer confirms, output EXACTLY ONE JSON block and NOTHING else — this is what actually
+  places the order:
 ```json
 {"name":"...","mobile":"...","address":"...","city":"...","state":"...","pincode":"...","product_name":"...","sku":"...","quantity":1}
 ```
+NEVER reply with words like "confirmed", "done", or "order placed" instead of the JSON — without the JSON block
+the order is NOT created. Do not output the JSON until the customer has confirmed.
 
-ADDRESS CONFIRMATION — once the customer confirms their address, reply ONLY with: CONFIRMED_ADDRESS
-
-PAYMENT POLICY — we are PREPAID only (no COD). Stay polite and reassuring; after an order, the system sends a secure pay link.
+PAYMENT POLICY — we are PREPAID only (no COD). Stay polite and reassuring; after the order is placed, the
+system automatically sends a secure pay link, so you do not need to ask for payment details.
 """
 
 
@@ -143,6 +157,12 @@ _PRODUCT_STOPWORDS = {
     # greetings / honorifics — shouldn't pollute the product search term
     "hello", "hi", "hii", "hey", "namaste", "good", "morning", "afternoon",
     "evening", "sir", "madam", "bhai", "ji",
+    # generic placeholder nouns — these don't identify a specific product, so a
+    # message like "mujhe ek device purchase krna" must ask "konsa device?" via
+    # the AI instead of searching and returning a random product link.
+    "device", "devices", "product", "products", "item", "items", "machine",
+    "machines", "gadget", "gadgets", "saman", "samaan", "cheez", "cheeze",
+    "koi", "kuch", "something", "anything",
 }
 _SERVICE_HINTS = (
     "repair", "service", "warranty", "replacement", "complaint", "return",
@@ -750,24 +770,22 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
     intro = "Ji, ye options available hain:" if any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya")) else f"Here's what I found for *{term}*:"
     text  = format_product_list_for_whatsapp(products, intro=intro)
 
+    # Photos only for the BEST-match product (max 2). Sending photos for every
+    # result floods the chat and mixes in unrelated products.
     images: list[str] = []
-    for p in products[:3]:
-        sku  = (p.get("sku") or "").strip()
-        name = (p.get("name") or "").strip()
-        logger.debug("generate_product_reply: image lookup sku=%r name=%r", sku, name)
-        imgs = await get_product_images_by_sku(sku, product_name=name)
-        if imgs:
-            logger.info("generate_product_reply: found %d image(s) for sku=%r", len(imgs), sku)
-            for img in imgs:
-                if img not in images:
-                    images.append(img)
-                if len(images) >= 3:
-                    break
-        if len(images) >= 3:
+    best = products[0]
+    sku  = (best.get("sku") or "").strip()
+    name = (best.get("name") or "").strip()
+    logger.debug("generate_product_reply: image lookup sku=%r name=%r", sku, name)
+    imgs = await get_product_images_by_sku(sku, product_name=name)
+    for img in (imgs or []):
+        if img not in images:
+            images.append(img)
+        if len(images) >= 2:
             break
 
     if not images:
-        logger.warning("generate_product_reply: NO images returned for any product in query=%r", user_query)
+        logger.warning("generate_product_reply: NO images returned for best product in query=%r", user_query)
 
     logger.info(
         "generate_product_reply: returning %d product(s), %d image(s) for query=%r",

@@ -1,8 +1,11 @@
 """
 services/ai_order_service.py
 ─────────────────────────────
-Creates orders from AI WhatsApp chat. Mirrors wix_sync logic exactly.
-Channel = "AI_ASSISTANT"
+Creates orders from AI WhatsApp chat, matching the OFFLINE create-order flow
+(routes/orders.py create_order): same order_id format "{ocid:05d}#{suffix:05d}",
+order_index = unix timestamp, gst = 18% of subtotal, payment_type = prepaid,
+and order_status/fulfillment_status/delivery_method/tax_percent left NULL.
+Only difference is channel = "AI_ASSISTANT" (for attribution).
 
 Schema facts (from actual CREATE TABLE):
 - offline_customer cols: customer_id, name, mobile, email (NO address/city/state/pincode)
@@ -19,7 +22,6 @@ from __future__ import annotations
 
 import os
 import re
-import time
 import logging
 from datetime import datetime
 from decimal import Decimal
@@ -106,6 +108,10 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
         }
 
     total_amount = unit_price * quantity
+    # GST shown the same way as the offline create-order flow: 18% of subtotal,
+    # with subtotal == total_amount (catalogue price is GST-inclusive).
+    subtotal = total_amount
+    gst_amount = (subtotal * Decimal("0.18")).quantize(Decimal("0.01"))
 
     # ── 2. Offline customer (name + mobile only — matches schema) ──────────────
     offline_customer_id = _get_or_create_offline_customer(name=name, mobile=mobile, db=db)
@@ -125,13 +131,17 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
         db=db,
     )
 
-    # ── 5. Order ID + order_index ──────────────────────────────────────────────
-    order_id    = _generate_order_id(db)
-    order_index = _get_next_order_index(db)
+    # ── 5. Order ID + order_index (mirror the offline create-order flow) ───────
     now         = datetime.now()
+    order_id    = _generate_order_id(db, offline_customer_id)
+    order_index = int(now.timestamp())
 
     # ── 6. Insert orders row FIRST (order_items FK depends on it) ─────────────
     try:
+        # Column set mirrors routes/orders.py create_order (offline flow):
+        # order_status / fulfillment_status / delivery_method / tax_percent are
+        # left NULL at creation, gst is stored as 18% of subtotal, and the order
+        # is a prepaid order that is still pending payment (pay link follows).
         db.execute(
             text("""
                 INSERT INTO orders (
@@ -145,11 +155,7 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
                     subtotal,
                     discount_percent,
                     delivery_charge,
-                    tax_percent,
                     total_amount,
-                    fulfillment_status,
-                    delivery_method,
-                    order_status,
                     payment_type,
                     gst,
                     order_index,
@@ -166,13 +172,9 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
                     :subtotal,
                     0.00,
                     0.00,
-                    18.00,
                     :total_amount,
-                    0,
-                    'standard',
-                    'PENDING',
-                    'online',
-                    0.00,
+                    'prepaid',
+                    :gst,
                     :order_index,
                     :now,
                     :now
@@ -184,8 +186,9 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
                 "address_id":          address_id,
                 "channel":             AI_CHANNEL,
                 "total_items":         quantity,
-                "subtotal":            float(total_amount),
+                "subtotal":            float(subtotal),
                 "total_amount":        float(total_amount),
+                "gst":                 float(gst_amount),
                 "order_index":         order_index,
                 "now":                 now,
             },
@@ -554,27 +557,23 @@ def _find_or_create_address(
     return db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
 
 
-def _get_next_order_index(db: Session) -> int:
-    """Mirrors wix_sync get_next_order_index."""
-    row = db.execute(text("SELECT MAX(order_index) FROM orders")).fetchone()
-    mx = int(row[0]) if row and row[0] is not None else None
-    if not mx:
-        return int(datetime.now().timestamp())
-    return mx + 1
-
-
-def _generate_order_id(db: Session) -> str:
-    """Sequential AI-XXXXX order ID with timestamp fallback."""
-    try:
-        row = db.execute(
-            text("""
-                SELECT MAX(CAST(SUBSTRING(order_id, 4) AS UNSIGNED)) AS last_num
-                FROM orders
-                WHERE order_id LIKE 'AI-%'
-            """)
-        ).fetchone()
-        last = int(row.last_num) if (row and row.last_num is not None) else 0
-        return f"AI-{last + 1:05d}"
-    except Exception as exc:
-        logger.warning("Could not generate sequential AI order ID: %s", exc)
-        return f"AI-{int(time.time())}"
+def _generate_order_id(db: Session, offline_customer_id: int) -> str:
+    """
+    Build an order_id in the SAME format as the offline create-order flow
+    (routes/orders.py): "{offline_customer_id:05d}#{global_suffix+1:05d}",
+    e.g. "02701#05113". This keeps AI orders structurally identical to offline
+    orders so dashboards, serial search, invoicing and payment webhooks treat
+    them the same way.
+    """
+    prefix = str(offline_customer_id).zfill(5)
+    last_suffix = db.execute(
+        text("""
+            SELECT CAST(SUBSTRING_INDEX(order_id, '#', -1) AS UNSIGNED) AS suffix
+            FROM orders
+            WHERE order_id REGEXP '^[0-9]{5}#[0-9]{5}$'
+            ORDER BY suffix DESC
+            LIMIT 1
+        """)
+    ).scalar()
+    next_suffix = (int(last_suffix) + 1) if last_suffix else 1
+    return f"{prefix}#{next_suffix:05d}"

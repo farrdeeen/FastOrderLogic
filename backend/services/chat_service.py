@@ -158,6 +158,34 @@ def _history_asked_for_order_id(history: list[dict]) -> bool:
     return False
 
 
+# Phrases the AI uses while it is actively collecting order details. If the most
+# recent AI message is one of these, the customer's next message is an ANSWER in
+# the order flow — so we must NOT re-route it to product browse or order status,
+# which would interrupt the order with random product cards/photos.
+_ORDER_COLLECTION_MARKERS = (
+    "naam kya", "your name", "full name", "naam bata",
+    "mobile number", "mobile kya", "phone number", "contact number",
+    "address", "pincode", "pin code", "city", "state",
+    "ye sahi hai", "confirm", "order summary", "house/flat",
+    "kaunsa", "konsa", "which one", "order karna chahte", "order karna hai",
+)
+
+
+def _is_order_flow_active(history: list[dict]) -> bool:
+    """True when the last substantive AI turn was an order-collection prompt."""
+    for turn in reversed(history):
+        if turn.get("role") != "assistant":
+            continue
+        content = (turn.get("content") or "").strip().lower()
+        if not content:
+            continue
+        # Skip image stubs and product cards — they are not collection prompts.
+        if content.startswith("[image]") or "product photo" in content or "🔗" in content:
+            return False
+        return any(marker in content for marker in _ORDER_COLLECTION_MARKERS)
+    return False
+
+
 def _extract_order_id_candidate(message: str, history: list[dict]) -> Optional[str]:
     match = re.search(
         r"\b(\d{5}#\d{5}|WIX#\d+|ORD-\d+|AI-\d{5})\b",
@@ -490,9 +518,10 @@ async def handle_inbound_message(
 
     # ── LLM intent classification ──────────────────────────────────────────────
     intent = await classify_intent(text_body, history_for_context[-5:])
+    order_flow_active = _is_order_flow_active(history_for_context)
     logger.info(
-        "handle_inbound: session=%s phone=%s intent=%s msg=%r",
-        session_id, phone, intent, text_body[:60],
+        "handle_inbound: session=%s phone=%s intent=%s order_flow=%s msg=%r",
+        session_id, phone, intent, order_flow_active, text_body[:60],
     )
 
     # ── Route: service / complaint — hand over to human urgently ───────────────
@@ -506,8 +535,15 @@ async def handle_inbound_message(
             logger.error("Service escalation reply send failed %s: %s", phone, exc)
         return reply
 
+    # While an order is actively being collected, the customer's replies are order
+    # answers (name/address/product/"haan sahi hai"). Do NOT divert them to the
+    # product-browse or order-status routes — let the AI continue the order so it
+    # can finish and emit the order JSON. (Fixes random products/photos mid-order.)
+    if order_flow_active:
+        logger.info("handle_inbound: order flow active — bypassing product/status routes")
+
     # ── Route: order management ────────────────────────────────────────────────
-    if is_order_management_intent(intent):
+    if not order_flow_active and is_order_management_intent(intent):
         status_reply = await build_status_reply_for_phone(db, phone, language=language)
 
         save_message(db, session_id, "ai", status_reply)
@@ -518,7 +554,7 @@ async def handle_inbound_message(
         return status_reply
 
     # ── Route: product browsing — LLM already confirmed intent ─────────────────
-    if is_product_intent(intent):
+    if not order_flow_active and is_product_intent(intent):
         logger.info("handle_inbound: product_browse intent — calling generate_product_reply")
         product_result = await generate_product_reply(text_body)
 
