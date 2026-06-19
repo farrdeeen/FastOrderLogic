@@ -112,10 +112,15 @@ async def search_products(query: str, limit: int = 5) -> list[dict]:
         score += token_hits * 2
         if tokens and all(word in hay for word in tokens):
             score += 5
+        # Require REAL textual relevance before counting this product. Without
+        # this guard the in-stock bonus below would give every product a score,
+        # so unrelated text (names, phone numbers, "haan", addresses) would
+        # return the first few catalogue items — the source of "random products".
+        if score <= 0:
+            continue
         if p.get("in_stock") is True:
             score += 0.25
-        if score > 0:
-            scored.append((score, p))
+        scored.append((score, p))
 
     scored.sort(key=lambda x: -x[0])
     return [p for _, p in scored[:limit]]

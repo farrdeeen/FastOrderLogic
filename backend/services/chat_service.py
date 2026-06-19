@@ -158,31 +158,33 @@ def _history_asked_for_order_id(history: list[dict]) -> bool:
     return False
 
 
-# Phrases the AI uses while it is actively collecting order details. If the most
-# recent AI message is one of these, the customer's next message is an ANSWER in
-# the order flow — so we must NOT re-route it to product browse or order status,
-# which would interrupt the order with random product cards/photos.
-_ORDER_COLLECTION_MARKERS = (
-    "naam kya", "your name", "full name", "naam bata",
+# Phrases the AI uses when it is asking for a specific PERSONAL detail. If the
+# last AI message was one of these, the customer's next message is the answer to
+# that field (a name/number/address/"haan") — NOT a product request — so we must
+# not re-route it to product browse or order status. Note: product-choice
+# questions ("kaunsa device?") are deliberately NOT here, so naming a product
+# still shows its photo + link.
+_PERSONAL_FIELD_MARKERS = (
+    "naam kya", "your name", "full name", "naam bata", "naam bataye",
     "mobile number", "mobile kya", "phone number", "contact number",
-    "address", "pincode", "pin code", "city", "state",
-    "ye sahi hai", "confirm", "order summary", "house/flat",
-    "kaunsa", "konsa", "which one", "order karna chahte", "order karna hai",
+    "address", "pincode", "pin code", "aapka city", "aapka state",
+    "ye sahi hai", "yeh sahi hai", "sahi hai", "confirm", "order summary",
+    "house/flat",
 )
 
 
-def _is_order_flow_active(history: list[dict]) -> bool:
-    """True when the last substantive AI turn was an order-collection prompt."""
+def _awaiting_personal_field(history: list[dict]) -> bool:
+    """True when the last substantive AI turn asked for a personal order field."""
     for turn in reversed(history):
         if turn.get("role") != "assistant":
             continue
         content = (turn.get("content") or "").strip().lower()
         if not content:
             continue
-        # Skip image stubs and product cards — they are not collection prompts.
+        # Skip image stubs and product cards — they are not field prompts.
         if content.startswith("[image]") or "product photo" in content or "🔗" in content:
             return False
-        return any(marker in content for marker in _ORDER_COLLECTION_MARKERS)
+        return any(marker in content for marker in _PERSONAL_FIELD_MARKERS)
     return False
 
 
@@ -518,10 +520,14 @@ async def handle_inbound_message(
 
     # ── LLM intent classification ──────────────────────────────────────────────
     intent = await classify_intent(text_body, history_for_context[-5:])
-    order_flow_active = _is_order_flow_active(history_for_context)
+    # When the last AI message asked for a personal field (name/mobile/address/
+    # pincode/confirm), this message is the ANSWER — don't divert it to product
+    # browse or order status. A product-CHOICE answer ("Mantra iris") is NOT a
+    # personal field, so naming a product still shows its photo + link.
+    awaiting_field = _awaiting_personal_field(history_for_context)
     logger.info(
-        "handle_inbound: session=%s phone=%s intent=%s order_flow=%s msg=%r",
-        session_id, phone, intent, order_flow_active, text_body[:60],
+        "handle_inbound: session=%s phone=%s intent=%s awaiting_field=%s msg=%r",
+        session_id, phone, intent, awaiting_field, text_body[:60],
     )
 
     # ── Route: service / complaint — hand over to human urgently ───────────────
@@ -535,15 +541,8 @@ async def handle_inbound_message(
             logger.error("Service escalation reply send failed %s: %s", phone, exc)
         return reply
 
-    # While an order is actively being collected, the customer's replies are order
-    # answers (name/address/product/"haan sahi hai"). Do NOT divert them to the
-    # product-browse or order-status routes — let the AI continue the order so it
-    # can finish and emit the order JSON. (Fixes random products/photos mid-order.)
-    if order_flow_active:
-        logger.info("handle_inbound: order flow active — bypassing product/status routes")
-
     # ── Route: order management ────────────────────────────────────────────────
-    if not order_flow_active and is_order_management_intent(intent):
+    if not awaiting_field and is_order_management_intent(intent):
         status_reply = await build_status_reply_for_phone(db, phone, language=language)
 
         save_message(db, session_id, "ai", status_reply)
@@ -553,9 +552,14 @@ async def handle_inbound_message(
             logger.error("Order status reply send failed %s: %s", phone, exc)
         return status_reply
 
-    # ── Route: product browsing — LLM already confirmed intent ─────────────────
-    if not order_flow_active and is_product_intent(intent):
-        logger.info("handle_inbound: product_browse intent — calling generate_product_reply")
+    # ── Route: product recognised → share photo + link + order CTA ─────────────
+    # Fires for both "product_browse" and "place_order" intents: as soon as the
+    # customer names a specific catalogue product, we share it like the manual
+    # product share (card + photo + link) and invite them to order. If the
+    # message names no real product (a detail answer / "haan"), generate_product_reply
+    # returns None and we fall through to the AI to continue/place the order.
+    if not awaiting_field and intent in ("product_browse", "place_order"):
+        logger.info("handle_inbound: %s intent — trying product card+photo for %r", intent, text_body[:60])
         product_result = await generate_product_reply(text_body)
 
         if product_result:
@@ -617,55 +621,74 @@ async def handle_inbound_message(
         if not order_data.get("mobile"):
             order_data["mobile"] = re.sub(r"\D", "", phone)[-10:]
 
-        result        = place_ai_order(order_data, db)
-        customer_name = order_data.get("name", "Customer")
-        confirm_msg   = build_order_confirmation_message(result, customer_name)
-        order_id      = result.get("order_id")
-        raw_total     = result.get("total") or result.get("total_amount") or 0
-        amount_str    = f"₹{float(raw_total):,.0f}" if raw_total else "—"
-
-        if result.get("success") and order_id:
-            try:
-                from routes.orders import notify_order_change
-                notify_order_change(order_id, "created")
-            except Exception:
-                logger.debug("Order websocket notify failed for AI order %s", order_id, exc_info=True)
-
-        save_message(
-            db, session_id, "ai", ai_reply,
-            meta={
-                "order_data":       order_data,
-                "created_order_id": result.get("order_id"),
-                "order_success":    result.get("success"),
-            },
-        )
-        save_message(
-            db, session_id, "system", confirm_msg,
-            meta={"order_id": result.get("order_id"), "flow": "ai_order_placed"},
-        )
-
+        # Wrap the whole placement so a failure NEVER leaves the customer with no
+        # reply — they always get a confirmation or a graceful fallback message.
         try:
-            await send_text_message(phone, confirm_msg)
-        except Exception as exc:
-            logger.error("Order confirm send failed %s: %s", phone, exc)
+            result        = place_ai_order(order_data, db)
+            customer_name = order_data.get("name", "Customer")
+            confirm_msg   = build_order_confirmation_message(result, customer_name)
+            order_id      = result.get("order_id")
+            raw_total     = result.get("total") or result.get("total_amount") or 0
+            amount_str    = f"₹{float(raw_total):,.0f}" if raw_total else "—"
 
-        try:
-            from services.order_notification_poller import notify_order_created_and_mark
+            if result.get("success") and order_id:
+                try:
+                    from routes.orders import notify_order_change
+                    notify_order_change(order_id, "created")
+                except Exception:
+                    logger.debug("Order websocket notify failed for AI order %s", order_id, exc_info=True)
 
-            await notify_order_created_and_mark(
-                order_id=order_id,
-                phone=phone,
-                customer_name=customer_name,
-                amount=amount_str,
-                address_line=order_data.get("address", ""),
-                payment_status=result.get("payment_status", "pending"),
-                source="ai_order",
-                send_followup_messages=False,
+            save_message(
+                db, session_id, "ai", ai_reply,
+                meta={
+                    "order_data":       order_data,
+                    "created_order_id": result.get("order_id"),
+                    "order_success":    result.get("success"),
+                },
             )
-        except Exception as exc:
-            logger.error("notify_order_created failed %s: %s", phone, exc)
+            save_message(
+                db, session_id, "system", confirm_msg,
+                meta={"order_id": result.get("order_id"), "flow": "ai_order_placed"},
+            )
 
-        return ai_reply
+            try:
+                await send_text_message(phone, confirm_msg)
+            except Exception as exc:
+                logger.error("Order confirm send failed %s: %s", phone, exc)
+
+            if result.get("success") and order_id:
+                try:
+                    from services.order_notification_poller import notify_order_created_and_mark
+
+                    await notify_order_created_and_mark(
+                        order_id=order_id,
+                        phone=phone,
+                        customer_name=customer_name,
+                        amount=amount_str,
+                        address_line=order_data.get("address", ""),
+                        payment_status=result.get("payment_status", "pending"),
+                        source="ai_order",
+                        send_followup_messages=False,
+                    )
+                except Exception as exc:
+                    logger.error("notify_order_created failed %s: %s", phone, exc)
+
+            return ai_reply
+
+        except Exception as exc:
+            db.rollback()
+            logger.exception("handle_inbound: AI order placement crashed for session=%s: %s", session_id, exc)
+            _mark_session_urgent_for_human(db, session_id)
+            fallback = (
+                "Aapki details mil gayi hain 🙏 Order place karne me ek choti si dikkat aa gayi — "
+                "hamari team turant aapse yahin connect karegi."
+            )
+            save_message(db, session_id, "ai", fallback, meta={"flow": "ai_order_error", "error": str(exc)})
+            try:
+                await send_text_message(phone, fallback)
+            except Exception as send_exc:
+                logger.error("AI order fallback send failed %s: %s", phone, send_exc)
+            return fallback
 
     # ── Normal AI reply ────────────────────────────────────────────────────────
     save_message(db, session_id, "ai", ai_reply, meta=ai_failure_context)

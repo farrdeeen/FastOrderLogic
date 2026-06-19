@@ -751,24 +751,23 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         broad_term = " ".join(term.split()[:2])
         products = await search_products(broad_term, limit=3)
     if not products:
-        logger.info("generate_product_reply: no products found for term=%r", term)
-        raw_lower = (user_query or "").lower()
-        text = (
-            f"Is product ka exact match abhi catalogue me nahi mila. "
-            f"Yahan full catalogue dekh sakte hain: {_STORE_BASE_URL}/shop\n\n"
-            "Please product ka exact name ya SKU bhej dein, main options share kar dunga."
-            if any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya"))
-            else (
-                f"I could not find an exact catalogue match. "
-                f"You can check the full catalogue here: {_STORE_BASE_URL}/shop\n\n"
-                "Please send the exact product name or SKU and I will share the right options."
-            )
-        )
-        return {"text": text, "images": []}
+        # No catalogue match — defer to the AI, which can suggest the closest
+        # catalogue items conversationally (and keep an order in progress going).
+        logger.info("generate_product_reply: no products found for term=%r — deferring to AI", term)
+        return None
 
     raw_lower = (user_query or "").lower()
-    intro = "Ji, ye options available hain:" if any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya")) else f"Here's what I found for *{term}*:"
+    hinglish = any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya", "lena", "krna", "karna"))
+    intro = "Ji, ye options available hain:" if hinglish else f"Here's what I found for *{term}*:"
     text  = format_product_list_for_whatsapp(products, intro=intro)
+
+    # Like the manual product share: after showing the product, nudge to order.
+    cta = (
+        "\n\n👉 Order place karne ke liye apna naam, mobile aur pura address (pincode ke saath) bhej dein."
+        if hinglish
+        else "\n\n👉 To place your order, share your name, mobile and full address with pincode."
+    )
+    text = f"{text}{cta}"
 
     # Photos only for the BEST-match product (max 2). Sending photos for every
     # result floods the chat and mixes in unrelated products.
