@@ -135,6 +135,14 @@ _PRODUCT_STOPWORDS = {
     "bhejo", "dikhaiye", "dikhao", "dikhaao", "photo", "image", "pic",
     "picture", "link", "catalogue", "catalog", "available", "availability",
     "chahiye", "chaahiye", "chaiye", "cahiye", "khareedna", "karna",
+    # quantity / purchase fillers — these alone don't identify a product, so a
+    # message made up only of these must defer to the AI (which has chat context)
+    "pcs", "pc", "pces", "piece", "pieces", "nos", "qty", "quantity",
+    "unit", "units", "krna", "kr", "karni", "karne", "lena", "lene",
+    "lunga", "loonga", "chahta", "chahti", "hu", "hoon", "order",
+    # greetings / honorifics — shouldn't pollute the product search term
+    "hello", "hi", "hii", "hey", "namaste", "good", "morning", "afternoon",
+    "evening", "sir", "madam", "bhai", "ji",
 }
 _SERVICE_HINTS = (
     "repair", "service", "warranty", "replacement", "complaint", "return",
@@ -703,13 +711,19 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
     )
 
     term = _extract_product_search_term(user_query)
-    if not term:
-        term = _normalise_english_tokens(user_query)
 
     logger.debug("generate_product_reply: raw=%r → term=%r", user_query, term)
 
+    # No real product noun in this message (e.g. "ek pcs purchase krna hai",
+    # "ye wala chahiye", "haan order karo"). It's a follow-up that only makes
+    # sense with the earlier product in context — defer to the AI reply, which
+    # has the conversation history, instead of searching filler words and
+    # returning a random product.
     if not term:
-        logger.warning("generate_product_reply: search term empty after stripping fillers for query=%r", user_query)
+        logger.info(
+            "generate_product_reply: no product term in %r — deferring to context-aware AI reply",
+            user_query,
+        )
         return None
 
     products = await search_products(term, limit=3)
