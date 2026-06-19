@@ -136,10 +136,10 @@ def _local_delivery_label(order: dict, language: str) -> str:
     if language == "hi":
         if dispatched:
             return f"Dispatch ho chuka hai. AWB: {awb}" if awb else "Dispatch ho chuka hai."
-        return "Abhi dispatch nahi hua hai."
+        return "Abhi dispatch nahi hua hai. Order usually 4-5 din me deliver ho jata hai."
     if dispatched:
         return f"Dispatched. AWB: {awb}" if awb else "Dispatched."
-    return "Not dispatched yet."
+    return "Not dispatched yet. Estimated delivery is 4-5 days."
 
 
 def _format_order_status(order: dict, tracking: Optional[dict], language: str = "en") -> str:

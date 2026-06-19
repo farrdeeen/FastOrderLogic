@@ -139,7 +139,6 @@ def format_product_card(product: dict) -> str:
     name           = product.get("name") or "Product"
     sale_price     = product.get("sale_price_display")
     regular_price  = product.get("price_display") or "—"
-    sku            = product.get("sku") or ""
     desc           = (product.get("description") or "").strip()
     link           = product.get("link") or ""
     stock          = product.get("in_stock")
@@ -153,8 +152,8 @@ def format_product_card(product: dict) -> str:
     else:
         lines.append(f"💰 Price: {regular_price}")
 
-    if sku:
-        lines.append(f"SKU: {sku}")
+    # NOTE: SKU is intentionally NOT shown — it confuses customers. It stays
+    # internal (used only for order placement).
     if desc:
         short_desc = desc[:120] + ("…" if len(desc) > 120 else "")
         lines.append(short_desc)

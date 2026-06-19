@@ -643,18 +643,32 @@ async def handle_inbound_message(
                 except Exception:
                     logger.debug("Order websocket notify failed for AI order %s", order_id, exc_info=True)
 
+            # Store the raw order JSON as an INTERNAL system note (never as an "ai"
+            # bubble) so the JSON is never shown to / sent to the customer. The
+            # customer only ever sees the clean confirmation message below.
             save_message(
-                db, session_id, "ai", ai_reply,
+                db, session_id, "system",
+                f"[ai_order_json] {result.get('order_id') or 'order'}",
                 meta={
+                    "flow":             "ai_order_json",
                     "order_data":       order_data,
                     "created_order_id": result.get("order_id"),
                     "order_success":    result.get("success"),
                 },
             )
-            save_message(
-                db, session_id, "system", confirm_msg,
-                meta={"order_id": result.get("order_id"), "flow": "ai_order_placed"},
-            )
+            if result.get("success"):
+                confirm_meta = {"order_id": result.get("order_id"), "flow": "ai_order_placed"}
+            else:
+                # Failed placement (e.g. product not found) — surface on the
+                # dashboard AI-failure log and hand off to a human.
+                confirm_meta = {
+                    "flow": "ai_failure",
+                    "ai_failure": True,
+                    "error_response": result.get("message") or "AI order placement failed",
+                    "order_data": order_data,
+                }
+                _mark_session_urgent_for_human(db, session_id)
+            save_message(db, session_id, "system", confirm_msg, meta=confirm_meta)
 
             try:
                 await send_text_message(phone, confirm_msg)
@@ -680,7 +694,7 @@ async def handle_inbound_message(
                 except Exception as exc:
                     logger.error("notify_order_created failed %s: %s", phone, exc)
 
-            return ai_reply
+            return confirm_msg
 
         except Exception as exc:
             db.rollback()
@@ -690,7 +704,16 @@ async def handle_inbound_message(
                 "Aapki details mil gayi hain 🙏 Order place karne me ek choti si dikkat aa gayi — "
                 "hamari team turant aapse yahin connect karegi."
             )
-            save_message(db, session_id, "ai", fallback, meta={"flow": "ai_order_error", "error": str(exc)})
+            # Tag with ai_failure markers so it shows on the dashboard AI-failure log.
+            save_message(
+                db, session_id, "ai", fallback,
+                meta={
+                    "flow": "ai_failure",
+                    "ai_failure": True,
+                    "error_response": f"AI order placement crashed: {exc}",
+                    "order_data": order_data,
+                },
+            )
             try:
                 await send_text_message(phone, fallback)
             except Exception as send_exc:

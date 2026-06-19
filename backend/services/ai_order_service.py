@@ -3,9 +3,11 @@ services/ai_order_service.py
 ─────────────────────────────
 Creates orders from AI WhatsApp chat, matching the OFFLINE create-order flow
 (routes/orders.py create_order): same order_id format "{ocid:05d}#{suffix:05d}",
-order_index = unix timestamp, gst = 18% of subtotal, payment_type = prepaid,
-and order_status/fulfillment_status/delivery_method/tax_percent left NULL.
-Only difference is channel = "AI_ASSISTANT" (for attribution).
+order_index = unix timestamp, gst = 18% of subtotal, and
+order_status/fulfillment_status/delivery_method/tax_percent left NULL.
+payment_status stays 'pending' and payment_type='online' until Razorpay confirms
+payment (the webhook flips it to 'paid') — AI orders are NEVER auto-marked paid.
+channel = "AI_ASSISTANT" (for attribution).
 
 Schema facts (from actual CREATE TABLE):
 - offline_customer cols: customer_id, name, mobile, email (NO address/city/state/pincode)
@@ -173,7 +175,7 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
                     0.00,
                     0.00,
                     :total_amount,
-                    'prepaid',
+                    'online',
                     :gst,
                     :order_index,
                     :now,

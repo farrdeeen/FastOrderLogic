@@ -58,21 +58,30 @@ WHAT YOU CAN DO:
 - Answer product questions and recommend products from the catalogue.
 - Help customers place a NEW order by collecting their details (see ORDER COLLECTION).
 - For order status / tracking / payment questions, the system looks up orders automatically by the customer's WhatsApp number — reassure them you're checking; only ask for an Order ID if they want a specific older order.
-- Do NOT handle repair/warranty/technical complaints yourself; those are handed to a human agent.
+- Answer common FAQs yourself (see FAQ below): warranty, delivery time, payment.
+- Do NOT handle repair / "device not working" / replacement complaints yourself; those go to a human agent.
+
+FAQ — answer these directly, in the customer's language:
+- Warranty/guarantee: "All our products come with a standard manufacturer warranty of 1 year."
+- Delivery time: orders are usually delivered in 4-5 days after dispatch.
+- Payment: prepaid only via the secure pay link we send; we do not take card/UPI details in chat.
+
+NEVER show the SKU / product code / internal id to the customer anywhere in your messages — it confuses them.
+Use the SKU only inside the order JSON block (below), never in normal replies or the confirmation summary.
 
 ORDER COLLECTION — to place an order you need ALL of: full name, mobile number, complete address
 (house/flat, street, city, state, pincode), and the product.
 - The customer only tells you the PRODUCT or MODEL NAME (e.g. "Mantra Iris", "MIS100V2", "passbook printer").
-  NEVER ask the customer for a SKU, product code, or model number — YOU look up the exact product name and
+  NEVER ask the customer for a SKU, product code, or model number — YOU look up the exact product and its
   SKU yourself from the PRODUCT CATALOGUE above. If the name matches more than one catalogue product, list
   those options and ask which one. If it matches none, say so and suggest the closest catalogue items.
 - Ask for ONLY ONE missing field at a time, in plain words (e.g. "Aapka pincode kya hai?").
 - While collecting order details, DO NOT re-send product cards, links, prices, or photos. Just ask the next
   missing field. The product is already chosen — keep the flow moving.
-- When you have ALL the fields, show a short confirmation summary (name, mobile, full address, product + SKU)
-  and ask the customer to confirm.
+- When you have ALL the fields, show a short confirmation summary (name, mobile, full address, product NAME)
+  and ask the customer to confirm. Do NOT put the SKU in this summary.
 - ONLY after the customer confirms, output EXACTLY ONE JSON block and NOTHING else — this is what actually
-  places the order:
+  places the order (the SKU goes here, never in a visible message):
 ```json
 {"name":"...","mobile":"...","address":"...","city":"...","state":"...","pincode":"...","product_name":"...","sku":"...","quantity":1}
 ```
@@ -234,12 +243,15 @@ _CLASSIFIER_SYSTEM = (
     "  order_status   — asking about an existing order (tracking, delivery, where is my order)\n"
     "  order_payment  — saying they paid / asking if payment was received / sharing payment proof\n"
     "  order_dispatch — asking when order will ship/dispatch/arrive\n"
-    "  service_request — warranty, repair, replacement, technical issue, complaint, return/exchange, or asking for human support\n"
+    "  service_request — a DEVICE PROBLEM or after-sales complaint: device not working/defective, repair, "
+    "physical replacement of a faulty unit, technical setup failure, return/exchange, or explicitly asking for a human agent\n"
     "  product_browse — wants to buy a product, asks price/availability/catalogue/link/photo for purchase\n"
     "  place_order    — actively placing a new order, giving name/address/product details\n"
-    "  general        — greetings, complaints, or unrelated messages\n\n"
+    "  general        — greetings, FAQs (warranty terms, delivery time, payment method), or unrelated messages\n\n"
     "Rules:\n"
     "  - Works for any language: English, Hindi, Hinglish, Marathi, Tamil, etc.\n"
+    "  - A general QUESTION about warranty/guarantee terms or delivery time is 'general', NOT service_request. "
+    "Only an actual fault/repair/replacement complaint is service_request.\n"
     "  - Photo/image requests for a product = product_browse.\n"
     "  - Hinglish purchase words like chahiye/chaahiye/chaiye with a product name = product_browse.\n"
     "  - Price/link/photo/catalogue/available questions about a product = product_browse.\n"
@@ -726,11 +738,55 @@ async def _extract_pdf_text(file_url: str) -> str:
 # Product reply
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Map a category keyword the customer might type → catalogue category name(s).
+# Used to tell a CATEGORY browse ("fingerprint", "gps") from a SPECIFIC model.
+_CATEGORY_ALIASES = {
+    "fingerprint": ["biometric fingerprint scanner", "biometric"],
+    "fingerprints": ["biometric fingerprint scanner", "biometric"],
+    "biometric":   ["biometric fingerprint scanner", "biometric"],
+    "iris":        ["iris scanner"],
+    "gps":         ["gps device"],
+    "printer":     ["thermal printer", "printers"],
+    "printers":    ["thermal printer", "printers"],
+    "thermal":     ["thermal printer"],
+    "receipt":     ["thermal printer"],
+    "mpos":        ["mpos machine"],
+    "pos":         ["pos machine", "mpos machine"],
+    "atm":         ["mpos machine", "pos machine"],
+    "counting":    ["cash counting machine"],
+    "computer":    ["computer"],
+    "laptop":      ["computer"],
+}
+
+
+def _has_model_token(term: str) -> bool:
+    """A token containing a digit (l1, mfs110, mis100, gp77, 8, d180) ⇒ a
+    specific model was named, so we show one product, not the whole category."""
+    return any(any(ch.isdigit() for ch in tok) for tok in term.split())
+
+
+def _match_category(term: str) -> list[str]:
+    """Return catalogue category name(s) if the term is a category browse."""
+    toks = set(term.split())
+    cats: list[str] = []
+    for kw, names in _CATEGORY_ALIASES.items():
+        if kw in toks:
+            for n in names:
+                if n not in cats:
+                    cats.append(n)
+    return cats
+
+
 async def generate_product_reply(user_query: str) -> Optional[dict]:
     """
-    Search the mtm-store catalogue and return WhatsApp-ready product links plus images.
+    Search the mtm-store catalogue and return WhatsApp-ready product links + images.
+
+    - SPECIFIC model named ("Mantra L1", "MFS110") → one product card + photo.
+    - CATEGORY browse ("fingerprint", "gps", "printer") → list all models so the
+      customer can pick (no photo flood).
     """
     from services.product_catalogue import (
+        get_catalogue,
         search_products,
         format_product_card,
         get_product_images_by_sku,
@@ -752,6 +808,29 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         )
         return None
 
+    raw_lower = (user_query or "").lower()
+    hinglish = any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya", "lena", "krna", "karna"))
+
+    # ── Category browse → list every model in that category ────────────────────
+    category_names = _match_category(term)
+    if category_names and not _has_model_token(term):
+        catalogue = await get_catalogue()
+        wanted = {c.lower() for c in category_names}
+        items = [
+            p for p in catalogue
+            if (p.get("category") or "").lower() in wanted and p.get("in_stock") is not False
+        ][:8]
+        if len(items) > 1:
+            intro = ("Ye models available hain, konsa chahiye?"
+                     if hinglish else "Here are the models available — which one would you like?")
+            lines = [intro, ""]
+            for p in items:
+                price = p.get("effective_price") or p.get("price_display") or ""
+                link = p.get("link") or ""
+                lines.append(f"📦 *{p.get('name','')}* — {price}\n🔗 {link}")
+            logger.info("generate_product_reply: category browse %r → %d models", category_names, len(items))
+            return {"text": "\n\n".join(lines), "images": []}
+
     products = await search_products(term, limit=3)
     if not products and " " in term:
         broad_term = " ".join(term.split()[:2])
@@ -765,8 +844,6 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
     # Show ONLY the single best-match product, so the link, price and photo all
     # refer to the SAME product (no more "Falcon photo + Identi5 link" mismatch).
     best = products[0]
-    raw_lower = (user_query or "").lower()
-    hinglish = any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya", "lena", "krna", "karna"))
     intro = "Ji, ye product available hai:" if hinglish else f"Here's the best match for *{term}*:"
     cta = (
         "\n\n👉 Order place karne ke liye apna naam, mobile aur pura address (pincode ke saath) bhej dein."
