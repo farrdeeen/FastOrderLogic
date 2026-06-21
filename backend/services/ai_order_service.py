@@ -83,6 +83,7 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
                 "name":       misc_row.name,
                 "price":      float(misc_row.price or 0),
                 "sale_price": float(misc_row.sale_price or 0),
+                "delivery_cost": float(getattr(misc_row,"delivery_cost",0) or 0),
             }
             logger.warning(
                 "AI order: SKU '%s' / name '%s' not found — assigned misc product (product_id=%s)",
@@ -110,10 +111,10 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
             "total":    None,
         }
 
-    total_amount = unit_price * quantity
-    # GST shown the same way as the offline create-order flow: 18% of subtotal,
-    # with subtotal == total_amount (catalogue price is GST-inclusive).
-    subtotal = total_amount
+    subtotal = unit_price * quantity
+    delivery_charge = Decimal(str(product.get("delivery_cost") or 0))
+    total_amount = subtotal + delivery_charge
+    # GST shown the same way as the offline create-order flow: 18% of subtotal.
     gst_amount = (subtotal * Decimal("0.18")).quantize(Decimal("0.01"))
 
     # ── 2. Offline customer (name + mobile + email) ────────────────────────────
@@ -210,7 +211,7 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
                     :total_items,
                     :subtotal,
                     0.00,
-                    0.00,
+                    :delivery_charge,
                     :total_amount,
                     'online',
                     :gst,
@@ -226,6 +227,7 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
                 "channel":             AI_CHANNEL,
                 "total_items":         quantity,
                 "subtotal":            float(subtotal),
+                "delivery_charge":     float(delivery_charge),
                 "total_amount":        float(total_amount),
                 "gst":                 float(gst_amount),
                 "order_index":         order_index,
@@ -386,7 +388,8 @@ _PRODUCT_PRICE_SELECT = """
         p.product_id,
         p.name,
         pc.original_price AS price,
-        pc.price          AS sale_price
+        pc.price          AS sale_price,
+        COALESCE(p.delivery_cost, 0) AS delivery_cost
     FROM products p
     JOIN product_colors pc ON pc.product_id = p.product_id
 """
@@ -412,6 +415,7 @@ def _fetch_product_by_sku(sku: str, db: Session) -> Optional[Dict]:
         "name":       row.name,
         "price":      float(row.price or 0),
         "sale_price": float(row.sale_price or 0),
+        "delivery_cost": float(row.delivery_cost or 0),
     }
 
 
@@ -443,6 +447,7 @@ def _fetch_product_by_name(name: str, db: Session) -> Optional[Dict]:
         "name":       row.name,
         "price":      float(row.price or 0),
         "sale_price": float(row.sale_price or 0),
+        "delivery_cost": float(row.delivery_cost or 0),
     }
 
 

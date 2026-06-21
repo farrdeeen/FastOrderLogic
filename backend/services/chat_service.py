@@ -525,18 +525,9 @@ async def handle_inbound_message(
             logger.error("Language selection reply send failed %s: %s", phone, exc)
         return reply
 
+    # Auto-detect language from the customer's message (script + typed words) —
+    # no language menu is shown.
     preferred_language = session.get("preferred_language") or ""
-    # On the very first message of a session (no language chosen yet), greet with
-    # "Hello" + the language selector before anything else.
-    if not preferred_language and not history_for_context:
-        reply = _language_prompt()
-        save_message(db, session_id, "ai", reply, meta={"flow": "language_prompt"})
-        try:
-            await send_text_message(phone, reply)
-        except Exception as exc:
-            logger.error("Language prompt send failed %s: %s", phone, exc)
-        return reply
-
     language = preferred_language or _infer_language(text_body)
 
     # ── Explicit order ID shortcut (structural regex is fine here) ─────────────
