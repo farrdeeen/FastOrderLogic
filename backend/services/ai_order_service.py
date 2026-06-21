@@ -59,6 +59,7 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
 
     name     = v["name"]
     mobile   = v["mobile"]
+    email    = v["email"]
     address  = v["address"]
     city     = v["city"]
     state    = v["state"]
@@ -115,8 +116,44 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
     subtotal = total_amount
     gst_amount = (subtotal * Decimal("0.18")).quantize(Decimal("0.01"))
 
-    # ── 2. Offline customer (name + mobile only — matches schema) ──────────────
-    offline_customer_id = _get_or_create_offline_customer(name=name, mobile=mobile, db=db)
+    # ── 2. Offline customer (name + mobile + email) ────────────────────────────
+    offline_customer_id = _get_or_create_offline_customer(name=name, mobile=mobile, email=email, db=db)
+
+    # ── Dedup: don't re-place an order the customer already has ─────────────────
+    # If an unpaid AI order for this customer + product was created in the last
+    # 24h, return it instead of creating a duplicate (the AI sometimes re-collects
+    # details for someone who already ordered).
+    existing = db.execute(
+        text("""
+            SELECT o.order_id, o.total_amount
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.order_id
+            WHERE o.offline_customer_id = :ocid
+              AND oi.product_id = :pid
+              AND o.channel = :chan
+              AND LOWER(o.payment_status) NOT IN ('paid','success','accepted')
+              AND o.created_at >= NOW() - INTERVAL 24 HOUR
+            ORDER BY o.created_at DESC
+            LIMIT 1
+        """),
+        {"ocid": offline_customer_id, "pid": product_id, "chan": AI_CHANNEL},
+    ).fetchone()
+    if existing:
+        logger.info("AI order dedup: existing unpaid order %s for customer %s product %s — not re-placing",
+                    existing.order_id, offline_customer_id, product_id)
+        return {
+            "success":      True,
+            "duplicate":    True,
+            "order_id":     existing.order_id,
+            "product_name": product_name,
+            "unit_price":   float(unit_price),
+            "quantity":     quantity,
+            "total":        float(existing.total_amount or total_amount),
+            "message": (
+                f"Aapka order {existing.order_id} pehle se placed hai aur payment pending hai. "
+                f"Payment complete kar dein to hum turant dispatch kar denge 🙏"
+            ),
+        }
 
     # ── 3. State lookup (mirrors wix_sync find_state_id) ──────────────────────
     state_id = _find_state_id(state, db) or 1
@@ -331,6 +368,7 @@ def _validate_order_data(data: dict) -> dict:
     return {
         "name":         str(data["name"]).strip(),
         "mobile":       mobile[-10:],
+        "email":        str(data.get("email") or "").strip(),
         "address":      str(data["address"]).strip(),
         "city":         str(data["city"]).strip(),
         "state":        str(data["state"]).strip(),
@@ -408,22 +446,28 @@ def _fetch_product_by_name(name: str, db: Session) -> Optional[Dict]:
     }
 
 
-def _get_or_create_offline_customer(name: str, mobile: str, db: Session) -> int:
+def _get_or_create_offline_customer(name: str, mobile: str, db: Session, email: str = "") -> int:
     """
     Mirrors wix_sync create_or_get_offline_customer.
     offline_customer schema: customer_id, name, mobile, email — no address cols.
     """
     row = db.execute(
-        text("SELECT customer_id FROM offline_customer WHERE mobile = :mobile LIMIT 1"),
+        text("SELECT customer_id, email FROM offline_customer WHERE mobile = :mobile LIMIT 1"),
         {"mobile": mobile},
     ).fetchone()
 
     if row:
+        # Backfill email if we now have one and the record was missing it.
+        if email and not (row.email or "").strip():
+            db.execute(
+                text("UPDATE offline_customer SET email = :email WHERE customer_id = :cid"),
+                {"email": email, "cid": row.customer_id},
+            )
         return row.customer_id
 
     db.execute(
-        text("INSERT INTO offline_customer (name, mobile) VALUES (:name, :mobile)"),
-        {"name": name, "mobile": mobile},
+        text("INSERT INTO offline_customer (name, mobile, email) VALUES (:name, :mobile, :email)"),
+        {"name": name, "mobile": mobile, "email": email or None},
     )
     db.flush()
     return db.execute(text("SELECT LAST_INSERT_ID()")).scalar()

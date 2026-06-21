@@ -118,6 +118,7 @@ def ensure_chat_session_columns(db: Session) -> None:
         "is_human": "BOOLEAN NOT NULL DEFAULT FALSE",
         "flag": "VARCHAR(20) NULL",
         "preferred_language": "VARCHAR(10) NULL",
+        "last_followup_at": "DATETIME NULL",
     }
     for name, definition in columns.items():
         if name in existing:
@@ -131,15 +132,38 @@ def ensure_chat_session_columns(db: Session) -> None:
     _CHAT_SESSION_COLUMNS_READY = True
 
 
-def _detect_language_choice(message: str) -> Optional[str]:
-    text_value = (message or "").strip().lower()
-    compact = re.sub(r"\s+", " ", text_value)
-    if compact in ("1", "hindi", "hin", "hi", "हिंदी", "हिन्दी"):
-        return "hi"
-    if compact in ("2", "english", "eng", "en", "अंग्रेजी", "अंग्रेज़ी"):
-        return "en"
-    return None
+# Supported languages for the WhatsApp agent (code -> display name).
+SUPPORTED_LANGUAGES = {
+    "en": "English", "hi": "Hindi", "bn": "Bangla", "or": "Odia",
+    "ta": "Tamil", "pa": "Punjabi", "as": "Assamese",
+}
 
+# Numbered menu shown to the customer on first contact.
+_LANGUAGE_MENU = [
+    ("en", "English"),
+    ("hi", "हिंदी (Hindi)"),
+    ("bn", "বাংলা (Bangla)"),
+    ("or", "ଓଡ଼ିଆ (Odia)"),
+    ("ta", "தமிழ் (Tamil)"),
+    ("pa", "ਪੰਜਾਬੀ (Punjabi)"),
+    ("as", "অসমীয়া (Assamese)"),
+]
+
+# Number / word -> language code.
+_LANGUAGE_CHOICE_WORDS = {
+    "1": "en", "english": "en", "eng": "en", "en": "en",
+    "2": "hi", "hindi": "hi", "hin": "hi", "हिंदी": "hi", "हिन्दी": "hi",
+    "3": "bn", "bangla": "bn", "bengali": "bn", "বাংলা": "bn",
+    "4": "or", "odia": "or", "oriya": "or", "ଓଡ଼ିଆ": "or",
+    "5": "ta", "tamil": "ta", "தமிழ்": "ta",
+    "6": "pa", "punjabi": "pa", "panjabi": "pa", "ਪੰਜਾਬੀ": "pa",
+    "7": "as", "assamese": "as", "অসমীয়া": "as",
+}
+
+
+def _detect_language_choice(message: str) -> Optional[str]:
+    compact = re.sub(r"\s+", " ", (message or "").strip().lower())
+    return _LANGUAGE_CHOICE_WORDS.get(compact)
 
 def _looks_like_greeting(message: str) -> bool:
     compact = re.sub(r"[\s!.?,]+", " ", (message or "").strip().lower()).strip()
@@ -204,27 +228,40 @@ def _extract_order_id_candidate(message: str, history: list[dict]) -> Optional[s
 
 
 def _infer_language(message: str, fallback: str = "en") -> str:
-    if re.search(r"[\u0900-\u097F]", message or ""):
+    text_value = message or ""
+    if re.search(r"[\u0980-\u09FF]", text_value):   # Bengali / Assamese script
+        return "bn"
+    if re.search(r"[\u0A00-\u0A7F]", text_value):   # Gurmukhi (Punjabi)
+        return "pa"
+    if re.search(r"[\u0B00-\u0B7F]", text_value):   # Odia
+        return "or"
+    if re.search(r"[\u0B80-\u0BFF]", text_value):   # Tamil
+        return "ta"
+    if re.search(r"[\u0900-\u097F]", text_value):   # Devanagari (Hindi)
         return "hi"
     return fallback or "en"
 
 
 def _language_prompt() -> str:
-    return (
-        "Namaste! Please choose your preferred language.\n"
-        "1. Hindi\n"
-        "2. English\n\n"
-        "नमस्ते! कृपया भाषा चुनें.\n"
-        "1. Hindi\n"
-        "2. English"
-    )
+    lines = ["Hello! Please choose your language / \u0905\u092a\u0928\u0940 \u092d\u093e\u0937\u093e \u091a\u0941\u0928\u0947\u0902:", ""]
+    for idx, (_code, label) in enumerate(_LANGUAGE_MENU, start=1):
+        lines.append(f"{idx}. {label}")
+    return "\n".join(lines)
+
+
+_LANGUAGE_SELECTED_REPLY = {
+    "en": "Great! How can I help you today? You can ask about a product or your order.",
+    "hi": "Bahut accha! Main aapki kaise madad karun? Aap product ya apne order ke baare me pooch sakte hain.",
+    "bn": "\u09a7\u09a8\u09cd\u09af\u09ac\u09be\u09a6! \u0986\u09ae\u09bf \u0995\u09c0\u09ad\u09be\u09ac\u09c7 \u09b8\u09be\u09b9\u09be\u09af\u09cd\u09af \u0995\u09b0\u09a4\u09c7 \u09aa\u09be\u09b0\u09bf? \u09aa\u09a3\u09cd\u09af \u09ac\u09be \u0985\u09b0\u09cd\u09a1\u09be\u09b0 \u09b8\u09ae\u09cd\u09aa\u09b0\u09cd\u0995\u09c7 \u099c\u09bf\u099c\u09cd\u099e\u09be\u09b8\u09be \u0995\u09b0\u09c1\u09a8\u0964",
+    "or": "\u0927\u0928\u09cd\u09af\u0986\u0926! \u09ae\u09c1\u0901 \u0995\u09c7\u09ae\u09bf\u09a4\u09bf \u09b8\u09be\u09b9\u09be\u09af\u09cd\u09af \u0995\u09b0\u09bf\u09aa\u09be\u09b0\u09bf\u09ac\u09bf? \u0986\u09aa\u09a3 \u09aa\u09cd\u09b0\u09a1\u0995\u09cd\u099f \u0995\u09bf\u0982\u09ac\u09be \u0985\u09b0\u09cd\u09a1\u09b0 \u09ac\u09bf\u09b7\u09af\u09b0\u09c7 \u09aa\u099a\u09be\u09b0\u09bf\u09aa\u09be\u09b0\u09bf\u09b2\u09c7\u0964",
+    "ta": "\u0BA8\u0BA9\u0BCD\u0BB1\u0BBF! \u0BA8\u0BBE\u0BA9\u0BCD \u0B8E\u0BAA\u0BCD\u0BAA\u0B9F\u0BBF \u0B89\u0BA4\u0BB5\u0BB2\u0BBE\u0BAE\u0BCD? \u0BAE\u0BB1\u0BCD\u0BB1\u0BC1\u0BAE\u0BCD \u0B89\u0B99\u0BCD\u0B95\u0BB3\u0BCD \u0B86\u0BB0\u0BCD\u0B9F\u0BB0\u0BCD \u0BAA\u0BB1\u0BCD\u0BB1\u0BBF \u0B95\u0BC7\u0B9F\u0BCD\u0B95\u0BB2\u0BBE\u0BAE\u0BCD.",
+    "pa": "\u0a35\u0a27\u0a40\u0a06! \u0a2e\u0a48\u0a02 \u0a24\u0a41\u0a39\u0a3e\u0a21\u0a40 \u0a15\u0a3f\u0a35\u0a47\u0a02 \u0a2e\u0a26\u0a26 \u0a15\u0a30 \u0a38\u0a15\u0a26\u0a3e/\u0a38\u0a15\u0a26\u0a40 \u0a39\u0a3e\u0a02? \u0a24\u0a41\u0a38\u0a40\u0a02 \u0a09\u0a24\u0a2a\u0a3e\u0a26 \u0a1c\u0a3e\u0a02 \u0a06\u0a30\u0a21\u0a30 \u0a2c\u0a3e\u0a30\u0a47 \u0a2a\u0a41\u0a1b \u0a38\u0a15\u0a26\u0a47 \u0a39\u0a4b\u0964",
+    "as": "\u09a7\u09a8\u09cd\u09af\u09ac\u09be\u09a6! \u09ae\u0987 \u0995\u09c7\u09a8\u09c7\u0995\u09c8 \u09b8\u09be\u09b9\u09be\u09af\u09cd\u09af \u0995\u09b0\u09bf\u09ac \u09aa\u09be\u09b0\u09cb\u0981? \u0986\u09aa\u09c1\u09a8\u09bf \u09aa\u09a3\u09cd\u09af \u09ac\u09be \u0985\u09b0\u09cd\u09a1\u09be\u09b0\u09b0 \u09ac\u09bf\u09b7\u09af\u09c7 \u09b8\u09cb\u09a7\u09bf\u09ac \u09aa\u09be\u09b0\u09c7\u0964",
+}
 
 
 def _language_selected_reply(language: str) -> str:
-    if language == "hi":
-        return "Hindi selected. Aap product, service, ya order status ke liye message bhej sakte hain."
-    return "English selected. You can ask about products, service, or order status."
-
+    return _LANGUAGE_SELECTED_REPLY.get(language, _LANGUAGE_SELECTED_REPLY["en"])
 
 def _service_escalation_reply(language: str) -> str:
     if language == "hi":
@@ -489,7 +526,9 @@ async def handle_inbound_message(
         return reply
 
     preferred_language = session.get("preferred_language") or ""
-    if not preferred_language and _looks_like_greeting(text_body) and not history_for_context:
+    # On the very first message of a session (no language chosen yet), greet with
+    # "Hello" + the language selector before anything else.
+    if not preferred_language and not history_for_context:
         reply = _language_prompt()
         save_message(db, session_id, "ai", reply, meta={"flow": "language_prompt"})
         try:
@@ -576,12 +615,8 @@ async def handle_inbound_message(
                 len(images), phone,
             )
 
-            save_message(db, session_id, "ai", text_msg)
-            try:
-                await send_text_message(phone, text_msg)
-            except Exception as exc:
-                logger.error("Product text send failed %s: %s", phone, exc)
-
+            # PHOTO(S) FIRST, then details + purchase link. Customers were
+            # ignoring the link when it arrived before the photo.
             for img_url in images[:3]:
                 try:
                     logger.debug("handle_inbound: sending image url=%s to phone=%s", img_url[:80], phone)
@@ -609,12 +644,19 @@ async def handle_inbound_message(
                 except Exception as exc:
                     logger.error("handle_inbound: image send failed phone=%s url=%s err=%s", phone, img_url[:60], exc)
 
+            # Now the details + purchase link (after the photo).
+            save_message(db, session_id, "ai", text_msg)
+            try:
+                await send_text_message(phone, text_msg, preview_url=True)
+            except Exception as exc:
+                logger.error("Product text send failed %s: %s", phone, exc)
+
             return text_msg
 
         logger.info("handle_inbound: product intent had no usable search term, falling through to AI reply")
 
     # ── Route: everything else → full AI reply ─────────────────────────────────
-    ai_reply = await generate_reply(history_for_context, text_body)
+    ai_reply = await generate_reply(history_for_context, text_body, language=language)
     ai_failure_context = get_last_ai_failure_context()
     if ai_failure_context:
         _mark_session_urgent_for_human(db, session_id)
@@ -631,7 +673,13 @@ async def handle_inbound_message(
         try:
             result        = place_ai_order(order_data, db)
             customer_name = order_data.get("name", "Customer")
-            confirm_msg   = build_order_confirmation_message(result, customer_name)
+            # A duplicate (order already exists) gets the dedup reminder, not a
+            # fresh "order confirmed" message.
+            confirm_msg   = (
+                result.get("message")
+                if result.get("duplicate")
+                else build_order_confirmation_message(result, customer_name)
+            )
             order_id      = result.get("order_id")
             raw_total     = result.get("total") or result.get("total_amount") or 0
             amount_str    = f"₹{float(raw_total):,.0f}" if raw_total else "—"
@@ -675,7 +723,7 @@ async def handle_inbound_message(
             except Exception as exc:
                 logger.error("Order confirm send failed %s: %s", phone, exc)
 
-            if result.get("success") and order_id:
+            if result.get("success") and order_id and not result.get("duplicate"):
                 try:
                     from services.order_notification_poller import notify_order_created_and_mark
 

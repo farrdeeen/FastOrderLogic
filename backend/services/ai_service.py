@@ -69,24 +69,26 @@ FAQ — answer these directly, in the customer's language:
 NEVER show the SKU / product code / internal id to the customer anywhere in your messages — it confuses them.
 Use the SKU only inside the order JSON block (below), never in normal replies or the confirmation summary.
 
-ORDER COLLECTION — to place an order you need ALL of: full name, mobile number, complete address
-(house/flat, street, city, state, pincode), and the product.
+ORDER COLLECTION — to place an order you need ALL of: full name, mobile number, email, complete address
+(house/flat, street, city, state, pincode), the product, and the QUANTITY.
 - The customer only tells you the PRODUCT or MODEL NAME (e.g. "Mantra Iris", "MIS100V2", "passbook printer").
   NEVER ask the customer for a SKU, product code, or model number — YOU look up the exact product and its
   SKU yourself from the PRODUCT CATALOGUE above. If the name matches more than one catalogue product, list
   those options and ask which one. If it matches none, say so and suggest the closest catalogue items.
 - Ask for ONLY ONE missing field at a time, in plain words (e.g. "Aapka pincode kya hai?").
+- ALWAYS confirm the QUANTITY ("Kitne pieces chahiye?") and collect the customer's EMAIL (for the invoice)
+  before placing the order — these are required.
 - While collecting order details, DO NOT re-send product cards, links, prices, or photos. Just ask the next
   missing field. The product is already chosen — keep the flow moving.
-- When you have ALL the fields, show a short confirmation summary (name, mobile, full address, product NAME)
-  and ask the customer to confirm. Do NOT put the SKU in this summary.
+- When you have ALL the fields, show a short confirmation summary (name, mobile, email, full address,
+  product NAME, and quantity) and ask the customer to confirm. Do NOT put the SKU in this summary.
 - ONLY after the customer confirms, output EXACTLY ONE JSON block and NOTHING else — this is what actually
   places the order (the SKU goes here, never in a visible message):
 ```json
-{"name":"...","mobile":"...","address":"...","city":"...","state":"...","pincode":"...","product_name":"...","sku":"...","quantity":1}
+{"name":"...","mobile":"...","email":"...","address":"...","city":"...","state":"...","pincode":"...","product_name":"...","sku":"...","quantity":1}
 ```
 NEVER reply with words like "confirmed", "done", or "order placed" instead of the JSON — without the JSON block
-the order is NOT created. Do not output the JSON until the customer has confirmed.
+the order is NOT created. Do not output the JSON until the customer has confirmed the quantity and details.
 
 PAYMENT POLICY — we are PREPAID only (no COD). Stay polite and reassuring; after the order is placed, the
 system automatically sends a secure pay link, so you do not need to ask for payment details.
@@ -571,10 +573,23 @@ async def _call_openrouter(system: str, history: list[dict], user_msg: str) -> s
 # Main reply — OpenRouter → sales-agent handoff
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def generate_reply(conversation_history: list[dict], user_message: str) -> str:
+_LANGUAGE_NAMES = {
+    "en": "English", "hi": "Hindi", "bn": "Bangla (Bengali)", "or": "Odia",
+    "ta": "Tamil", "pa": "Punjabi", "as": "Assamese",
+}
+
+
+async def generate_reply(conversation_history: list[dict], user_message: str, language: Optional[str] = None) -> str:
     _LAST_AI_FAILURE.set(None)
     provider_errors: list[dict] = []
     system = await build_system_prompt()
+    # Honour the customer's selected language (from the language menu).
+    lang_name = _LANGUAGE_NAMES.get((language or "").lower())
+    if lang_name:
+        system += (
+            f"\n\nThe customer has selected {lang_name}. Reply in {lang_name} "
+            f"(you may keep product names, model numbers and links in English)."
+        )
 
     if _OPENROUTER_ENABLED:
         if not _OPENROUTER_KEY:
@@ -636,6 +651,55 @@ async def generate_reply(conversation_history: list[dict], user_message: str) ->
         },
     })
     return fallback
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Follow-up message (24h window) — matches chat language + tone
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FOLLOWUP_FALLBACK = {
+    "payment_reminder": {
+        "en": "Hi! Just a gentle reminder to complete the payment for your order so we can dispatch it. Need any help? 🙏",
+        "hi": "Namaste! Aapke order ka payment pending hai — complete kar dein to hum turant dispatch kar denge. Koi help chahiye? 🙏",
+    },
+    "order_nudge": {
+        "en": "Hi! Would you like to go ahead and place the order? I'm here if you have any questions 😊",
+        "hi": "Namaste! Kya aap order place karna chahenge? Koi sawaal ho to main yahin hoon 😊",
+    },
+}
+
+
+async def generate_followup_message(
+    history: list[dict],
+    language: str = "en",
+    kind: str = "order_nudge",
+    order_id: Optional[str] = None,
+) -> str:
+    """One short follow-up in the chat's language + tone. kind ∈ {payment_reminder, order_nudge}."""
+    lang_name = _LANGUAGE_NAMES.get((language or "en").lower(), "the customer's language")
+    if kind == "payment_reminder":
+        goal = (
+            f"The customer already placed order {order_id or ''} but has NOT paid yet. Send ONE short, warm "
+            "reminder to complete the secure payment so we can dispatch. Do not include any new link or price — just nudge."
+        )
+    else:
+        goal = (
+            "The customer showed interest in a product/order but went quiet. Send ONE short, friendly message "
+            "asking if they'd like to go ahead and place the order, and offering help. Don't repeat product details."
+        )
+    system = (
+        "You are Aria, the WhatsApp sales agent for mTm DaSh Store. "
+        f"Write EXACTLY ONE short WhatsApp follow-up (under 40 words) in {lang_name}, matching the tone of the "
+        f"conversation so far. Plain text, warm, never pushy. {goal} Output only the message, nothing else."
+    )
+    try:
+        msg = await _call_openrouter(system, history[-10:], "(write the single follow-up message now)")
+        if msg:
+            return msg.strip()
+    except Exception as exc:
+        logger.warning("generate_followup_message: LLM failed (%s) — using fallback", exc)
+    table = _FOLLOWUP_FALLBACK.get(kind, _FOLLOWUP_FALLBACK["order_nudge"])
+    return table.get((language or "en").lower(), table["en"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -765,6 +829,16 @@ def _has_model_token(term: str) -> bool:
     return any(any(ch.isdigit() for ch in tok) for tok in term.split())
 
 
+# Generic words that describe a category/type but do NOT name a specific product.
+# Used (with the category aliases) to decide whether the customer named only a
+# category ("gps receiver" → list all) or a specific model ("dash geonova gps" →
+# just that model, because "dash"/"geonova" are NOT generic).
+_GENERIC_PRODUCT_WORDS = {
+    "scanner", "device", "machine", "receiver", "reader", "sensor",
+    "model", "unit", "kit", "printer", "printers", "pos", "atm",
+}
+
+
 def _match_category(term: str) -> list[str]:
     """Return catalogue category name(s) if the term is a category browse."""
     toks = set(term.split())
@@ -775,6 +849,15 @@ def _match_category(term: str) -> list[str]:
                 if n not in cats:
                     cats.append(n)
     return cats
+
+
+def _has_specific_tokens(term: str) -> bool:
+    """True if the term has a brand/model token beyond the category/generic words
+    (e.g. 'dash geonova' in 'dash geonova gps') ⇒ treat as a specific product."""
+    return any(
+        tok not in _CATEGORY_ALIASES and tok not in _GENERIC_PRODUCT_WORDS
+        for tok in term.split()
+    )
 
 
 async def generate_product_reply(user_query: str) -> Optional[dict]:
@@ -812,8 +895,11 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
     hinglish = any(x in raw_lower for x in ("chahiye", "chaiye", "chaahiye", "hai", "kya", "lena", "krna", "karna"))
 
     # ── Category browse → list every model in that category ────────────────────
+    # Only when the customer named JUST a category ("gps", "fingerprint scanner").
+    # If they named a specific model/brand ("dash geonova gps"), fall through to
+    # the single best-match product below.
     category_names = _match_category(term)
-    if category_names and not _has_model_token(term):
+    if category_names and not _has_model_token(term) and not _has_specific_tokens(term):
         catalogue = await get_catalogue()
         wanted = {c.lower() for c in category_names}
         items = [
