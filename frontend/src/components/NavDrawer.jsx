@@ -22,6 +22,7 @@ import {
   Dashboard as DashboardIcon,
   ShoppingCart as ShoppingCartIcon,
   Forum as ForumIcon,
+  Psychology as PsychologyIcon,
   Logout as LogoutIcon,
 } from "@mui/icons-material";
 
@@ -46,6 +47,7 @@ export default function NavDrawer({
     { text: "Dashboard", icon: <DashboardIcon />, id: "dashboard" },
     { text: "Orders", icon: <ShoppingCartIcon />, id: "orders" },
     { text: "Chat", icon: <ForumIcon />, id: "chat" },
+    { text: "Knowledge", icon: <PsychologyIcon />, id: "knowledge" },
   ].filter((item) => !allowedSet || allowedSet.has(item.id));
 
   const drawerContent = (isMobile = false) => {

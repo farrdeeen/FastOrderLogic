@@ -5,6 +5,7 @@ export const ALL_PAGE_IDS = [
   "device-entry",
   "serial-search",
   "chat",
+  "knowledge",
 ];
 
 const PAGE_ALIASES = {
@@ -14,6 +15,7 @@ const PAGE_ALIASES = {
   "device-entry": ["device-entry", "device_entry", "deviceEntry", "bulk-device"],
   "serial-search": ["serial-search", "serial_search", "serialSearch", "serial"],
   chat: ["chat", "support", "whatsapp"],
+  knowledge: ["knowledge", "kb", "rag", "knowledge-base", "training"],
 };
 
 const ALIAS_TO_PAGE = Object.entries(PAGE_ALIASES).reduce((acc, [page, aliases]) => {

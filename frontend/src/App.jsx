@@ -12,6 +12,7 @@ import PublicSite from "./landing/PublicSite";
 import DeviceTransactionForm from "./components/DeviceTransactionForm";
 import DashboardPage from "./dashboard/DashboardPage";
 import SerialSearchPage from "./components/SerialSearchPage";
+import KnowledgeBasePage from "./knowledge/KnowledgeBasePage";
 import {
   accessFromServer,
   canAccessPage,
@@ -290,6 +291,7 @@ export default function App() {
     "create-order": "🆕 Create New Order",
     "device-entry": "Bulk Device In/Out",
     "serial-search": "🔎 Serial & Order Search",
+    knowledge: "🧠 AI Knowledge Base",
   }[activePage];
 
   // ── Core fetch: parallel count + page-0, then concurrent batches ──────────
@@ -940,6 +942,17 @@ export default function App() {
             >
               <div style={{ width: "100%", minWidth: 0 }}>
                 <DashboardPage />
+              </div>
+            </Fade>
+
+            {/* ═══════════ KNOWLEDGE BASE PAGE ═══════════ */}
+            <Fade
+              in={activePage === "knowledge" && canAccess("knowledge")}
+              mountOnEnter
+              unmountOnExit
+            >
+              <div style={{ width: "100%", minWidth: 0 }}>
+                <KnowledgeBasePage />
               </div>
             </Fade>
           </Box>

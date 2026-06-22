@@ -334,6 +334,14 @@ async def _fetch_catalogue() -> None:
         len(_catalogue), _last_fetched.strftime("%H:%M:%S"),
     )
 
+    # Keep the RAG product_knowledge collection in sync with the catalogue.
+    # Fire-and-forget on a daemon thread so embedding never blocks the refresh.
+    try:
+        from services.knowledge_ingest import schedule_product_reseed
+        schedule_product_reseed(list(_catalogue))
+    except Exception as exc:
+        logger.debug("RAG product reseed scheduling skipped: %s", exc)
+
 
 def _normalise_product(raw: dict) -> dict:
     """

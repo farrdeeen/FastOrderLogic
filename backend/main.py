@@ -17,6 +17,7 @@ from routes import webhook as webhook_router
 from routes import dashboard as dashboard_router 
 from routes.chat import router as chat_api_router
 from routes.chat_router import router as chat_control_router
+from routes.knowledge import router as knowledge_router
 from routes.razorpay_webhook import router as razorpay_router
 from routes.serial_search import router as serial_search_router
 from routes.payment_webhook import router as payment_webhook_router
@@ -54,6 +55,7 @@ app.include_router(states.router)
 app.include_router(device_transactions_router)
 app.include_router(delhivery_router)
 app.include_router(chat_api_router)
+app.include_router(knowledge_router)
 app.include_router(webhook_router.router)
 app.include_router(dashboard_router.router) 
 app.include_router(chat_control_router)
@@ -79,6 +81,16 @@ async def on_startup():
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("Catalogue pre-warm failed: %s", exc)
+
+    # Warm the RAG knowledge base (ChromaDB) on a daemon thread — non-blocking so a
+    # first-run embedding-model download never delays startup. Degrades silently
+    # to keyword search if chromadb/fastembed isn't installed.
+    try:
+        from services.knowledge_ingest import start_warm_seed
+        start_warm_seed()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("RAG warm-seed failed to start: %s", exc)
 
     try:
         from services.meta_datafeed_service import start_meta_datafeed_auto_refresh

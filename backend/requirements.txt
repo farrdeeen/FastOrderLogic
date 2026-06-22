@@ -40,3 +40,9 @@ rich==14.2.0
 PyYAML==6.0.3
 Pillow==10.0.1
 pywebpush==1.14.1
+
+# --- RAG: embedded vector store + multilingual embeddings (Hindi/Hinglish) ---
+# chromadb runs in-process (no server). fastembed provides the multilingual
+# ONNX embedder (paraphrase-multilingual-MiniLM-L12-v2) — no torch required.
+chromadb==0.5.23
+fastembed==0.4.2

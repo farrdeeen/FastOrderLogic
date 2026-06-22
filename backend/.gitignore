@@ -6,3 +6,7 @@ datafeeds/
 .env
 .env.production
 backend/secrets/
+
+# RAG vector store (ChromaDB persistent data + fastembed model cache)
+data/chroma/
+.cache/
