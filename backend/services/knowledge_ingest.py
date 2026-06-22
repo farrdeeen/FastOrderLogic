@@ -182,8 +182,48 @@ def _chunk_text(text: str) -> list[str]:
     return chunks
 
 
+def _product_faq_rows() -> list[tuple]:
+    """Pull per-product FAQs (question, answer, product name) from products.faqs JSON."""
+    rows: list[tuple] = []
+    try:
+        import json as _json
+        from database import SessionLocal
+        from sqlalchemy import text as _t
+        db = SessionLocal()
+        try:
+            res = db.execute(_t(
+                "SELECT name, faqs FROM products WHERE faqs IS NOT NULL AND is_visible = 1"
+            )).mappings().all()
+        finally:
+            db.close()
+        for r in res:
+            pname = (r.get("name") or "").strip()
+            raw = r.get("faqs")
+            try:
+                data = _json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(data, str):   # faqs is double-encoded JSON
+                    data = _json.loads(data)
+            except Exception:
+                continue
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                if isinstance(item, dict):
+                    q = str(item.get("question") or item.get("q") or item.get("title") or "").strip()
+                    a = str(item.get("answer") or item.get("a") or item.get("content") or "").strip()
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    q, a = str(item[0]).strip(), str(item[1]).strip()
+                else:
+                    continue
+                if q and a:
+                    rows.append((q, a, pname))
+    except Exception as exc:
+        logger.warning("product faq pull failed: %s", exc)
+    return rows
+
+
 def seed_faq_policy() -> int:
-    """Rebuild faq_policy from training_doc.txt + data/kb/* (txt + pdf)."""
+    """Rebuild faq_policy from training_doc.txt + data/kb/* (txt + pdf) + product FAQs."""
     if not vs.is_available():
         return 0
 
@@ -204,12 +244,6 @@ def seed_faq_policy() -> int:
             if txt:
                 sources.append((f.name, txt))
 
-    if not sources:
-        logger.info("seed_faq_policy: no FAQ/policy source files")
-        # Still recreate so a removed doc clears stale chunks.
-        vs.recreate_collection(vs.FAQ_POLICY)
-        return 0
-
     vs.recreate_collection(vs.FAQ_POLICY)
     ids, docs, metas = [], [], []
     seen: set[str] = set()
@@ -222,8 +256,26 @@ def seed_faq_policy() -> int:
             ids.append(cid)
             docs.append(chunk)
             metas.append({"source": source_name})
+
+    # Per-product FAQs from products.faqs JSON.
+    faq_n = 0
+    for q, a, pname in _product_faq_rows():
+        chunk = f"{pname} — Q: {q} A: {a}"
+        cid = f"faq::{_hash8(chunk)}"
+        if cid in seen:
+            continue
+        seen.add(cid)
+        ids.append(cid)
+        docs.append(chunk)
+        metas.append({"source": "product_faq", "product": pname})
+        faq_n += 1
+
+    if not ids:
+        logger.info("seed_faq_policy: no FAQ/policy content")
+        return 0
     n = vs.upsert(vs.FAQ_POLICY, ids=ids, documents=docs, metadatas=metas)
-    logger.info("seed_faq_policy: seeded %d chunks from %d source(s)", n, len(sources))
+    logger.info("seed_faq_policy: seeded %d chunks (%d product FAQs) from %d source(s)",
+                n, faq_n, len(sources))
     return n
 
 
