@@ -352,7 +352,6 @@ function LastOrderCard({ order, loading, error }) {
 // ── Order Confirmation Modal ──────────────────────────────────────────────────
 function OrderConfirmModal({ chat, onClose, onSent }) {
   const [orderId, setOrderId] = useState(chat.linked_order_id || "");
-  const [amount, setAmount] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
 
@@ -370,8 +369,8 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
   };
 
   const handleSend = async () => {
-    if (!orderId.trim() || !amount.trim()) {
-      setError("Order ID and amount are required.");
+    if (!orderId.trim()) {
+      setError("Order ID is required.");
       return;
     }
     setSending(true);
@@ -381,7 +380,7 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
         phone: chat.phone,
         customerName: chat.name,
         orderId: orderId.trim(),
-        amount: amount.trim(),
+        amount: "",
         sessionId: chat.id,
       });
       onSent();
@@ -444,8 +443,9 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
         </Box>
 
         <Typography sx={{ fontSize: 13, color: WA.textSub }}>
-          Sending <strong>order_confirmation</strong> template to{" "}
-          <strong>{chat.name}</strong>
+          Confirms the order and sends the delivery address (from the order) to{" "}
+          <strong>{chat.name}</strong> for confirmation. Amount &amp; address are
+          taken from the order automatically.
         </Typography>
 
         <Box sx={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -456,18 +456,6 @@ function OrderConfirmModal({ chat, onClose, onSent }) {
             value={orderId}
             onChange={(e) => setOrderId(e.target.value)}
             placeholder="e.g. ORD-1001"
-            style={inputStyle}
-          />
-        </Box>
-
-        <Box sx={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-          <label style={{ fontSize: 12, color: WA.textSub, fontWeight: 500 }}>
-            Amount
-          </label>
-          <input
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="e.g. ₹999"
             style={inputStyle}
           />
         </Box>

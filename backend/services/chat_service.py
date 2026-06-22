@@ -609,6 +609,23 @@ async def handle_inbound_message(
             logger.error("Order ID not-found reply failed %s: %s", phone, exc)
         return not_found
 
+    # ── Greeting → personalised, language-aware welcome (recognises returning
+    #    customers from the orders DB; mirrors Hinglish/Hindi/English style) ──────
+    if _looks_like_greeting(text_body):
+        try:
+            from services.customer_rag import get_customer_context
+            cust_ctx = get_customer_context(db, phone)
+        except Exception:
+            cust_ctx = ""
+        from services.ai_service import generate_greeting
+        greeting = await generate_greeting(history_for_context, language=language, customer_context=cust_ctx)
+        save_message(db, session_id, "ai", greeting, meta={"flow": "greeting"})
+        try:
+            await send_text_message(phone, greeting)
+        except Exception as exc:
+            logger.error("Greeting send failed %s: %s", phone, exc)
+        return greeting
+
     # ── LLM intent classification ──────────────────────────────────────────────
     intent = await classify_intent(text_body, history_for_context[-5:])
     # When the last AI message asked for a personal field (name/mobile/address/

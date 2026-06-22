@@ -1310,7 +1310,43 @@ async def send_order_confirmation_endpoint(
         "session_id": 12          ← optional
     }
     """
-    # If a session_id is provided, log the template send in chat history
+    # Operator supplies ONLY the order ID — derive the amount and the delivery
+    # address for THAT order from the DB, so the address-confirmation message is
+    # built from real order data (no manual amount input that leaked into it).
+    order_id = (payload.order_id or "").strip()
+    row = db.execute(
+        text("""
+            SELECT o.total_amount,
+                   COALESCE(c.name, oc.name) AS cust_name,
+                   a.address_line, a.locality, a.landmark, a.city, a.pincode,
+                   s.name AS state_name
+            FROM orders o
+            LEFT JOIN address          a  ON a.address_id  = o.address_id
+            LEFT JOIN states           s  ON s.id          = a.state_id
+            LEFT JOIN customer         c  ON c.customer_id  = o.customer_id
+            LEFT JOIN offline_customer oc ON oc.customer_id = o.offline_customer_id
+            WHERE o.order_id = :oid LIMIT 1
+        """),
+        {"oid": order_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+
+    customer_name = payload.customer_name or row.get("cust_name") or "Customer"
+    amount = f"₹{float(row['total_amount']):,.0f}" if row.get("total_amount") else "—"
+    address_line = ", ".join(
+        str(p).strip() for p in (
+            row.get("address_line"), row.get("locality"), row.get("landmark"),
+            row.get("city"), row.get("state_name"), row.get("pincode"),
+        ) if p and str(p).strip()
+    )
+    address_body = (
+        f"📦 Delivery address on file for order {order_id}:\n{address_line}\n\n"
+        "Reply *YES* to confirm, or send your corrected address."
+        if address_line
+        else f"📦 Order {order_id} confirmed. Please reply with your full delivery address (with pincode)."
+    )
+
     if payload.session_id:
         session = db.execute(
             text("SELECT id FROM chat_sessions WHERE id = :sid"),
@@ -1319,37 +1355,38 @@ async def send_order_confirmation_endpoint(
         if session:
             save_message(
                 db, payload.session_id, "system",
-                f"[template:order_confirmation] {payload.customer_name} / {payload.order_id} / {payload.amount}",
-                meta={
-                    "flow": "order_confirmation_template",
-                    "order_id": payload.order_id,
-                },
+                f"[template:order_confirmation] {customer_name} / {order_id} / {amount}",
+                meta={"flow": "order_confirmation_template", "order_id": order_id},
+            )
+            save_message(
+                db, payload.session_id, "system", address_body,
+                meta={"flow": "address_confirm", "order_id": order_id},
             )
 
     background.add_task(
         _dispatch_order_confirmation,
-        payload.phone,
-        payload.customer_name,
-        payload.order_id,
-        payload.amount,
+        payload.phone, customer_name, order_id, amount, address_body,
     )
 
-    return {"success": True, "phone": payload.phone, "order_id": payload.order_id}
+    return {"success": True, "phone": payload.phone, "order_id": order_id, "amount": amount}
 
 
 async def _dispatch_order_confirmation(
-    phone: str, customer_name: str, order_id: str, amount: str
+    phone: str, customer_name: str, order_id: str, amount: str, address_body: str = ""
 ) -> None:
     try:
         await send_order_confirmation(
-            to=phone,
-            customer_name=customer_name,
-            order_id=order_id,
-            amount=amount,
+            to=phone, customer_name=customer_name, order_id=order_id, amount=amount,
         )
         logger.info("order_confirmation template sent to %s for %s", phone, order_id)
     except Exception:
         logger.exception("Failed to send order_confirmation template to %s", phone)
+    if address_body:
+        try:
+            from services.whatsapp_service import send_text_message
+            await send_text_message(phone, address_body)
+        except Exception:
+            logger.exception("Failed to send address confirmation to %s", phone)
 
 
 # ─── POST /chat/sessions/{session_id}/resolve ────────────────────────────────

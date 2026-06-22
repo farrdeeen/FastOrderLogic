@@ -1020,6 +1020,35 @@ async def generate_order_cta(history: list[dict], language: str = "en", product_
             else "Would you like to place the order? Just share your name, mobile and address 🙂")
 
 
+async def generate_greeting(history: list[dict], language: str = "en", customer_context: str = "") -> str:
+    """One warm opening message — recognises returning customers (by name/history)
+    and mirrors the customer's chat language/script (Hinglish, Hindi, English…)."""
+    system = (
+        "You are Aria, the WhatsApp sales agent for mTm DaSh Store. Write EXACTLY ONE short, warm greeting "
+        "(under 30 words). If the CUSTOMER CONTEXT below shows a returning customer, welcome them back BY NAME "
+        "and subtly acknowledge they've shopped with us before; if they have a pending order, gently mention it. "
+        "If they're new, greet warmly as a first-time visitor. Then ask if they want a product or to check an order. "
+        "CRITICAL: reply in the SAME language AND script as the customer's messages — if they wrote Hinglish/"
+        "romanized, reply in Hinglish (Latin script); never switch script on your own. Plain text. Output only the message."
+    )
+    if customer_context:
+        system += f"\n\n{customer_context}"
+    try:
+        msg = await _call_openrouter(system, history[-6:], "(write the greeting now)")
+        if msg:
+            return msg.strip()
+    except Exception as exc:
+        logger.warning("generate_greeting failed (%s) — fallback", exc)
+    returning = bool(customer_context) and "New customer" not in customer_context
+    if (language or "en").lower() != "en":
+        return ("Welcome back! 🙏 mTm DaSh Store me aapka phir se swagat hai. Product lena hai ya order check karna hai?"
+                if returning else
+                "Hello! 🙏 mTm DaSh Store me aapka swagat hai. Aap product lena chahte hain ya order ke baare me jaanna hai?")
+    return ("Welcome back! 👋 Great to see you again at mTm DaSh Store. Would you like a product or to check an order?"
+            if returning else
+            "Hello! 👋 Welcome to mTm DaSh Store. Would you like to buy a product or check an existing order?")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Order helpers
 # ─────────────────────────────────────────────────────────────────────────────
