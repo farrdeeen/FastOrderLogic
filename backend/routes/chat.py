@@ -280,7 +280,7 @@ def list_conversations(
             ) AS unread_count
         FROM chat_sessions cs
         WHERE {where}
-        ORDER BY cs.updated_at DESC
+        ORDER BY COALESCE(cs.last_message_at, cs.created_at) DESC, cs.id DESC
         LIMIT :lim OFFSET :off
     """), params).fetchall()
 

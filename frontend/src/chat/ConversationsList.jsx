@@ -17,15 +17,35 @@ import {
   WA,
 } from "./styles";
 
+// WhatsApp-style timestamp: today → time, yesterday → "Yesterday", within the
+// last week → weekday, older → date. Uses CALENDAR-day difference (not a 24h
+// window) so a message from late last night correctly reads "Yesterday".
 function formatTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
   const now = new Date();
-  const diff = Math.floor((now - d) / 86400000);
-  if (diff === 0)
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (diff === 1) return "Yesterday";
-  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((today - msgDay) / 86400000);
+  if (diffDays <= 0)
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return d.toLocaleDateString([], { weekday: "long" });
+  return d.toLocaleDateString([], {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
+}
+
+// Most-recent-first by last message time. Keeps the list ordered by time/date
+// regardless of flag changes or partial in-place updates (chats with no
+// messages yet fall back to creation order at the bottom).
+function byRecency(a, b) {
+  const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+  const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+  return tb - ta;
 }
 
 function getBadges(conv) {
@@ -188,7 +208,9 @@ export default function ConversationsList({ onSelectChat, activeId, onOpenNav })
     };
   }, [scheduleLoad]);
 
-  const visible = conversations.filter((c) => matchesFilter(c, activeFilter));
+  const visible = conversations
+    .filter((c) => matchesFilter(c, activeFilter))
+    .sort(byRecency);
 
   return (
     <Box
