@@ -634,8 +634,14 @@ async def handle_inbound_message(
     # ── Confirmed model → share photo + card + CTA ─────────────────────────────
     # Runs regardless of intent: a bare "yes"/"haan"/"photo bhejo" often classifies
     # as general, which previously skipped the share after a model confirmation.
+    # NOTE: we deliberately do NOT gate this on `awaiting_field`. The model-confirm
+    # prompt itself says "Confirm karein…", and "confirm" is a personal-field
+    # marker, so `_awaiting_personal_field` falsely returns True here — which used
+    # to skip the share and let the LLM reply with a text-only card (no photo).
+    # A truthy `pending` (meta.flow == "product_confirm" + sku) is a precise signal
+    # that we're confirming a model, so an affirmative MUST trigger the photo share.
     pending = _pending_product_confirm(db, session_id)
-    if pending and not awaiting_field and (_is_affirmative(text_body) or _asks_for_media(text_body)):
+    if pending and (_is_affirmative(text_body) or _asks_for_media(text_body)):
         from services.ai_service import product_card_by_sku, generate_order_cta
         share = await product_card_by_sku(pending.get("sku"))
         if share:
