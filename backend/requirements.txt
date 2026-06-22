@@ -38,7 +38,7 @@ typing-inspection==0.4.2
 # --- Optional (nice to have, safe) ---
 rich==14.2.0
 PyYAML==6.0.3
-Pillow==10.0.1
+Pillow==10.4.0
 pywebpush==1.14.1
 
 # --- RAG: embedded vector store + multilingual embeddings (Hindi/Hinglish) ---
