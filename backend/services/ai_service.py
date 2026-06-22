@@ -49,8 +49,9 @@ STRICT RULES:
 SELL LIKE A PRO:
 - Be warm, confident and helpful. Understand the need, recommend the best-fit product, and always move toward the next step.
 - If the customer says they want to buy but does NOT name a product (e.g. "mujhe ek device purchase karna hai",
-  "I want to buy something"), DO NOT guess or send a random product. Ask which product/category they need,
-  e.g. "Zaroor! Aapko konsa device chahiye — fingerprint scanner, iris scanner, GPS, printer, ya Micro ATM?"
+  "I want to buy something"), DO NOT guess or send a random product. In the customer's own language/script, ask
+  which product/category AND the model name, e.g. "Zaroor! Aapko konsa device chahiye — aur koi specific model
+  ka naam ho to batayein (jaise Mantra MFS110, Morpho L1)? Fingerprint, iris, GPS, printer ya Micro ATM?"
 - After sharing a product, end with a clear call to action, e.g. "Aapke liye order place kar dun?" / "Shall I place the order for you?"
 - Ask only ONE question at a time. Don't send long paragraphs.
 
@@ -579,17 +580,21 @@ _LANGUAGE_NAMES = {
 }
 
 
-async def generate_reply(conversation_history: list[dict], user_message: str, language: Optional[str] = None) -> str:
+async def generate_reply(conversation_history: list[dict], user_message: str, language: Optional[str] = None, extra_context: Optional[str] = None) -> str:
     _LAST_AI_FAILURE.set(None)
     provider_errors: list[dict] = []
     system = await build_system_prompt()
-    # Honour the customer's selected language (from the language menu).
+    if extra_context:
+        system += f"\n\n{extra_context}"
+    # Mirror the customer's language/script INCLUDING Hinglish/romanized and typos.
     lang_name = _LANGUAGE_NAMES.get((language or "").lower())
-    if lang_name:
+    if lang_name and lang_name != "English":
         system += (
-            f"\n\nThe customer has selected {lang_name}. Reply in {lang_name} "
-            f"(you may keep product names, model numbers and links in English)."
+            f"\n\nThe customer's language is {lang_name}. Reply in {lang_name} "
+            f"(keep product names, model numbers and links in English)."
         )
+    system += ("\n\nALWAYS mirror the customer's exact style: if they write Hinglish/romanized, "
+               "reply in Hinglish (Latin script); never switch to formal English on your own. Understand typos.")
 
     if _OPENROUTER_ENABLED:
         if not _OPENROUTER_KEY:
@@ -689,8 +694,9 @@ async def generate_followup_message(
         )
     system = (
         "You are Aria, the WhatsApp sales agent for mTm DaSh Store. "
-        f"Write EXACTLY ONE short WhatsApp follow-up (under 40 words) in {lang_name}, matching the tone of the "
-        f"conversation so far. Plain text, warm, never pushy. {goal} Output only the message, nothing else."
+        "Write EXACTLY ONE short WhatsApp follow-up (under 40 words). Plain text, warm, never pushy. "
+        "CRITICAL: reply in the SAME language AND script as the customer's recent messages (Hinglish/romanized "
+        f"if they used it; do NOT switch to formal English or another script). {goal} Output only the message."
     )
     try:
         msg = await _call_openrouter(system, history[-10:], "(write the single follow-up message now)")
@@ -931,12 +937,8 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
     # refer to the SAME product (no more "Falcon photo + Identi5 link" mismatch).
     best = products[0]
     intro = "Ji, ye product available hai:" if hinglish else f"Here's the best match for *{term}*:"
-    cta = (
-        "\n\n👉 Order place karne ke liye apna naam, mobile aur pura address (pincode ke saath) bhej dein."
-        if hinglish
-        else "\n\n👉 To place your order, share your name, mobile and full address with pincode."
-    )
-    text = f"{intro}\n\n{format_product_card(best)}{cta}"
+    # No static CTA here — a separate, style-matched CTA is sent after the card.
+    text = f"{intro}\n\n{format_product_card(best)}"
 
     # Photos for that SAME best-match product only (max 2).
     sku  = (best.get("sku") or "").strip()
@@ -956,7 +958,28 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         "generate_product_reply: returning best product %r, %d image(s) for query=%r",
         name, len(images), user_query,
     )
-    return {"text": text, "images": images}
+    return {"text": text, "images": images, "product": name}
+
+
+async def generate_order_cta(history: list[dict], language: str = "en", product_name: str = "") -> str:
+    """A short, style + language matched message asking the customer to place the order."""
+    system = (
+        "You are Aria, the WhatsApp sales agent for mTm DaSh Store. The customer was just shown a product"
+        + (f" ({product_name})" if product_name else "")
+        + ". Write EXACTLY ONE short WhatsApp message (under 30 words) warmly asking if they'd like to place "
+        "the order and offering to take their details. CRITICAL: reply in the SAME language AND script as the "
+        "customer's recent messages — if they wrote Hinglish/romanized, reply in Hinglish (Latin script), do NOT "
+        "switch to formal English or Devanagari unless they did. Output only the message."
+    )
+    try:
+        msg = await _call_openrouter(system, history[-8:], "(write the order CTA now)")
+        if msg:
+            return msg.strip()
+    except Exception as exc:
+        logger.warning("generate_order_cta failed (%s) — fallback", exc)
+    return ("Order place karna chahein to apna naam, mobile aur address bhej dein 🙂"
+            if (language or "en").lower() != "en"
+            else "Would you like to place the order? Just share your name, mobile and address 🙂")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

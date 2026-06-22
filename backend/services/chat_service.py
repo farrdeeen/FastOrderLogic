@@ -197,6 +197,18 @@ _PERSONAL_FIELD_MARKERS = (
 )
 
 
+def _looks_like_address_block(message: str) -> bool:
+    """True when the message is a name/address/mobile block (often pasted at once)
+    — must go to order collection, NOT product browse."""
+    t = (message or "").lower()
+    if not re.search(r"\b\d{6}\b", t):   # needs a 6-digit pincode
+        return False
+    keys = ("address", "village", "gaon", "post", "district", "tehsil", "pin", "pincode",
+            "mohalla", "near", "mobile", "father", "name", "ganj", "pur", "nagar", "colony", "street")
+    hits = sum(1 for k in keys if k in t)
+    return hits >= 2 or t.count("\n") >= 3
+
+
 def _awaiting_personal_field(history: list[dict]) -> bool:
     """True when the last substantive AI turn asked for a personal order field."""
     for turn in reversed(history):
@@ -593,7 +605,8 @@ async def handle_inbound_message(
     # product share (card + photo + link) and invite them to order. If the
     # message names no real product (a detail answer / "haan"), generate_product_reply
     # returns None and we fall through to the AI to continue/place the order.
-    if not awaiting_field and intent in ("product_browse", "place_order"):
+    address_block = _looks_like_address_block(text_body)
+    if not awaiting_field and not address_block and intent in ("product_browse", "place_order"):
         logger.info("handle_inbound: %s intent — trying product card+photo for %r", intent, text_body[:60])
         product_result = await generate_product_reply(text_body)
 
@@ -642,12 +655,32 @@ async def handle_inbound_message(
             except Exception as exc:
                 logger.error("Product text send failed %s: %s", phone, exc)
 
+            # Separate, style + language matched message asking them to order
+            # (only for a single-product share, not the category list).
+            if images:
+                try:
+                    from services.ai_service import generate_order_cta
+                    cta = await generate_order_cta(history_for_context, language=language,
+                                                   product_name=product_result.get("product", ""))
+                    if cta:
+                        wa_resp = await send_text_message(phone, cta)
+                        save_message(db, session_id, "ai", cta,
+                                     wa_message_id=_wa_message_id(wa_resp), meta={"flow": "order_cta"})
+                except Exception as exc:
+                    logger.error("Order CTA send failed %s: %s", phone, exc)
+
             return text_msg
 
         logger.info("handle_inbound: product intent had no usable search term, falling through to AI reply")
 
-    # ── Route: everything else → full AI reply ─────────────────────────────────
-    ai_reply = await generate_reply(history_for_context, text_body, language=language)
+    # ── Route: everything else → full AI reply (with customer + knowledge RAG) ──
+    try:
+        from services.customer_rag import build_rag_context
+        rag_context = build_rag_context(db, phone, text_body)
+    except Exception as exc:
+        logger.warning("RAG context build failed: %s", exc)
+        rag_context = ""
+    ai_reply = await generate_reply(history_for_context, text_body, language=language, extra_context=rag_context)
     ai_failure_context = get_last_ai_failure_context()
     if ai_failure_context:
         _mark_session_urgent_for_human(db, session_id)
