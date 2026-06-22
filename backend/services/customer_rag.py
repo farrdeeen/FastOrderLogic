@@ -151,6 +151,41 @@ def retrieve_knowledge(query: str, k: int = 3) -> str:
     return ("RELEVANT KNOWLEDGE (use for the answer):\n- " + "\n- ".join(top)) if top else ""
 
 
+_LEARNED_HEADER = "--- LEARNED FROM OPERATORS (auto-added; review & prune manually) ---"
+
+
+def learn_from_operator(db: Session, session_id: int, operator_reply: str) -> bool:
+    """Append (customer query → operator reply) directly into the TRAINING DOC as a
+    reusable rule: 'When a customer asks X, respond Y'. Grows the doc over time."""
+    global _chunks_sig
+    reply = (operator_reply or "").strip()
+    if len(reply) < 3 or len(reply) > 600 or reply.startswith("[media"):
+        return False
+    row = db.execute(
+        text("SELECT message FROM chat_messages WHERE session_id=:sid AND sender='user' ORDER BY timestamp DESC LIMIT 1"),
+        {"sid": session_id},
+    ).first()
+    query = (row[0] if row and row[0] else "").strip()
+    if not query or query.startswith("[media") or len(query) < 3:
+        return False
+    try:
+        existing = _TRAINING_DOC.read_text(encoding="utf-8") if _TRAINING_DOC.exists() else ""
+        # Dedupe by the query prefix so the same question isn't learned twice.
+        if query[:50].lower() in existing.lower():
+            return False
+        _TRAINING_DOC.parent.mkdir(parents=True, exist_ok=True)
+        entry = f'\nWhen a customer asks/says: "{query[:200]}" → respond like this: "{reply[:400]}"'
+        prefix = "" if _LEARNED_HEADER in existing else f"\n\n{_LEARNED_HEADER}"
+        with _TRAINING_DOC.open("a", encoding="utf-8") as fh:
+            fh.write(prefix + entry)
+        _chunks_sig = ()  # invalidate RAG cache so it's retrievable immediately
+        logger.info("Training doc learned operator rule for session %s (query=%r)", session_id, query[:60])
+        return True
+    except Exception as exc:
+        logger.warning("learn_from_operator failed: %s", exc)
+        return False
+
+
 def build_rag_context(db: Session, phone: str, query: str) -> str:
     parts = [get_customer_context(db, phone), retrieve_knowledge(query)]
     return "\n\n".join(p for p in parts if p)

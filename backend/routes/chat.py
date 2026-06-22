@@ -1168,7 +1168,14 @@ async def send_message(
     if not msg:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    save_message(db, payload.session_id, "ai", msg)
+    # Tag as an OPERATOR (human) message so it's distinguishable from the bot,
+    # and learn the (customer query → operator reply) rule for future queries.
+    save_message(db, payload.session_id, "ai", msg, meta={"flow": "operator", "operator": True})
+    try:
+        from services.customer_rag import learn_from_operator
+        learn_from_operator(db, payload.session_id, msg)
+    except Exception:
+        logger.warning("learn_from_operator failed for session %s", payload.session_id, exc_info=True)
 
     # Dispatch WhatsApp in background so the dashboard doesn't block
     background.add_task(_dispatch_wa, phone, msg)
@@ -1377,3 +1384,26 @@ def count_conversations(
         params["status"] = status
     count = db.execute(text(q), params).scalar()
     return {"count": count}
+
+
+# ── Training document download / upload ──────────────────────────────────────
+@router.get("/training-doc/download")
+def download_training_doc(_=Depends(require_user)):
+    import os
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    p = Path(os.getenv("TRAINING_DOC_PATH", "data/training_doc.txt"))
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Training document not found")
+    return FileResponse(str(p), filename="training_doc.txt", media_type="text/plain")
+
+
+@router.post("/training-doc/upload")
+async def upload_training_doc(file: UploadFile = File(...), _=Depends(require_user)):
+    import os
+    from pathlib import Path
+    p = Path(os.getenv("TRAINING_DOC_PATH", "data/training_doc.txt"))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = await file.read()
+    p.write_bytes(data)
+    return {"success": True, "bytes": len(data), "path": str(p)}

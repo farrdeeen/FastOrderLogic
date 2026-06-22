@@ -226,6 +226,24 @@ def _is_affirmative(message: str) -> bool:
     return any(w in toks for w in ("haan", "yes", "confirm", "bilkul", "sahi", "ok", "okay", "theek", "bhejo", "bhej"))
 
 
+_SUPPORT_HINTS = (
+    "rd service", "rd serive", "rd registration", "driver", "install", "setup", "set up",
+    "activation", "activate", "configure", "configuration", "management client", "how to use",
+    "kaise use", "kaise chalau", "kaise install", "not registering", "rd app",
+)
+
+
+def _is_support_query(message: str) -> bool:
+    """Driver/RD-service/installation help — the AI should ANSWER from the training
+    doc (not show a product card, not escalate)."""
+    return any(h in (message or "").lower() for h in _SUPPORT_HINTS)
+
+
+def _asks_for_media(message: str) -> bool:
+    t = (message or "").lower()
+    return any(w in t for w in ("photo", "foto", "pic", "image", "picture", "dikha", "dekh", "bhej", "send", "share"))
+
+
 def _pending_product_confirm(db: Session, session_id: int) -> Optional[dict]:
     """If the last AI message asked the customer to confirm a model, return its sku/name."""
     import json as _json
@@ -557,20 +575,8 @@ async def handle_inbound_message(
     else:
         history_for_context = history
 
-    selected_language = _detect_language_choice(text_body)
-    if selected_language:
-        db.execute(
-            text("UPDATE chat_sessions SET preferred_language = :lang, updated_at = :now WHERE id = :sid"),
-            {"lang": selected_language, "now": datetime.now(), "sid": session_id},
-        )
-        db.commit()
-        reply = _language_selected_reply(selected_language)
-        save_message(db, session_id, "ai", reply, meta={"flow": "language_selected", "language": selected_language})
-        try:
-            await send_text_message(phone, reply)
-        except Exception as exc:
-            logger.error("Language selection reply send failed %s: %s", phone, exc)
-        return reply
+    # NOTE: no language menu anymore — language is auto-detected. (Previously a
+    # bare number like a quantity "2" was misread as a language choice.)
 
     # Auto-detect language from the customer's message (script + typed words) —
     # no language menu is shown.
@@ -612,8 +618,10 @@ async def handle_inbound_message(
         session_id, phone, intent, awaiting_field, text_body[:60],
     )
 
+    support_query = _is_support_query(text_body)
+
     # ── Route: service / complaint — hand over to human urgently ───────────────
-    if is_service_intent(intent):
+    if is_service_intent(intent) and not support_query:
         _mark_session_urgent_for_human(db, session_id)
         reply = _service_escalation_reply(language)
         save_message(db, session_id, "ai", reply, meta={"flow": "service_escalation", "flag": "urgent"})
@@ -622,6 +630,37 @@ async def handle_inbound_message(
         except Exception as exc:
             logger.error("Service escalation reply send failed %s: %s", phone, exc)
         return reply
+
+    # ── Confirmed model → share photo + card + CTA ─────────────────────────────
+    # Runs regardless of intent: a bare "yes"/"haan"/"photo bhejo" often classifies
+    # as general, which previously skipped the share after a model confirmation.
+    pending = _pending_product_confirm(db, session_id)
+    if pending and not awaiting_field and (_is_affirmative(text_body) or _asks_for_media(text_body)):
+        from services.ai_service import product_card_by_sku, generate_order_cta
+        share = await product_card_by_sku(pending.get("sku"))
+        if share:
+            for img_url in (share.get("images") or [])[:3]:
+                try:
+                    wa_resp = await asyncio.wait_for(send_image_message(phone, img_url), timeout=10.0)
+                    save_message(db, session_id, "ai", "[image] Product photo", wa_message_id=_wa_message_id(wa_resp),
+                                 meta={"flow": "product_image", "media_type": "image", "mime_type": "image/jpeg",
+                                       "media_url": img_url, "download_url": img_url})
+                    await asyncio.sleep(0.3)
+                except Exception as exc:
+                    logger.error("confirmed product image send failed %s: %s", phone, exc)
+            save_message(db, session_id, "ai", share["text"])
+            try:
+                await send_text_message(phone, share["text"], preview_url=True)
+            except Exception as exc:
+                logger.error("confirmed product text send failed %s: %s", phone, exc)
+            try:
+                cta = await generate_order_cta(history_for_context, language=language, product_name=share.get("product", ""))
+                if cta:
+                    wa_resp = await send_text_message(phone, cta)
+                    save_message(db, session_id, "ai", cta, wa_message_id=_wa_message_id(wa_resp), meta={"flow": "order_cta"})
+            except Exception as exc:
+                logger.error("confirmed product cta send failed %s: %s", phone, exc)
+            return share["text"]
 
     # ── Route: order management ────────────────────────────────────────────────
     if not awaiting_field and is_order_management_intent(intent):
@@ -641,14 +680,9 @@ async def handle_inbound_message(
     # message names no real product (a detail answer / "haan"), generate_product_reply
     # returns None and we fall through to the AI to continue/place the order.
     address_block = _looks_like_address_block(text_body)
-    if not awaiting_field and not address_block and intent in ("product_browse", "place_order"):
+    if not awaiting_field and not address_block and not support_query and intent in ("product_browse", "place_order"):
         logger.info("handle_inbound: %s intent — trying product card+photo for %r", intent, text_body[:60])
         share = None
-        pending = _pending_product_confirm(db, session_id)
-        if pending and _is_affirmative(text_body):
-            from services.ai_service import product_card_by_sku
-            share = await product_card_by_sku(pending.get("sku"))
-
         if share is None:
             product_result = await generate_product_reply(text_body)
             if product_result and product_result.get("sku"):

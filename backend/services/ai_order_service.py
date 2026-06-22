@@ -124,36 +124,36 @@ def place_ai_order(order_data: dict, db: Session) -> dict:
     # If an unpaid AI order for this customer + product was created in the last
     # 24h, return it instead of creating a duplicate (the AI sometimes re-collects
     # details for someone who already ordered).
+    # Any-channel dedup: if this customer already ordered the SAME product in the
+    # last 24h (offline, AI, web — paid or unpaid), don't place a duplicate.
     existing = db.execute(
         text("""
-            SELECT o.order_id, o.total_amount
+            SELECT o.order_id, o.total_amount, o.payment_status
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.order_id
             WHERE o.offline_customer_id = :ocid
               AND oi.product_id = :pid
-              AND o.channel = :chan
-              AND LOWER(o.payment_status) NOT IN ('paid','success','accepted')
               AND o.created_at >= NOW() - INTERVAL 24 HOUR
             ORDER BY o.created_at DESC
             LIMIT 1
         """),
-        {"ocid": offline_customer_id, "pid": product_id, "chan": AI_CHANNEL},
+        {"ocid": offline_customer_id, "pid": product_id},
     ).fetchone()
     if existing:
-        logger.info("AI order dedup: existing unpaid order %s for customer %s product %s — not re-placing",
-                    existing.order_id, offline_customer_id, product_id)
+        paid = str(existing.payment_status or "").lower() in ("paid", "success", "accepted")
+        logger.info("AI order dedup: existing order %s (paid=%s) for customer %s product %s — not re-placing",
+                    existing.order_id, paid, offline_customer_id, product_id)
+        msg = (
+            f"Aapne aaj hi ye order {existing.order_id} place kiya hai (payment ho chuka hai) ✅ "
+            f"Agar aapko ek aur chahiye to hamari team aapse confirm kar legi 🙏"
+            if paid else
+            f"Aapka order {existing.order_id} pehle se placed hai aur payment pending hai. "
+            f"Payment complete kar dein to hum turant dispatch kar denge 🙏"
+        )
         return {
-            "success":      True,
-            "duplicate":    True,
-            "order_id":     existing.order_id,
-            "product_name": product_name,
-            "unit_price":   float(unit_price),
-            "quantity":     quantity,
-            "total":        float(existing.total_amount or total_amount),
-            "message": (
-                f"Aapka order {existing.order_id} pehle se placed hai aur payment pending hai. "
-                f"Payment complete kar dein to hum turant dispatch kar denge 🙏"
-            ),
+            "success": True, "duplicate": True, "order_id": existing.order_id,
+            "product_name": product_name, "unit_price": float(unit_price), "quantity": quantity,
+            "total": float(existing.total_amount or total_amount), "message": msg,
         }
 
     # ── 3. State lookup (mirrors wix_sync find_state_id) ──────────────────────

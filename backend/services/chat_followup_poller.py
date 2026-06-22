@@ -125,7 +125,8 @@ def _has_buying_intent(db: Session, session_id: int) -> bool:
             WHERE session_id = :sid
               AND (
                 JSON_UNQUOTE(JSON_EXTRACT(meta, '$.flow')) IN
-                    ('product_image', 'ai_order_json', 'operator_product_share', 'ai_order_placed')
+                    ('product_image', 'ai_order_json', 'operator_product_share', 'ai_order_placed',
+                     'product_confirm', 'order_cta')
                 OR message LIKE '%🔗%'
               )
             LIMIT 1

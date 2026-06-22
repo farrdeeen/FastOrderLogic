@@ -398,7 +398,7 @@ def _get_cached_training_doc() -> str:
             lines = doc.splitlines()
             if lines and lines[0].startswith("# FILENAME:"):
                 doc = "\n".join(lines[1:]).strip()
-        _cached_training_doc = doc[:8000]
+        _cached_training_doc = doc[:16000]
         _training_doc_mtime = mtime
         logger.info("Training doc loaded into AI prompt cache; updated_at=%s", mtime)
         return _cached_training_doc
@@ -911,7 +911,7 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         items = [
             p for p in catalogue
             if (p.get("category") or "").lower() in wanted and p.get("in_stock") is not False
-        ][:8]
+        ][:12]
         if len(items) > 1:
             intro = ("Ye models available hain, konsa chahiye?"
                      if hinglish else "Here are the models available — which one would you like?")
