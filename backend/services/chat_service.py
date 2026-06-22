@@ -60,6 +60,9 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_ORDER_CONFIRMED = "order_confirmation"
 _TEMPLATE_PAYMENT_PENDING = "payment_pending"
 _RAZORPAY_BASE = os.getenv("RAZORPAY_BASE_URL", "https://rzp.io/l")
+# Flat delivery charge shown to the customer — mirrors products.delivery_cost,
+# which the order flow actually charges (currently a uniform ₹90 across products).
+_DELIVERY_CHARGE = os.getenv("AI_DELIVERY_CHARGE", "90")
 _CHAT_SESSION_COLUMNS_READY = False
 
 
@@ -645,28 +648,53 @@ async def handle_inbound_message(
         from services.ai_service import product_card_by_sku, generate_order_cta
         share = await product_card_by_sku(pending.get("sku"))
         if share:
-            for img_url in (share.get("images") or [])[:3]:
+            # ONE primary photo, with a caption carrying the price, the ₹delivery
+            # charge and a style-matched order-confirmation CTA.
+            primary = next(iter(share.get("images") or []), None)
+            name    = share.get("product", "")
+            price   = share.get("price", "")
+            try:
+                cta = await generate_order_cta(history_for_context, language=language, product_name=name)
+            except Exception as exc:
+                logger.warning("confirmed product cta failed (%s) — using fallback", exc)
+                cta = ""
+            if not cta:
+                cta = ("Aapke liye order place kar dun? Confirm karein 🙂"
+                       if (language or "en").lower() != "en"
+                       else "Shall I place your order? Please confirm 🙂")
+
+            caption_lines = [f"📦 *{name}*", ""]
+            if price:
+                caption_lines.append(f"💰 Price: {price}")
+            caption_lines.append(f"🚚 Delivery: ₹{_DELIVERY_CHARGE}")
+            caption_lines += ["", cta]
+            caption = "\n".join(caption_lines)
+
+            sku_meta = pending.get("sku")
+            if primary:
                 try:
-                    wa_resp = await asyncio.wait_for(send_image_message(phone, img_url), timeout=10.0)
-                    save_message(db, session_id, "ai", "[image] Product photo", wa_message_id=_wa_message_id(wa_resp),
-                                 meta={"flow": "product_image", "media_type": "image", "mime_type": "image/jpeg",
-                                       "media_url": img_url, "download_url": img_url})
-                    await asyncio.sleep(0.3)
+                    wa_resp = await asyncio.wait_for(
+                        send_image_message(phone, primary, caption=caption), timeout=12.0
+                    )
+                    save_message(
+                        db, session_id, "ai", caption,
+                        wa_message_id=_wa_message_id(wa_resp),
+                        meta={"flow": "product_confirm_share", "sku": sku_meta,
+                              "media_type": "image", "mime_type": "image/jpeg",
+                              "media_url": primary, "download_url": primary},
+                    )
+                    return caption
                 except Exception as exc:
-                    logger.error("confirmed product image send failed %s: %s", phone, exc)
-            save_message(db, session_id, "ai", share["text"])
+                    logger.error("confirmed product image+caption send failed %s: %s", phone, exc)
+            # No image (or send failed) → still deliver the caption as text.
             try:
-                await send_text_message(phone, share["text"], preview_url=True)
+                wa_resp = await send_text_message(phone, caption)
+                save_message(db, session_id, "ai", caption,
+                             wa_message_id=_wa_message_id(wa_resp),
+                             meta={"flow": "product_confirm_share", "sku": sku_meta})
             except Exception as exc:
-                logger.error("confirmed product text send failed %s: %s", phone, exc)
-            try:
-                cta = await generate_order_cta(history_for_context, language=language, product_name=share.get("product", ""))
-                if cta:
-                    wa_resp = await send_text_message(phone, cta)
-                    save_message(db, session_id, "ai", cta, wa_message_id=_wa_message_id(wa_resp), meta={"flow": "order_cta"})
-            except Exception as exc:
-                logger.error("confirmed product cta send failed %s: %s", phone, exc)
-            return share["text"]
+                logger.error("confirmed product caption send failed %s: %s", phone, exc)
+            return caption
 
     # ── Route: order management ────────────────────────────────────────────────
     if not awaiting_field and is_order_management_intent(intent):

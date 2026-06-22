@@ -973,7 +973,13 @@ async def product_card_by_sku(sku: str) -> Optional[dict]:
         return None
     name = (p.get("name") or "").strip()
     images = [i for i in (await get_product_images_by_sku(sku, product_name=name) or [])][:2]
-    return {"text": format_product_card(p), "images": images, "product": name, "sku": sku}
+    return {
+        "text": format_product_card(p),
+        "images": images,
+        "product": name,
+        "sku": sku,
+        "price": p.get("effective_price") or p.get("price_display") or "",
+    }
 
 
 async def generate_model_confirm(history: list[dict], product_name: str) -> str:
