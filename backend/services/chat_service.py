@@ -209,6 +209,41 @@ def _looks_like_address_block(message: str) -> bool:
     return hits >= 2 or t.count("\n") >= 3
 
 
+_AFFIRMATIVE = {
+    "haan", "han", "ha", "ji", "ji haan", "haan ji", "yes", "y", "ya", "yep", "yeah",
+    "ok", "okay", "sahi", "sahi hai", "theek", "thik", "bilkul", "confirm", "correct",
+    "right", "हाँ", "हां", "हा", "जी",
+}
+
+
+def _is_affirmative(message: str) -> bool:
+    t = re.sub(r"[^a-zऀ-ॿ ]", "", (message or "").lower()).strip()
+    if not t:
+        return False
+    if t in _AFFIRMATIVE:
+        return True
+    toks = t.split()
+    return any(w in toks for w in ("haan", "yes", "confirm", "bilkul", "sahi", "ok", "okay", "theek", "bhejo", "bhej"))
+
+
+def _pending_product_confirm(db: Session, session_id: int) -> Optional[dict]:
+    """If the last AI message asked the customer to confirm a model, return its sku/name."""
+    import json as _json
+    row = db.execute(
+        text("SELECT meta FROM chat_messages WHERE session_id = :sid AND sender IN ('ai','system') ORDER BY timestamp DESC LIMIT 1"),
+        {"sid": session_id},
+    ).first()
+    if not row or not row[0]:
+        return None
+    try:
+        meta = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    except Exception:
+        return None
+    if isinstance(meta, dict) and meta.get("flow") == "product_confirm" and meta.get("sku"):
+        return {"sku": meta.get("sku"), "product": meta.get("product", "")}
+    return None
+
+
 def _awaiting_personal_field(history: list[dict]) -> bool:
     """True when the last substantive AI turn asked for a personal order field."""
     for turn in reversed(history):
@@ -608,11 +643,32 @@ async def handle_inbound_message(
     address_block = _looks_like_address_block(text_body)
     if not awaiting_field and not address_block and intent in ("product_browse", "place_order"):
         logger.info("handle_inbound: %s intent — trying product card+photo for %r", intent, text_body[:60])
-        product_result = await generate_product_reply(text_body)
+        share = None
+        pending = _pending_product_confirm(db, session_id)
+        if pending and _is_affirmative(text_body):
+            from services.ai_service import product_card_by_sku
+            share = await product_card_by_sku(pending.get("sku"))
 
-        if product_result:
-            text_msg = product_result["text"]
-            images   = product_result.get("images") or []
+        if share is None:
+            product_result = await generate_product_reply(text_body)
+            if product_result and product_result.get("sku"):
+                # Specific model named → CONFIRM the model before sharing photo+card.
+                from services.ai_service import generate_model_confirm
+                confirm = await generate_model_confirm(history_for_context, product_result.get("product", ""))
+                save_message(db, session_id, "ai", confirm,
+                             meta={"flow": "product_confirm", "sku": product_result["sku"],
+                                   "product": product_result.get("product", "")})
+                try:
+                    await send_text_message(phone, confirm)
+                except Exception as exc:
+                    logger.error("Model confirm send failed %s: %s", phone, exc)
+                return confirm
+            if product_result:
+                share = product_result   # category list (no sku) → show directly
+
+        if share:
+            text_msg = share["text"]
+            images   = share.get("images") or []
 
             logger.info(
                 "handle_inbound: product reply ready — %d image(s) to send for phone=%s",
@@ -661,7 +717,7 @@ async def handle_inbound_message(
                 try:
                     from services.ai_service import generate_order_cta
                     cta = await generate_order_cta(history_for_context, language=language,
-                                                   product_name=product_result.get("product", ""))
+                                                   product_name=share.get("product", ""))
                     if cta:
                         wa_resp = await send_text_message(phone, cta)
                         save_message(db, session_id, "ai", cta,

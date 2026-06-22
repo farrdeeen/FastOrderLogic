@@ -958,7 +958,39 @@ async def generate_product_reply(user_query: str) -> Optional[dict]:
         "generate_product_reply: returning best product %r, %d image(s) for query=%r",
         name, len(images), user_query,
     )
-    return {"text": text, "images": images, "product": name}
+    return {"text": text, "images": images, "product": name, "sku": (best.get("sku") or "").strip()}
+
+
+async def product_card_by_sku(sku: str) -> Optional[dict]:
+    """Build the card + photos for an exact SKU (used after the customer confirms the model)."""
+    from services.product_catalogue import get_catalogue, format_product_card, get_product_images_by_sku
+    sku = (sku or "").strip()
+    if not sku:
+        return None
+    cat = await get_catalogue()
+    p = next((x for x in cat if (x.get("sku") or "").strip() == sku), None)
+    if not p:
+        return None
+    name = (p.get("name") or "").strip()
+    images = [i for i in (await get_product_images_by_sku(sku, product_name=name) or [])][:2]
+    return {"text": format_product_card(p), "images": images, "product": name, "sku": sku}
+
+
+async def generate_model_confirm(history: list[dict], product_name: str) -> str:
+    """Short message confirming the model BEFORE sharing the photo+card, in the customer's style."""
+    system = (
+        "You are Aria, WhatsApp sales agent for mTm DaSh Store. Write EXACTLY ONE very short message asking the "
+        f"customer to confirm they mean *{product_name}* before you share its photo and details. "
+        "Reply in the SAME language AND script as the customer's recent messages (Hinglish/romanized if they used "
+        "it; do NOT switch to formal English or Devanagari unless they did). Output only the message."
+    )
+    try:
+        msg = await _call_openrouter(system, history[-6:], "(write the confirm question now)")
+        if msg:
+            return msg.strip()
+    except Exception as exc:
+        logger.warning("generate_model_confirm failed (%s) — fallback", exc)
+    return f"Aap *{product_name}* ki baat kar rahe hain? Confirm karein to main photo aur details bhej dun 🙂"
 
 
 async def generate_order_cta(history: list[dict], language: str = "en", product_name: str = "") -> str:

@@ -144,6 +144,20 @@ async def _send_followup(db: Session, session: dict) -> None:
     phone = session["phone_number"]
     language = session.get("preferred_language") or "en"
 
+    # ATOMIC CLAIM — prevents two workers (or two sessions of the same phone) from
+    # both sending. Only the worker whose UPDATE actually changes the row proceeds.
+    claimed = db.execute(
+        text("""
+            UPDATE chat_sessions SET last_followup_at = NOW()
+            WHERE id = :sid
+              AND (last_followup_at IS NULL OR last_followup_at < :lua)
+        """),
+        {"sid": sid, "lua": session.get("last_user_at")},
+    ).rowcount
+    db.commit()
+    if not claimed:
+        return
+
     order = _order_context(db, phone)
     if order and str(order.get("payment_status") or "").lower() not in _PAID_STATES:
         kind, order_id = "payment_reminder", order.get("order_id")
