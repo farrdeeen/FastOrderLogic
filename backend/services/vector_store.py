@@ -41,6 +41,9 @@ _EMBEDDER = os.getenv("RAG_EMBEDDER", "fastembed").strip().lower()
 _FASTEMBED_MODEL = os.getenv(
     "RAG_EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 )
+# Where FastEmbed downloads/caches the model. Defaults under the Chroma dir so it
+# lives wherever Chroma is writable (the service user's HOME may not be).
+_EMBED_CACHE = os.getenv("RAG_EMBED_CACHE") or str(_CHROMA_DIR / ".fastembed_cache")
 
 # The only collection names the rest of the app (and the admin API) may touch.
 PRODUCT_KNOWLEDGE = "product_knowledge"
@@ -80,7 +83,11 @@ class _FastEmbedFn:
     def __init__(self, model_name: str):
         from fastembed import TextEmbedding  # imported lazily; raises if missing
         self._model_name = model_name
-        self._model = TextEmbedding(model_name=model_name)
+        try:
+            Path(_EMBED_CACHE).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        self._model = TextEmbedding(model_name=model_name, cache_dir=_EMBED_CACHE)
 
     # Chroma calls the function with a list of strings and expects a list of vectors.
     def __call__(self, input):  # noqa: A002 (Chroma's required param name)
