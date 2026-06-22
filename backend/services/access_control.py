@@ -11,6 +11,7 @@ ALL_PAGE_IDS = [
     "device-entry",
     "serial-search",
     "chat",
+    "knowledge",
 ]
 
 PAGE_ALIASES = {
@@ -20,6 +21,7 @@ PAGE_ALIASES = {
     "device-entry": {"device-entry", "device_entry", "deviceentry", "bulk-device"},
     "serial-search": {"serial-search", "serial_search", "serialsearch", "serial"},
     "chat": {"chat", "support", "whatsapp"},
+    "knowledge": {"knowledge", "kb", "rag", "knowledge-base", "training"},
 }
 
 ALIAS_TO_PAGE = {
