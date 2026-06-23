@@ -229,6 +229,46 @@ def _is_affirmative(message: str) -> bool:
     return any(w in toks for w in ("haan", "yes", "confirm", "bilkul", "sahi", "ok", "okay", "theek", "bhejo", "bhej"))
 
 
+def _looks_confirmation(message: str) -> bool:
+    """Broader than _is_affirmative — also catches 'address confirmed', 'yes correct',
+    'confirmed', 'done' etc. used when replying to a template/confirm prompt."""
+    t = (message or "").lower()
+    if _is_affirmative(message):
+        return True
+    return any(w in t for w in ("confirm", "correct", "address", "right", "done", "sahi", "thik", "theek"))
+
+
+def _template_reply_context(db: Session, session_id: int) -> Optional[str]:
+    """If the customer is replying inside a recently-sent template/confirmation
+    context, return 'confirmed_dispatch' (order/address confirmation already done →
+    reassure that dispatch is coming) or 'payment_pending' (nudge to pay). Returns
+    None if the recent context is a normal chat. Scans the last few outbound turns
+    because a system note (e.g. payment_received) may sit between the template and
+    the customer's reply."""
+    import json as _json
+    rows = db.execute(
+        text("SELECT meta FROM chat_messages WHERE session_id=:s AND sender IN ('ai','system') "
+             "ORDER BY timestamp DESC LIMIT 5"),
+        {"s": session_id},
+    ).fetchall()
+    for row in rows:
+        if not row[0]:
+            continue
+        try:
+            meta = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        except Exception:
+            continue
+        flow = (meta.get("flow") or "") if isinstance(meta, dict) else ""
+        if flow in ("order_confirmation_template", "address_confirm", "payment_received", "order_confirmation"):
+            return "confirmed_dispatch"
+        if flow in ("payment_pending_template", "payment_link", "payment_qr"):
+            return "payment_pending"
+        # A fresh product card / model-confirm means the context has moved on.
+        if flow in ("product_confirm", "product_confirm_share", "product_image", "order_cta"):
+            return None
+    return None
+
+
 _SUPPORT_HINTS = (
     "rd service", "rd serive", "rd registration", "driver", "install", "setup", "set up",
     "activation", "activate", "configure", "configuration", "management client", "how to use",
@@ -712,6 +752,38 @@ async def handle_inbound_message(
             except Exception as exc:
                 logger.error("confirmed product caption send failed %s: %s", phone, exc)
             return caption
+
+    # ── Route: reply to a sent template (order_confirmation / payment_pending) ──
+    # The customer is responding inside an existing order's context — do NOT start
+    # or re-place an order. Confirm + reassure, or nudge payment.
+    if not awaiting_field and _looks_confirmation(text_body):
+        tctx = _template_reply_context(db, session_id)
+        if tctx == "confirmed_dispatch":
+            reply = ("Dhanyavaad! Aapka order aur address confirm ho gaya hai ✅ "
+                     "Kripya thodi der pratiksha karein — hamari dispatch team jald hi "
+                     "aapko dispatch aur tracking details yahin bhej degi. 🙏"
+                     if (language or "en").lower() != "en"
+                     else "Thank you! Your order and address are confirmed ✅ "
+                          "Please wait a little while — our dispatch team will share your "
+                          "dispatch and tracking details here shortly. 🙏")
+            save_message(db, session_id, "ai", reply, meta={"flow": "address_confirmed_ack"})
+            try:
+                await send_text_message(phone, reply)
+            except Exception as exc:
+                logger.error("confirmed-dispatch ack send failed %s: %s", phone, exc)
+            return reply
+        if tctx == "payment_pending":
+            reply = ("Aapka order place ho chuka hai 🙏 Kripya payment complete kar dein "
+                     "taaki hum aaj hi aapka hardware dispatch kar sakein."
+                     if (language or "en").lower() != "en"
+                     else "Your order is placed 🙏 Please complete the payment so we can "
+                          "dispatch your hardware the same day.")
+            save_message(db, session_id, "ai", reply, meta={"flow": "payment_nudge"})
+            try:
+                await send_text_message(phone, reply)
+            except Exception as exc:
+                logger.error("payment-nudge send failed %s: %s", phone, exc)
+            return reply
 
     # ── Route: order management ────────────────────────────────────────────────
     if not awaiting_field and is_order_management_intent(intent):

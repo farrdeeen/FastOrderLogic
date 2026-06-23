@@ -30,6 +30,70 @@ logger = logging.getLogger(__name__)
 
 _TRAINING_DOC = Path(os.getenv("TRAINING_DOC_PATH", "data/training_doc.txt"))
 _KB_DIR = Path(os.getenv("RAG_KB_DIR", "data/kb"))
+# Persistent labeled-document store (lives next to the Chroma data so it survives
+# deploys). Each file is named "<label>__<original-filename>".
+_DOCS_DIR = Path(
+    os.getenv("RAG_DOCS_DIR")
+    or str(Path(os.getenv("RAG_CHROMA_DIR", "data/chroma")) / "kb_docs")
+)
+_DOC_EXTS = (".txt", ".md", ".pdf")
+
+
+def _split_label(stored_name: str) -> tuple[str, str]:
+    label, sep, orig = stored_name.partition("__")
+    if not sep:
+        return "document", stored_name
+    return (label or "document"), (orig or stored_name)
+
+
+# ── Training doc read/write (for the dashboard editor) ────────────────────────
+
+def read_training_doc() -> str:
+    try:
+        return _TRAINING_DOC.read_text(encoding="utf-8", errors="ignore") if _TRAINING_DOC.exists() else ""
+    except Exception as exc:
+        logger.warning("read_training_doc failed: %s", exc)
+        return ""
+
+
+def write_training_doc(content: str) -> None:
+    _TRAINING_DOC.parent.mkdir(parents=True, exist_ok=True)
+    _TRAINING_DOC.write_text(content or "", encoding="utf-8")
+
+
+# ── Labeled document management (for the dashboard uploader) ──────────────────
+
+def list_documents() -> list[dict]:
+    if not _DOCS_DIR.exists():
+        return []
+    out: list[dict] = []
+    for f in sorted(_DOCS_DIR.glob("*")):
+        if f.suffix.lower() not in _DOC_EXTS:
+            continue
+        label, orig = _split_label(f.name)
+        out.append({"name": f.name, "label": label, "filename": orig, "size": f.stat().st_size})
+    return out
+
+
+def save_document(label: str, filename: str, data: bytes) -> dict:
+    _DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    safe_label = re.sub(r"[^a-z0-9_-]+", "-", (label or "document").lower()).strip("-") or "document"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename or "doc.txt")
+    if Path(safe_name).suffix.lower() not in _DOC_EXTS:
+        safe_name += ".txt"
+    stored = f"{safe_label}__{safe_name}"
+    (_DOCS_DIR / stored).write_bytes(data)
+    return {"name": stored, "label": safe_label, "filename": safe_name}
+
+
+def delete_document(name: str) -> bool:
+    if "/" in name or "\\" in name or ".." in name:
+        return False
+    f = _DOCS_DIR / name
+    if not f.exists():
+        return False
+    f.unlink()
+    return True
 
 # Extra retrieval hints per catalogue category — so a Hinglish browse term like
 # "fingerprint" / "anguthha" / "aeps" still pulls the right product docs even when
@@ -227,27 +291,35 @@ def seed_faq_policy() -> int:
     if not vs.is_available():
         return 0
 
-    sources: list[tuple[str, str]] = []  # (source_name, raw_text)
+    sources: list[tuple[str, str, str]] = []  # (source_name, raw_text, label)
     if _TRAINING_DOC.exists():
         try:
-            sources.append((_TRAINING_DOC.name, _TRAINING_DOC.read_text(encoding="utf-8", errors="ignore")))
+            sources.append((_TRAINING_DOC.name, _TRAINING_DOC.read_text(encoding="utf-8", errors="ignore"), "store_policy"))
         except Exception as exc:
             logger.warning("seed_faq_policy: training doc read failed: %s", exc)
-    if _KB_DIR.exists():
-        for f in sorted(_KB_DIR.glob("*.txt")):
+
+    def _add_dir(d: Path, label_from_name: bool):
+        if not d.exists():
+            return
+        for f in sorted(d.glob("*")):
+            if f.suffix.lower() not in _DOC_EXTS:
+                continue
+            label = _split_label(f.name)[0] if label_from_name else "kb"
             try:
-                sources.append((f.name, f.read_text(encoding="utf-8", errors="ignore")))
+                raw = _pdf_text(f) if f.suffix.lower() == ".pdf" else f.read_text(encoding="utf-8", errors="ignore")
             except Exception as exc:
                 logger.warning("seed_faq_policy: %s read failed: %s", f, exc)
-        for f in sorted(_KB_DIR.glob("*.pdf")):
-            txt = _pdf_text(f)
-            if txt:
-                sources.append((f.name, txt))
+                continue
+            if raw:
+                sources.append((f.name, raw, label))
+
+    _add_dir(_KB_DIR, label_from_name=False)
+    _add_dir(_DOCS_DIR, label_from_name=True)   # labeled dashboard uploads
 
     vs.recreate_collection(vs.FAQ_POLICY)
     ids, docs, metas = [], [], []
     seen: set[str] = set()
-    for source_name, raw in sources:
+    for source_name, raw, label in sources:
         for chunk in _chunk_text(raw):
             cid = f"faq::{_hash8(chunk)}"
             if cid in seen:
@@ -255,7 +327,7 @@ def seed_faq_policy() -> int:
             seen.add(cid)
             ids.append(cid)
             docs.append(chunk)
-            metas.append({"source": source_name})
+            metas.append({"source": source_name, "label": label})
 
     # Per-product FAQs from products.faqs JSON.
     faq_n = 0

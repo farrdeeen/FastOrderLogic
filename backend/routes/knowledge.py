@@ -17,7 +17,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
 
 from auth.clerk_auth import get_current_user as require_user
@@ -39,6 +39,15 @@ _COLLECTION_LABELS = {
 class EntryUpdate(BaseModel):
     document: Optional[str] = None
     metadata: Optional[dict] = None
+
+
+class TrainingDocUpdate(BaseModel):
+    content: str
+
+
+async def _reseed_faq_only():
+    """Rebuild just the FAQ/policy collection (training doc + labeled docs) off the loop."""
+    await asyncio.to_thread(ki.seed_faq_policy)
 
 
 def _require_collection(collection: str) -> str:
@@ -117,6 +126,51 @@ def delete_entry(collection: str, entry_id: str, _=Depends(require_user)):
         raise HTTPException(status_code=404, detail="Entry not found")
     n = vs.delete(collection, [entry_id])
     return {"success": bool(n), "id": entry_id}
+
+
+# ── Training document editor ──────────────────────────────────────────────────
+
+@router.get("/training-doc")
+def get_training_doc(_=Depends(require_user)):
+    return {"content": ki.read_training_doc()}
+
+
+@router.put("/training-doc")
+async def put_training_doc(body: TrainingDocUpdate, _=Depends(require_user)):
+    ki.write_training_doc(body.content)
+    await _reseed_faq_only()
+    return {"success": True, "length": len(body.content or ""), "faq_count": vs.count(vs.FAQ_POLICY)}
+
+
+# ── Labeled document upload (company details, policies, etc.) ──────────────────
+
+@router.get("/documents")
+def list_documents(_=Depends(require_user)):
+    return {"documents": ki.list_documents()}
+
+
+@router.post("/documents")
+async def upload_document(
+    file: UploadFile = File(...),
+    label: str = Form("document"),
+    _=Depends(require_user),
+):
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="File is empty")
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 8 MB)")
+    saved = ki.save_document(label, file.filename or "doc.txt", data)
+    await _reseed_faq_only()
+    return {"success": True, **saved, "faq_count": vs.count(vs.FAQ_POLICY)}
+
+
+@router.delete("/documents/{name}")
+async def delete_document(name: str, _=Depends(require_user)):
+    if not ki.delete_document(name):
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _reseed_faq_only()
+    return {"success": True, "name": name}
 
 
 @router.post("/reseed")

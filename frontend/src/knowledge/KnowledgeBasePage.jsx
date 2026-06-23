@@ -30,6 +30,11 @@ import {
   updateKnowledgeEntry,
   deleteKnowledgeEntry,
   reseedKnowledge,
+  getTrainingDoc,
+  saveTrainingDoc,
+  listDocuments,
+  uploadDocument,
+  deleteDocument,
 } from "./knowledgeApi";
 
 const COLLECTIONS = [
@@ -165,6 +170,121 @@ function EntryCard({ collection, entry, onDelete, onSave }) {
   );
 }
 
+function DocsAndTrainingPanel({ onChanged }) {
+  const [doc, setDoc] = useState("");
+  const [docLoaded, setDocLoaded] = useState(false);
+  const [savingDoc, setSavingDoc] = useState(false);
+  const [docs, setDocs] = useState([]);
+  const [label, setLabel] = useState("");
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const flash = (text, type = "success") => {
+    setMsg({ text, type });
+    setTimeout(() => setMsg(null), 3500);
+  };
+
+  useEffect(() => {
+    getTrainingDoc().then((c) => { setDoc(c); setDocLoaded(true); }).catch(() => setDocLoaded(true));
+    listDocuments().then(setDocs).catch(() => {});
+  }, []);
+
+  const handleSaveDoc = async () => {
+    setSavingDoc(true);
+    try {
+      await saveTrainingDoc(doc);
+      flash("Training document saved & re-indexed.");
+      onChanged?.();
+    } catch (e) {
+      flash(e?.response?.data?.detail || "Save failed.", "error");
+    } finally {
+      setSavingDoc(false);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!file) return flash("Choose a file first.", "error");
+    setUploading(true);
+    try {
+      await uploadDocument(file, label || "document");
+      flash("Document uploaded & indexed.");
+      setFile(null); setLabel("");
+      setDocs(await listDocuments());
+      onChanged?.();
+    } catch (e) {
+      flash(e?.response?.data?.detail || "Upload failed.", "error");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDeleteDoc = async (name) => {
+    if (!window.confirm("Remove this document from the knowledge base?")) return;
+    try {
+      await deleteDocument(name);
+      setDocs(await listDocuments());
+      onChanged?.();
+      flash("Document removed.");
+    } catch { flash("Delete failed.", "error"); }
+  };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mb: 2, borderColor: "#e5e7eb" }}>
+      {msg && <Box mb={1.5}><Banner msg={msg} /></Box>}
+      <Typography sx={{ fontSize: 14, fontWeight: 800, mb: 1, color: "#334155" }}>
+        Core Training Document
+      </Typography>
+      <TextField
+        value={doc}
+        onChange={(e) => setDoc(e.target.value)}
+        placeholder={docLoaded ? "Training document…" : "Loading…"}
+        fullWidth multiline minRows={6} maxRows={16}
+        InputProps={{ sx: { fontFamily: "monospace", fontSize: 12.5 } }}
+      />
+      <Box sx={{ textAlign: "right", mt: 1 }}>
+        <Button variant="contained" size="small" onClick={handleSaveDoc} disabled={savingDoc || !docLoaded}>
+          {savingDoc ? "Saving…" : "Save training document"}
+        </Button>
+      </Box>
+
+      <Typography sx={{ fontSize: 14, fontWeight: 800, mt: 2.5, mb: 1, color: "#334155" }}>
+        Labeled Documents (company details, policies, etc.)
+      </Typography>
+      <Typography sx={{ fontSize: 12, color: "#64748b", mb: 1 }}>
+        Upload a .txt / .md / .pdf with a purpose label. The bot will pull from it when relevant
+        (e.g. label <em>company_details</em> → answers about your address/company).
+      </Typography>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <TextField size="small" placeholder="label e.g. company_details" value={label}
+          onChange={(e) => setLabel(e.target.value)} sx={{ minWidth: 200 }} />
+        <Button variant="outlined" component="label" size="small">
+          {file ? file.name.slice(0, 22) : "Choose file"}
+          <input hidden type="file" accept=".txt,.md,.pdf"
+            onChange={(e) => setFile(e.target.files?.[0] || null)} />
+        </Button>
+        <Button variant="contained" size="small" onClick={handleUpload} disabled={uploading || !file}>
+          {uploading ? "Uploading…" : "Upload"}
+        </Button>
+      </Stack>
+      {docs.length > 0 && (
+        <Stack spacing={0.5} mt={1.5}>
+          {docs.map((d) => (
+            <Stack key={d.name} direction="row" alignItems="center" spacing={1}
+              sx={{ borderTop: "1px solid #f1f5f9", pt: 0.5 }}>
+              <Chip size="small" label={d.label} color="primary" />
+              <Typography sx={{ fontSize: 12.5, flex: 1, color: "#475569" }}>{d.filename}</Typography>
+              <IconButton size="small" color="error" onClick={() => handleDeleteDoc(d.name)}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+          ))}
+        </Stack>
+      )}
+    </Paper>
+  );
+}
+
 export default function KnowledgeBasePage() {
   const [stats, setStats] = useState(null);
   const [collection, setCollection] = useState("sales_learning");
@@ -284,6 +404,10 @@ export default function KnowledgeBasePage() {
               "Knowledge base is unavailable on the server (chromadb/fastembed not installed). The bot is using keyword fallback.",
           }}
         />
+      )}
+
+      {!unavailable && (
+        <DocsAndTrainingPanel onChanged={() => { loadStats(); loadItems(collection, query); }} />
       )}
 
       {/* Collection tabs */}
