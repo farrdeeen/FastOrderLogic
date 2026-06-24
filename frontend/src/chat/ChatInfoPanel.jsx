@@ -8,6 +8,7 @@ import { Box, Typography } from "@mui/material";
 import { X, ChevronRight, Package, Flag, Truck, Save, ReceiptText } from "lucide-react";
 import {
   fetchChatLastOrder,
+  fetchSessionAiCost,
   resolveSession,
   saveChatContact,
   sendDispatchSlip,
@@ -529,6 +530,7 @@ export default function ChatInfoPanel({
   const [lastOrder, setLastOrder] = useState(null);
   const [lastOrderLoading, setLastOrderLoading] = useState(false);
   const [lastOrderError, setLastOrderError] = useState(null);
+  const [aiCost, setAiCost] = useState(null);
 
   const currentFlag = activeFlag ?? chat?.flag ?? null;
   const isResolved = currentFlag === "resolved" || chat?.status === "resolved";
@@ -544,6 +546,20 @@ export default function ChatInfoPanel({
     setLastOrder(null);
     setLastOrderError(null);
   }, [chat?.id, chat?.flag, chat?.linked_order_id]);
+
+  useEffect(() => {
+    if (!chat?.id) {
+      setAiCost(null);
+      return;
+    }
+    let live = true;
+    fetchSessionAiCost(chat.id)
+      .then((d) => live && setAiCost(d))
+      .catch(() => live && setAiCost(null));
+    return () => {
+      live = false;
+    };
+  }, [chat?.id]);
 
   useEffect(() => {
     if (!chat?.id) return undefined;
@@ -881,6 +897,12 @@ export default function ChatInfoPanel({
               : "—"
           }
         />
+        {aiCost && (aiCost.cost_usd > 0 || aiCost.completion_tokens > 0) && (
+          <InfoRow
+            label="AI cost (this chat)"
+            value={`$${Number(aiCost.cost_usd || 0).toFixed(4)}`}
+          />
+        )}
         {chat.unread > 0 && (
           <InfoRow
             label="Unread messages"

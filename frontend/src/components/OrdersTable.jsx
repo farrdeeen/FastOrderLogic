@@ -179,10 +179,13 @@ export default function OrdersTable({
       if (channel) {
         const ch = (o.channel || "").trim().toLowerCase();
         const target = channel.toLowerCase();
-        if (target === "online") {
-          if (!["online", "wix", "website"].includes(ch)) return false;
-        } else {
-          if (ch !== target) return false;
+        if (target === "mtm-store") {
+          // mTm Store website orders are stored as mtm-store / online / website.
+          if (!["mtm-store", "online", "website"].includes(ch)) return false;
+        } else if (target === "ai_assistant") {
+          if (ch !== "ai_assistant") return false;
+        } else if (ch !== target) {
+          return false;
         }
       }
       if (date_from || date_to) {

@@ -70,6 +70,17 @@ _INBOUND_DEBOUNCE = float(os.getenv("INBOUND_DEBOUNCE_SECONDS", "2"))
 _INBOUND_LATEST: dict[int, str] = {}
 
 
+def _email_order_bg(order_id: str) -> None:
+    """Send the new-order email on a fresh DB session (runs in a worker thread)."""
+    from database import SessionLocal
+    from services.email_service import send_order_email
+    db = SessionLocal()
+    try:
+        send_order_email(db, order_id)
+    finally:
+        db.close()
+
+
 def _emit_typing(session_id: int) -> None:
     """Broadcast an 'AI is typing' hint to the dashboard while the AI composes."""
     try:
@@ -1046,6 +1057,12 @@ async def handle_inbound_message(
                 logger.error("Order confirm send failed %s: %s", phone, exc)
 
             if result.get("success") and order_id and not result.get("duplicate"):
+                # Email the customer + admin (sales@mtm-store.com) — off-thread so
+                # SMTP latency never blocks the chat reply. No-op if SMTP unset.
+                try:
+                    asyncio.create_task(asyncio.to_thread(_email_order_bg, order_id))
+                except Exception as exc:
+                    logger.warning("order email scheduling failed for %s: %s", order_id, exc)
                 try:
                     from services.order_notification_poller import notify_order_created_and_mark
 
@@ -1091,7 +1108,10 @@ async def handle_inbound_message(
             return fallback
 
     # ── Normal AI reply ────────────────────────────────────────────────────────
-    save_message(db, session_id, "ai", ai_reply, meta=ai_failure_context)
+    from services.ai_service import get_last_ai_usage
+    _usage = get_last_ai_usage() or {}
+    _reply_meta = {**(ai_failure_context or {}), **_usage} or None
+    save_message(db, session_id, "ai", ai_reply, meta=_reply_meta)
 
     clean_reply = ai_reply.strip()
     if "CONFIRMED_ADDRESS" in clean_reply:

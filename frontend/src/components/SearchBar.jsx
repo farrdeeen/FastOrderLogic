@@ -327,11 +327,10 @@ export default function SearchBar({ filters, setFilters }) {
         className="sb-filter-btn"
       >
         <option value="">All Channels</option>
+        <option value="ai_assistant">AI Assistant</option>
         <option value="offline">Offline</option>
-        <option value="online">Online</option>
         <option value="wix">Wix</option>
-        <option value="whatsapp">WhatsApp</option>
-        <option value="website">Website</option>
+        <option value="mtm-store">mTm Store</option>
       </select>
 
       {/* Date Range */}

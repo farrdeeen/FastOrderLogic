@@ -18,6 +18,16 @@ _OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 logger = logging.getLogger(__name__)
 _LAST_AI_FAILURE: ContextVar[Optional[dict]] = ContextVar("last_ai_failure", default=None)
+_LAST_AI_USAGE: ContextVar[Optional[dict]] = ContextVar("last_ai_usage", default=None)
+
+# Per-million-token pricing (USD) for the configured model — override via env.
+_COST_IN_PER_M = float(os.getenv("AI_COST_INPUT_PER_M", "0.15"))
+_COST_OUT_PER_M = float(os.getenv("AI_COST_OUTPUT_PER_M", "0.60"))
+
+
+def get_last_ai_usage() -> Optional[dict]:
+    """{prompt_tokens, completion_tokens, ai_cost} for the most recent LLM call."""
+    return _LAST_AI_USAGE.get()
 
 _cached_catalogue_summary: str = ""
 _catalogue_cache_ts: float = 0.0
@@ -554,6 +564,17 @@ async def _call_openrouter(system: str, history: list[dict], user_msg: str) -> s
         resp.raise_for_status()
 
     data = resp.json()
+    try:
+        usage = data.get("usage") or {}
+        pt = int(usage.get("prompt_tokens") or 0)
+        ct = int(usage.get("completion_tokens") or 0)
+        if pt or ct:
+            _LAST_AI_USAGE.set({
+                "prompt_tokens": pt, "completion_tokens": ct,
+                "ai_cost": round(pt / 1e6 * _COST_IN_PER_M + ct / 1e6 * _COST_OUT_PER_M, 6),
+            })
+    except Exception:
+        pass
     choices = data.get("choices") or []
     message = choices[0].get("message") if choices else {}
     raw = (message or {}).get("content") or ""

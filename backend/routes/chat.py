@@ -1389,6 +1389,30 @@ async def _dispatch_order_confirmation(
             logger.exception("Failed to send address confirmation to %s", phone)
 
 
+# ─── AI cost (token spend) ───────────────────────────────────────────────────
+
+_AI_COST_SQL = (
+    "SELECT COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.ai_cost') AS DECIMAL(14,6))),0) AS cost, "
+    "COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.prompt_tokens') AS UNSIGNED)),0) AS ptok, "
+    "COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.completion_tokens') AS UNSIGNED)),0) AS ctok "
+    "FROM chat_messages WHERE meta LIKE '%ai_cost%'"
+)
+
+
+@router.get("/{session_id}/ai-cost")
+def session_ai_cost(session_id: int, _=Depends(require_user), db: Session = Depends(get_db)):
+    r = db.execute(text(_AI_COST_SQL + " AND session_id = :sid"), {"sid": session_id}).mappings().first()
+    return {"session_id": session_id, "cost_usd": float(r["cost"] or 0),
+            "prompt_tokens": int(r["ptok"] or 0), "completion_tokens": int(r["ctok"] or 0)}
+
+
+@router.get("/ai-cost/total")
+def total_ai_cost(_=Depends(require_user), db: Session = Depends(get_db)):
+    r = db.execute(text(_AI_COST_SQL)).mappings().first()
+    return {"cost_usd": float(r["cost"] or 0),
+            "prompt_tokens": int(r["ptok"] or 0), "completion_tokens": int(r["ctok"] or 0)}
+
+
 # ─── POST /chat/sessions/{session_id}/resolve ────────────────────────────────
 
 @router.post("/sessions/{session_id}/resolve")

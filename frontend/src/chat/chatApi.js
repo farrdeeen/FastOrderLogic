@@ -223,3 +223,15 @@ export async function fetchConversationCount(status = "") {
   const res = await api.get("/chat/conversations/count", { params });
   return res.data;
 }
+
+// GET /chat/{session_id}/ai-cost  — per-chat AI token spend
+export async function fetchSessionAiCost(sessionId) {
+  const res = await api.get(`/chat/${sessionId}/ai-cost`);
+  return res.data;
+}
+
+// GET /chat/ai-cost/total  — total AI spend across all chats
+export async function fetchTotalAiCost() {
+  const res = await api.get("/chat/ai-cost/total");
+  return res.data;
+}
