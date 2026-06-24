@@ -15,6 +15,7 @@ import os
 import logging
 import smtplib
 import ssl
+from typing import Optional
 from email.message import EmailMessage
 
 from sqlalchemy import text
@@ -27,7 +28,7 @@ _ADMIN_EMAIL = os.getenv("ORDER_EMAIL_ADMIN", "sales@mtm-store.com")
 _STORE = (os.getenv("MTM_STORE_URL") or "https://mtm-store.com").rstrip("/")
 
 
-def _smtp_config() -> dict | None:
+def _smtp_config() -> Optional[dict]:
     host = os.getenv("SMTP_HOST", "").strip()
     user = os.getenv("SMTP_USER", "").strip()
     pwd = os.getenv("SMTP_PASS", "").strip()

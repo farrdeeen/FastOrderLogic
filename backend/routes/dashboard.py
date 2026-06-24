@@ -32,6 +32,115 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 _TRAINING_DOC_PATH = Path(os.getenv("TRAINING_DOC_PATH", "data/training_doc.txt"))
 _TRAINING_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+_PAID_SQL = "('paid','success','accepted')"
+_CHANNEL_CASE = (
+    "CASE WHEN LOWER(channel)='ai_assistant' THEN 'AI Assistant' "
+    "WHEN LOWER(channel)='offline' THEN 'Offline' "
+    "WHEN LOWER(channel)='wix' THEN 'Wix' "
+    "WHEN LOWER(channel) IN ('mtm-store','online','website') THEN 'mTm Store' "
+    "ELSE 'Other' END"
+)
+
+
+@router.get("/analytics")
+def analytics(days: int = 30, _=Depends(require_user)):
+    """Sales-by-channel, conversion funnel, query/reply time-series, disqualified
+    leads, and total AI cost — one call for the dashboard analytics section."""
+    db = SessionLocal()
+    try:
+        def rows(sql, **p):
+            return db.execute(text(sql), {"days": days, **p}).mappings().all()
+
+        sales = [
+            {"channel": r["ch"], "orders": r["orders"], "paid": r["paid"],
+             "revenue": r["revenue"], "gross": r["gross"]}
+            for r in rows(
+                f"SELECT {_CHANNEL_CASE} AS ch, COUNT(*) AS orders, "
+                f"SUM(LOWER(payment_status) IN {_PAID_SQL}) AS paid, "
+                f"SUM(CASE WHEN LOWER(payment_status) IN {_PAID_SQL} THEN total_amount ELSE 0 END) AS revenue, "
+                "SUM(total_amount) AS gross "
+                "FROM orders WHERE created_at >= NOW() - INTERVAL :days DAY "
+                "GROUP BY ch ORDER BY orders DESC"
+            )
+        ]
+        conv = dict(rows(
+            "SELECT COUNT(DISTINCT cs.id) AS sessions, "
+            "COUNT(DISTINCT CASE WHEN cm.message LIKE '%[ai_order_json]%' THEN cs.id END) AS ordered "
+            "FROM chat_sessions cs LEFT JOIN chat_messages cm ON cm.session_id = cs.id "
+            "WHERE cs.created_at >= NOW() - INTERVAL :days DAY"
+        )[0])
+        series = [dict(r) for r in rows(
+            "SELECT DATE(timestamp) AS d, SUM(sender='user') AS user_msgs, "
+            "SUM(sender='ai') AS ai_msgs FROM chat_messages "
+            "WHERE timestamp >= NOW() - INTERVAL 14 DAY GROUP BY DATE(timestamp) ORDER BY d"
+        )]
+        leads = dict(rows(
+            "SELECT SUM(meta LIKE '%service_escalation%') AS escalations, "
+            "SUM(meta LIKE '%ai_failure%') AS failures "
+            "FROM chat_messages WHERE timestamp >= NOW() - INTERVAL :days DAY"
+        )[0])
+        cost = dict(rows(
+            "SELECT COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.ai_cost') AS DECIMAL(14,6))),0) AS cost, "
+            "COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.prompt_tokens') AS UNSIGNED)),0) AS ptok, "
+            "COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.completion_tokens') AS UNSIGNED)),0) AS ctok "
+            "FROM chat_messages WHERE meta LIKE '%ai_cost%'"
+        )[0])
+
+        sessions = int(conv.get("sessions") or 0)
+        ordered = int(conv.get("ordered") or 0)
+        for s in sales:
+            for k in ("orders", "paid", "revenue", "gross"):
+                s[k] = float(s.get(k) or 0)
+        return {
+            "days": days,
+            "sales_by_channel": sales,
+            "conversion": {
+                "sessions": sessions, "ordered": ordered,
+                "rate": round(ordered / sessions * 100, 1) if sessions else 0.0,
+            },
+            "timeseries": [
+                {"date": str(r["d"]), "user_msgs": int(r["user_msgs"] or 0), "ai_msgs": int(r["ai_msgs"] or 0)}
+                for r in series
+            ],
+            "leads": {
+                "escalations": int(leads.get("escalations") or 0),
+                "failures": int(leads.get("failures") or 0),
+            },
+            "ai_cost": {
+                "cost_usd": float(cost.get("cost") or 0),
+                "prompt_tokens": int(cost.get("ptok") or 0),
+                "completion_tokens": int(cost.get("ctok") or 0),
+            },
+        }
+    except Exception as exc:
+        logger.warning("analytics failed: %s", exc)
+        return {"days": days, "sales_by_channel": [], "conversion": {}, "timeseries": [],
+                "leads": {}, "ai_cost": {}, "error": str(exc)}
+    finally:
+        db.close()
+
+
+@router.get("/ai-balance")
+def ai_balance(_=Depends(require_user)):
+    """Remaining OpenRouter credit balance (USD)."""
+    import httpx
+    key = os.getenv("OPENROUTER_API_KEY", "")
+    if not key:
+        return {"available": False}
+    try:
+        r = httpx.get("https://openrouter.ai/api/v1/credits",
+                      headers={"Authorization": f"Bearer {key}"}, timeout=10)
+        if r.status_code == 200:
+            d = r.json().get("data", {})
+            tc = float(d.get("total_credits") or 0)
+            tu = float(d.get("total_usage") or 0)
+            return {"available": True, "balance_usd": round(tc - tu, 4),
+                    "total_credits": tc, "total_usage": tu}
+        logger.warning("ai_balance: OpenRouter %s", r.status_code)
+    except Exception as exc:
+        logger.warning("ai_balance failed: %s", exc)
+    return {"available": False}
+
 
 class StockReconCount(BaseModel):
     model_name: str

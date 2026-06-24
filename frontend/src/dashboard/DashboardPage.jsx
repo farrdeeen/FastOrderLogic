@@ -1,5 +1,6 @@
 // src/dashboard/DashboardPage.jsx
 import { useEffect, useState, useCallback, useRef } from "react";
+import AnalyticsSection from "./AnalyticsSection";
 import {
   fetchDashboardStats,
   fetchAiFailures,
@@ -972,6 +973,7 @@ export default function DashboardPage() {
             id: "stock_recon",
             label: `Stock Recon${stockReconStatus?.in_progress ? " (Live)" : ""}`,
           },
+          { id: "analytics", label: "Analytics" },
           { id: "training", label: "Training Docs" },
         ].map((tab) => (
           <button
@@ -986,6 +988,9 @@ export default function DashboardPage() {
           </button>
         ))}
       </div>
+
+      {/* ══════════ ANALYTICS TAB ══════════ */}
+      {activeTab === "analytics" && <AnalyticsSection />}
 
       {/* ══════════ OVERVIEW TAB ══════════ */}
       {activeTab === "overview" && (

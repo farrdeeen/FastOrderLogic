@@ -6,6 +6,16 @@ export async function fetchDashboardStats() {
   return res.data;
 }
 
+export async function fetchAnalytics(days = 30) {
+  const res = await api.get("/dashboard/analytics", { params: { days } });
+  return res.data;
+}
+
+export async function fetchAiBalance() {
+  const res = await api.get("/dashboard/ai-balance");
+  return res.data;
+}
+
 export async function fetchAiFailures(limit = 50) {
   const res = await api.get("/dashboard/ai-failures", { params: { limit } });
   return res.data || [];

@@ -442,6 +442,16 @@ async def create_order(data: OrderCreate, db: Session = Depends(get_db)):
         logging.getLogger(__name__).warning("WA notify_order_created failed: %s", exc)
     # ── END WhatsApp hook ─────────────────────────────────────────────────
 
+    # Email the customer + admin for every manual order too (off-thread, no-op
+    # unless SMTP is configured).
+    try:
+        import asyncio as _a
+        from services.chat_service import _email_order_bg
+        _a.create_task(_a.to_thread(_email_order_bg, order_id))
+    except Exception as _exc:
+        import logging as _lg
+        _lg.getLogger(__name__).warning("order email schedule failed: %s", _exc)
+
     notify_order_change(order_id, "created")
     return {"success": True, "order_id": order_id}
 
