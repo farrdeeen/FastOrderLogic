@@ -15,6 +15,7 @@ const card = {
   border: "1px solid #e8eaf0",
   borderRadius: 16,
   padding: 18,
+  minWidth: 0,
   boxShadow: "0 1px 3px rgba(16,24,40,0.04)",
 };
 const label = { fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: "#94a3b8" };
@@ -56,7 +57,7 @@ function Donut({ data }) {
         <text x="70" y="66" textAnchor="middle" style={{ fontSize: 11, fill: "#94a3b8", fontWeight: 700 }}>Revenue</text>
         <text x="70" y="84" textAnchor="middle" style={{ fontSize: 15, fill: "#0f172a", fontWeight: 800 }}>{inr(total)}</text>
       </svg>
-      <div style={{ display: "flex", flexDirection: "column", gap: 7, flex: 1, minWidth: 150 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7, flex: 1, minWidth: 130 }}>
         {data.map((d, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
             <span style={{ width: 10, height: 10, borderRadius: 3, background: CH_COLORS[i % CH_COLORS.length] }} />
@@ -178,7 +179,7 @@ export default function AnalyticsSection() {
       </div>
 
       {/* Top stat tiles */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,150px),1fr))", gap: 12, marginBottom: 14 }}>
         <StatTile title="AI Cost" value={`$${Number(cost.cost_usd || 0).toFixed(2)}`}
           sub={`${((cost.prompt_tokens || 0) + (cost.completion_tokens || 0)).toLocaleString()} tokens`} accent="#6366f1" />
         <StatTile title="AI Balance" accent={bal?.balance_usd < 5 ? "#ef4444" : "#10b981"}
@@ -193,7 +194,7 @@ export default function AnalyticsSection() {
       {loading ? (
         <div style={{ ...card, textAlign: "center", color: "#94a3b8", fontSize: 13, padding: 28 }}>Loading analytics…</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,280px),1fr))", gap: 14 }}>
           <div style={card}>
             <div style={{ ...label, marginBottom: 12 }}>Revenue by Channel (paid)</div>
             {donut.length ? <Donut data={donut} /> : <Empty />}
