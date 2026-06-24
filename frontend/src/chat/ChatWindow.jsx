@@ -35,7 +35,13 @@ import {
   sendSavedReply,
   uploadChatMedia,
 } from "./chatApi";
+import { useUser } from "@clerk/clerk-react";
 import { chatStyles, avatarColor, WA } from "./styles";
+
+const OPERATOR_FLOWS = [
+  "operator", "saved_reply", "operator_product_share", "operator_media",
+  "operator_payment_link", "dispatch_saved_reply", "dispatch_tracking", "dispatch_slip",
+];
 
 // The backend's own origin — used to resolve root-relative /media/... paths.
 // VITE_API_URL must point to your FastAPI server, e.g. https://api.example.com
@@ -1561,9 +1567,12 @@ function ProductPickerPanel({
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function MessageBubble({ msg, onPreview }) {
+function MessageBubble({ msg, onPreview, operatorImage }) {
   const { sender } = msg;
   const meta = parseMeta(msg.meta);
+  const isOperator =
+    sender === "ai" &&
+    (meta.operator === true || meta.operator === 1 || OPERATOR_FLOWS.includes(meta.flow));
   const hasMedia = Boolean(
     meta.media_url ||
     meta.public_url ||
@@ -1682,6 +1691,21 @@ function MessageBubble({ msg, onPreview }) {
         {hasProductLinkPreview && <ProductLinkPreview meta={meta} />}
       </Box>
       <Box sx={chatStyles.msgMeta(sender)}>
+        {sender === "ai" &&
+          (isOperator ? (
+            <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: "3px", mr: "2px" }}
+              title="Sent by a human agent">
+              {operatorImage ? (
+                <Box component="img" src={operatorImage} alt="agent"
+                  sx={{ width: 13, height: 13, borderRadius: "50%", objectFit: "cover" }} />
+              ) : null}
+              <span style={{ fontSize: 9, fontWeight: 800, color: WA.greenDark }}>Agent</span>
+            </Box>
+          ) : (
+            <span title="Sent by AI" style={{ fontSize: 9, fontWeight: 800, color: "#7C3AED", marginRight: 2 }}>
+              🤖 AI
+            </span>
+          ))}
         <span>{time}</span>
         {sender === "ai" && <Ticks status={msg.status} />}
       </Box>
@@ -1746,7 +1770,10 @@ export default function ChatWindow({
   onBackToList,
   onOpenInfo,
 }) {
+  const { user } = useUser();
   const [messages, setMessages] = useState([]);
+  const [typing, setTyping] = useState(false);
+  const typingTimerRef = useRef(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -1901,11 +1928,22 @@ export default function ChatWindow({
   useEffect(() => {
     if (!chat?.id) return undefined;
     const onChatChanged = (event) => {
-      if (Number(event.detail?.session_id) === Number(chat.id))
-        loadMessages(chat.id, false);
+      const d = event.detail || {};
+      if (Number(d.session_id) !== Number(chat.id)) return;
+      if (d.action === "ai_typing") {
+        setTyping(true);
+        if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = setTimeout(() => setTyping(false), 15000);
+        return;
+      }
+      setTyping(false);
+      loadMessages(chat.id, false);
     };
     window.addEventListener("chat:changed", onChatChanged);
-    return () => window.removeEventListener("chat:changed", onChatChanged);
+    return () => {
+      window.removeEventListener("chat:changed", onChatChanged);
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    };
   }, [chat?.id, loadMessages]);
 
   useEffect(() => {
@@ -2296,8 +2334,18 @@ export default function ChatWindow({
               key={item.msg.id}
               msg={item.msg}
               onPreview={setMediaPreview}
+              operatorImage={user?.imageUrl}
             />
           ),
+        )}
+
+        {typing && (
+          <Box sx={chatStyles.msgWrapper("ai")}>
+            <Box sx={{ ...chatStyles.bubble("ai"), display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ fontSize: 12, color: WA.textSub }}>AI is typing</span>
+              <span className="fol-typing-dots" style={{ fontSize: 16, color: WA.textSub, letterSpacing: 1 }}>…</span>
+            </Box>
+          </Box>
         )}
 
         {error && (

@@ -1060,9 +1060,24 @@ async def generate_order_cta(history: list[dict], language: str = "en", product_
             else "Would you like to place the order? Just share your name, mobile and address 🙂")
 
 
-async def generate_greeting(history: list[dict], language: str = "en", customer_context: str = "") -> str:
+async def generate_greeting(history: list[dict], language: str = "en", customer_context: str = "",
+                            include_catalogue: bool = False) -> str:
     """One warm opening message — recognises returning customers (by name/history)
-    and mirrors the customer's chat language/script (Hinglish, Hindi, English…)."""
+    and mirrors the customer's chat language/script (Hinglish, Hindi, English…).
+    On first contact (include_catalogue) it also shares the catalogue link + our
+    broad categories and invites them to order right here on chat."""
+    def _with_catalogue(opener: str) -> str:
+        if not include_catalogue:
+            return opener
+        if (language or "en").lower() != "en":
+            cat = ("\n\n🛍️ Hamara poora catalogue yahan dekhein: https://mtm-store.com/shop\n"
+                   "Fingerprint & iris scanner, GPS receiver, Micro ATM/mPOS, passbook & receipt printer, "
+                   "note counting machine aur bahut kuch. Aap yahin chat par hi order bhi kar sakte hain.")
+        else:
+            cat = ("\n\n🛍️ Browse our full catalogue: https://mtm-store.com/shop\n"
+                   "Fingerprint & iris scanners, GPS receivers, Micro ATM/mPOS, passbook & receipt printers, "
+                   "note counting machines and more. You can also place your order right here on chat.")
+        return opener.rstrip() + cat
     system = (
         "You are Aria, the WhatsApp sales agent for mTm DaSh Store. Write EXACTLY ONE short, warm greeting "
         "(under 30 words). If the CUSTOMER CONTEXT below shows a returning customer, welcome them back BY NAME "
@@ -1071,22 +1086,29 @@ async def generate_greeting(history: list[dict], language: str = "en", customer_
         "CRITICAL: reply in the SAME language AND script as the customer's messages — if they wrote Hinglish/"
         "romanized, reply in Hinglish (Latin script); never switch script on your own. Plain text. Output only the message."
     )
+    if include_catalogue:
+        system += ("\n\nThis is the customer's FIRST message. Keep your greeting to a warm one-line opener "
+                   "ONLY (the catalogue link and categories are appended separately — do NOT add a link yourself).")
     if customer_context:
         system += f"\n\n{customer_context}"
     try:
         msg = await _call_openrouter(system, history[-6:], "(write the greeting now)")
         if msg:
-            return msg.strip()
+            return _with_catalogue(msg.strip())
     except Exception as exc:
         logger.warning("generate_greeting failed (%s) — fallback", exc)
     returning = bool(customer_context) and "New customer" not in customer_context
     if (language or "en").lower() != "en":
-        return ("Welcome back! 🙏 mTm DaSh Store me aapka phir se swagat hai. Product lena hai ya order check karna hai?"
-                if returning else
-                "Hello! 🙏 mTm DaSh Store me aapka swagat hai. Aap product lena chahte hain ya order ke baare me jaanna hai?")
-    return ("Welcome back! 👋 Great to see you again at mTm DaSh Store. Would you like a product or to check an order?"
-            if returning else
-            "Hello! 👋 Welcome to mTm DaSh Store. Would you like to buy a product or check an existing order?")
+        opener = ("Welcome back! 🙏 mTm DaSh Store me aapka phir se swagat hai."
+                  if returning else "Hello! 🙏 mTm DaSh Store me aapka swagat hai.")
+    else:
+        opener = ("Welcome back! 👋 Great to see you again at mTm DaSh Store."
+                  if returning else "Hello! 👋 Welcome to mTm DaSh Store.")
+    if not include_catalogue:
+        opener += (" Aap product lena chahte hain ya order ke baare me jaanna hai?"
+                   if (language or "en").lower() != "en"
+                   else " Would you like to buy a product or check an existing order?")
+    return _with_catalogue(opener)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

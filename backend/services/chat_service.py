@@ -63,6 +63,41 @@ _RAZORPAY_BASE = os.getenv("RAZORPAY_BASE_URL", "https://rzp.io/l")
 # Delay (seconds) before sending the pay-link text + QR image, AFTER the order
 # confirmation + payment_pending template — avoids bombarding the customer.
 _PAYMENT_ASSETS_DELAY = int(os.getenv("PAYMENT_LINK_DELAY_SECONDS", "600"))
+
+# Debounce window (seconds) to batch a customer's rapid consecutive messages so the
+# AI reads them together. Tracks the latest wa_message_id per session.
+_INBOUND_DEBOUNCE = float(os.getenv("INBOUND_DEBOUNCE_SECONDS", "6"))
+_INBOUND_LATEST: dict[int, str] = {}
+
+
+def _emit_typing(session_id: int) -> None:
+    """Broadcast an 'AI is typing' hint to the dashboard while the AI composes."""
+    try:
+        from routes.chat import notify_chat_change
+        notify_chat_change(session_id, "ai_typing")
+    except Exception:
+        pass
+
+
+def _collect_unanswered_user_text(db: Session, session_id: int) -> str:
+    """Concatenate all customer messages received since our last AI/system reply —
+    i.e. the current burst — so the AI answers them as one."""
+    rows = db.execute(
+        text("""
+            SELECT message FROM chat_messages
+            WHERE session_id = :s AND sender = 'user'
+              AND timestamp > COALESCE(
+                  (SELECT MAX(timestamp) FROM chat_messages
+                   WHERE session_id = :s AND sender IN ('ai','system')), '2000-01-01')
+            ORDER BY timestamp ASC
+        """),
+        {"s": session_id},
+    ).fetchall()
+    parts = [
+        r[0] for r in rows
+        if r[0] and not r[0].startswith("[media") and not r[0].startswith("[image")
+    ]
+    return "\n".join(parts).strip()
 # Flat delivery charge shown to the customer — mirrors products.delivery_cost,
 # which the order flow actually charges (currently a uniform ₹90 across products).
 _DELIVERY_CHARGE = os.getenv("AI_DELIVERY_CHARGE", "90")
@@ -632,6 +667,23 @@ async def handle_inbound_message(
         logger.info("Human mode ON for session %s — skipping AI", session_id)
         return ""
 
+    # ── Debounce: wait for the customer to finish typing a burst of 2-3 messages
+    #    so the AI reads them together and replies once. Each incoming message
+    #    registers as the latest and waits; only the LAST one proceeds, the rest
+    #    return after saving. The winner rebuilds text_body from all the unanswered
+    #    user messages. (WhatsApp doesn't deliver typing events, so this is how we
+    #    "wait for typing".)
+    if _INBOUND_DEBOUNCE > 0 and wa_message_id:
+        _INBOUND_LATEST[session_id] = wa_message_id
+        # Tell the dashboard the AI is about to respond (typing bubble).
+        _emit_typing(session_id)
+        await asyncio.sleep(_INBOUND_DEBOUNCE)
+        if _INBOUND_LATEST.get(session_id) != wa_message_id:
+            return ""   # a newer message in the burst will handle the batch
+        batched = _collect_unanswered_user_text(db, session_id)
+        if batched:
+            text_body = batched
+
     # ── Build history for context (exclude the user turn we just saved) ────────
     history = get_conversation_history(db, session_id, limit=40)
     if history and history[-1]["role"] == "user" and history[-1]["content"] == text_body:
@@ -679,7 +731,9 @@ async def handle_inbound_message(
         except Exception:
             cust_ctx = ""
         from services.ai_service import generate_greeting
-        greeting = await generate_greeting(history_for_context, language=language, customer_context=cust_ctx)
+        first_contact = not any(t.get("role") == "assistant" for t in history_for_context)
+        greeting = await generate_greeting(history_for_context, language=language,
+                                           customer_context=cust_ctx, include_catalogue=first_contact)
         save_message(db, session_id, "ai", greeting, meta={"flow": "greeting"})
         try:
             await send_text_message(phone, greeting)
