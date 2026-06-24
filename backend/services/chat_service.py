@@ -66,7 +66,7 @@ _PAYMENT_ASSETS_DELAY = int(os.getenv("PAYMENT_LINK_DELAY_SECONDS", "600"))
 
 # Debounce window (seconds) to batch a customer's rapid consecutive messages so the
 # AI reads them together. Tracks the latest wa_message_id per session.
-_INBOUND_DEBOUNCE = float(os.getenv("INBOUND_DEBOUNCE_SECONDS", "6"))
+_INBOUND_DEBOUNCE = float(os.getenv("INBOUND_DEBOUNCE_SECONDS", "2"))
 _INBOUND_LATEST: dict[int, str] = {}
 
 
