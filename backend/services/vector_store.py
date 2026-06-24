@@ -276,6 +276,31 @@ class _VectorStore:
             logger.warning("vector_store.recreate_collection(%s) failed: %s", collection, exc)
             return False
 
+    def replace_all(self, collection: str, ids: list[str], documents: list[str],
+                    metadatas: Optional[list[dict]] = None) -> int:
+        """Make the collection match exactly the given ids — WITHOUT a destructive
+        drop. Upserts the new set, then deletes only stale ids. Avoids the empty
+        window that recreate_collection causes (which made dashboard counts flicker
+        to 0 mid-reseed)."""
+        if not self.available:
+            return 0
+        if collection not in COLLECTIONS:
+            raise ValueError(f"unknown collection: {collection!r}")
+        try:
+            coll = self._get_collection(collection)
+            with self._lock:
+                if ids:
+                    coll.upsert(ids=ids, documents=documents, metadatas=metadatas)
+                existing = coll.get(include=[]).get("ids") or []
+                keep = set(ids)
+                stale = [i for i in existing if i not in keep]
+                if stale:
+                    coll.delete(ids=stale)
+            return len(ids)
+        except Exception as exc:
+            logger.warning("vector_store.replace_all(%s) failed: %s", collection, exc)
+            return 0
+
     def stats(self) -> dict:
         return {
             "available": self.available,
@@ -333,6 +358,11 @@ def get_one(collection: str, doc_id: str) -> Optional[dict]:
 
 def recreate_collection(collection: str) -> bool:
     return get_store().recreate_collection(collection)
+
+
+def replace_all(collection: str, ids: list[str], documents: list[str],
+                metadatas: Optional[list[dict]] = None) -> int:
+    return get_store().replace_all(collection, ids, documents, metadatas)
 
 
 def stats() -> dict:

@@ -77,6 +77,9 @@ ORDER COLLECTION — to place an order you need ALL of: full name, mobile number
   SKU yourself from the PRODUCT CATALOGUE above. If the name matches more than one catalogue product, list
   those options and ask which one. If it matches none, say so and suggest the closest catalogue items.
 - Ask for ONLY ONE missing field at a time, in plain words (e.g. "Aapka pincode kya hai?").
+- For the mobile number: the customer is already chatting from their WhatsApp number, so if they
+  say "same number", "same", "yahi number", "is number pe" etc., USE that WhatsApp number — do NOT
+  put the words "same number" in the mobile field, and don't keep asking.
 - ALWAYS confirm the QUANTITY ("Kitne pieces chahiye?") and collect the customer's EMAIL (for the invoice)
   before placing the order — these are required.
 - While collecting order details, DO NOT re-send product cards, links, prices, or photos. Just ask the next
@@ -711,6 +714,43 @@ async def generate_followup_message(
 # ─────────────────────────────────────────────────────────────────────────────
 # Media analysis
 # ─────────────────────────────────────────────────────────────────────────────
+
+async def detect_payment_screenshot(image_url: str) -> bool:
+    """Use the vision model to tell if an image is a payment/transaction screenshot
+    (UPI/bank/card showing amount paid, UTR, txn id, 'payment successful')."""
+    if not (_OPENROUTER_ENABLED and _OPENROUTER_KEY and image_url):
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                _OPENROUTER_URL,
+                json={
+                    "model": _OPENROUTER_MODEL,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "text", "text":
+                            "Is this image a payment/transaction screenshot — i.e. it shows a paid "
+                            "amount, UTR/UPI reference, transaction id, or 'payment successful/sent'? "
+                            "Answer with exactly one word: PAYMENT or OTHER."},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ]}],
+                    "max_tokens": 3,
+                    "temperature": 0.0,
+                },
+                headers={
+                    "Authorization": f"Bearer {_OPENROUTER_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://mtm-store.com",
+                    "X-Title": "DaSh Payment Detector",
+                },
+            )
+        if resp.status_code == 200:
+            out = str((resp.json().get("choices") or [{}])[0].get("message", {}).get("content") or "").strip().upper()
+            logger.info("detect_payment_screenshot: %r", out[:20])
+            return out.startswith("PAYMENT")
+    except Exception as exc:
+        logger.warning("detect_payment_screenshot failed: %s", exc)
+    return False
+
 
 async def analyze_media(file_url: str, file_type: str) -> str:
     ftype = file_type.lower()

@@ -156,7 +156,6 @@ def seed_products_from_list(catalogue: list[dict]) -> int:
         logger.info("seed_products: empty catalogue — skipping")
         return 0
 
-    vs.recreate_collection(vs.PRODUCT_KNOWLEDGE)
     ids, docs, metas = [], [], []
     seen: set[str] = set()
     for p in items:
@@ -174,7 +173,7 @@ def seed_products_from_list(catalogue: list[dict]) -> int:
             "link": (p.get("link") or "").strip(),
             "in_stock": bool(p.get("in_stock")) if p.get("in_stock") is not None else False,
         })
-    n = vs.upsert(vs.PRODUCT_KNOWLEDGE, ids=ids, documents=docs, metadatas=metas)
+    n = vs.replace_all(vs.PRODUCT_KNOWLEDGE, ids=ids, documents=docs, metadatas=metas)
     logger.info("seed_products: seeded %d products into product_knowledge", n)
     return n
 
@@ -316,7 +315,6 @@ def seed_faq_policy() -> int:
     _add_dir(_KB_DIR, label_from_name=False)
     _add_dir(_DOCS_DIR, label_from_name=True)   # labeled dashboard uploads
 
-    vs.recreate_collection(vs.FAQ_POLICY)
     ids, docs, metas = [], [], []
     seen: set[str] = set()
     for source_name, raw, label in sources:
@@ -342,10 +340,7 @@ def seed_faq_policy() -> int:
         metas.append({"source": "product_faq", "product": pname})
         faq_n += 1
 
-    if not ids:
-        logger.info("seed_faq_policy: no FAQ/policy content")
-        return 0
-    n = vs.upsert(vs.FAQ_POLICY, ids=ids, documents=docs, metadatas=metas)
+    n = vs.replace_all(vs.FAQ_POLICY, ids=ids, documents=docs, metadatas=metas)
     logger.info("seed_faq_policy: seeded %d chunks (%d product FAQs) from %d source(s)",
                 n, faq_n, len(sources))
     return n

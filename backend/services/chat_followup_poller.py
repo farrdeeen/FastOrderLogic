@@ -118,6 +118,26 @@ def _order_context(db: Session, phone: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def _recent_order_exists(db: Session, phone: str, hours: int = 12) -> bool:
+    """True if THIS customer placed any order within the last `hours` — used to
+    suppress follow-ups (they already got the order + payment messages)."""
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())[-10:]
+    if not digits:
+        return False
+    row = db.execute(
+        text("""
+            SELECT 1 FROM orders o
+            LEFT JOIN offline_customer oc ON oc.customer_id = o.offline_customer_id
+            LEFT JOIN customer          c ON c.customer_id  = o.customer_id
+            WHERE (oc.mobile LIKE :tail OR c.mobile LIKE :tail)
+              AND o.created_at >= NOW() - INTERVAL :hrs HOUR
+            LIMIT 1
+        """),
+        {"tail": f"%{digits}", "hrs": hours},
+    ).first()
+    return bool(row)
+
+
 def _has_buying_intent(db: Session, session_id: int) -> bool:
     row = db.execute(
         text("""
@@ -157,6 +177,11 @@ async def _send_followup(db: Session, session: dict) -> None:
     ).rowcount
     db.commit()
     if not claimed:
+        return
+
+    # Suppress follow-ups for customers who placed an order recently — they already
+    # received the order confirmation + payment messages; a nudge is just noise.
+    if _recent_order_exists(db, phone, _env_int("CHAT_FOLLOWUP_SUPPRESS_ORDER_HOURS", 12)):
         return
 
     order = _order_context(db, phone)

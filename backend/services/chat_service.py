@@ -60,6 +60,9 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_ORDER_CONFIRMED = "order_confirmation"
 _TEMPLATE_PAYMENT_PENDING = "payment_pending"
 _RAZORPAY_BASE = os.getenv("RAZORPAY_BASE_URL", "https://rzp.io/l")
+# Delay (seconds) before sending the pay-link text + QR image, AFTER the order
+# confirmation + payment_pending template — avoids bombarding the customer.
+_PAYMENT_ASSETS_DELAY = int(os.getenv("PAYMENT_LINK_DELAY_SECONDS", "600"))
 # Flat delivery charge shown to the customer — mirrors products.delivery_cost,
 # which the order flow actually charges (currently a uniform ₹90 across products).
 _DELIVERY_CHARGE = os.getenv("AI_DELIVERY_CHARGE", "90")
@@ -569,6 +572,24 @@ async def handle_inbound_media(
         meta=meta,
     )
 
+    # Payment screenshot? Acknowledge it and flag the chat so the team verifies —
+    # don't let a payment proof fall through to a generic "thanks for the image".
+    if media_kind == "image":
+        try:
+            from services.ai_service import detect_payment_screenshot
+            if await detect_payment_screenshot(local_media_url or media_url):
+                reply = ("Payment screenshot ke liye dhanyavaad 🙏 Hamari team ise verify karke "
+                         "aapko jaldi confirm karegi. Confirm hote hi order dispatch ho jayega.")
+                _mark_session_urgent_for_human(db, session_id)
+                save_message(db, session_id, "ai", reply, meta={"flow": "payment_proof", "flag": "urgent"})
+                try:
+                    await send_text_message(phone, reply)
+                except Exception as exc:
+                    logger.error("payment-proof ack send failed %s: %s", phone, exc)
+                return reply
+        except Exception as exc:
+            logger.warning("payment screenshot check failed for %s: %s", phone, exc)
+
     reply = await analyze_media(local_media_url or media_url, local_mime_type)
     save_message(db, session_id, "ai", reply)
 
@@ -902,8 +923,18 @@ async def handle_inbound_message(
     order_data = extract_order_json(ai_reply)
     if order_data:
         logger.info("handle_inbound: AI order JSON detected for session=%s", session_id)
-        if not order_data.get("mobile"):
-            order_data["mobile"] = re.sub(r"\D", "", phone)[-10:]
+        # Mobile sanitisation: customers often reply "same number" / "same" /
+        # "is number pe" instead of typing it, and the AI copies that text into the
+        # JSON. Any value that isn't a clean 10-digit number falls back to the
+        # customer's own WhatsApp number.
+        wa_digits = re.sub(r"\D", "", phone)[-10:]
+        mob_digits = re.sub(r"\D", "", str(order_data.get("mobile") or ""))
+        if len(mob_digits) > 10:
+            mob_digits = mob_digits[-10:]
+        if len(mob_digits) != 10:
+            order_data["mobile"] = wa_digits
+        else:
+            order_data["mobile"] = mob_digits
 
         # Wrap the whole placement so a failure NEVER leaves the customer with no
         # reply — they always get a confirmation or a graceful fallback message.
@@ -1194,90 +1225,74 @@ async def notify_order_created(
         if not send_followup_messages:
             return report
 
-        # Follow-up session messages can fail outside the 24-hour WhatsApp
-        # service window, so the template button above is the primary pay path.
+        # The template (with pay button) is the immediate pay path. The pay-link
+        # TEXT + QR image are sent after a delay so we don't bombard the customer
+        # with 3-4 messages at once (confirmation + template + link + QR).
         if pay_link:
-            pay_msg = (
-                f"💳 Complete your payment to confirm shipment:\n{pay_link}\n\n"
-                "Once paid, we'll dispatch today. Reply here if you need any help! 🙏"
-            )
-            try:
-                wa_resp = await send_text_message(phone, pay_msg, preview_url=True)
-                save_message(
-                    db, session_id, "system", pay_msg,
-                    wa_message_id=_wa_message_id(wa_resp),
-                    meta={
-                        "order_id": order_id,
-                        "flow": "payment_link",
-                        "payment_url": pay_link,
-                        "razorpay_payment_link_id": payment_link.get("id"),
-                    },
-                )
-                report["payment_link_sent"] = True
-            except Exception as exc:
-                logger.error("Payment link WhatsApp text send failed for %s order %s: %s", phone, order_id, exc)
-                report["errors"].append(f"payment_link_send:{exc}")
-                save_message(
-                    db, session_id, "system",
-                    f"[payment_link_send_failed] {pay_link}",
-                    meta={
-                        "order_id": order_id,
-                        "flow": "payment_link_send_failed",
-                        "payment_url": pay_link,
-                        "error": str(exc),
-                    },
-                )
-
-            qr_url = ""
-            razorpay_qr_id = None
-            try:
-                razorpay_qr = await create_payment_qr_details(
-                    order_id=order_id,
-                    amount=parse_amount(amount),
-                    name=customer_name or "Customer",
-                )
-                qr_url = razorpay_qr.get("image_url") or ""
-                razorpay_qr_id = razorpay_qr.get("id")
-                report["razorpay_qr_id"] = razorpay_qr_id
-            except PaymentLinkError as exc:
-                logger.warning("Razorpay native QR creation failed for %s order %s, using payment-link QR fallback: %s", phone, order_id, exc)
-                report["errors"].append(f"razorpay_qr_create_fallback:{exc}")
-                qr_url = build_payment_qr_url(pay_link)
-
-            if qr_url:
-                qr_caption = f"Scan this QR to pay {amount or 'the pending amount'} for order {order_id}."
-                try:
-                    wa_resp = await send_image_message(phone, qr_url, caption=qr_caption)
-                    save_message(
-                        db, session_id, "system",
-                        f"[payment_qr] {order_id}",
-                        wa_message_id=_wa_message_id(wa_resp),
-                        meta={
-                            "order_id": order_id,
-                            "flow": "payment_qr",
-                            "payment_url": pay_link,
-                            "qr_url": qr_url,
-                            "razorpay_payment_link_id": payment_link.get("id"),
-                            "razorpay_qr_id": razorpay_qr_id,
-                        },
-                    )
-                    report["payment_qr_sent"] = True
-                except Exception as exc:
-                    logger.error("Payment QR WhatsApp image send failed for %s order %s: %s", phone, order_id, exc)
-                    report["errors"].append(f"payment_qr_send:{exc}")
-                    save_message(
-                        db, session_id, "system",
-                        f"[payment_qr_send_failed] {order_id}: {exc}",
-                        meta={
-                            "order_id": order_id,
-                            "flow": "payment_qr_send_failed",
-                            "payment_url": pay_link,
-                            "qr_url": qr_url,
-                            "error": str(exc),
-                        },
-                    )
+            asyncio.create_task(_send_payment_assets_later(
+                phone, order_id, customer_name, amount, pay_link,
+                payment_link.get("id"), _PAYMENT_ASSETS_DELAY,
+            ))
+            report["payment_assets_scheduled_in"] = _PAYMENT_ASSETS_DELAY
 
     return report
+
+
+async def _send_payment_assets_later(
+    phone: str, order_id: str, customer_name: str, amount: str,
+    pay_link: str, payment_link_id: Optional[str], delay: int,
+) -> None:
+    """After `delay` seconds, send the pay-link text + QR image on a fresh DB
+    session (the request session is long gone). Lost on a process restart, but the
+    payment_pending template's pay button already covers the immediate path."""
+    try:
+        await asyncio.sleep(max(0, int(delay)))
+    except Exception:
+        pass
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        session = get_or_create_session(db, phone)
+        session_id = session["id"]
+        pay_msg = (
+            f"💳 Complete your payment to confirm shipment:\n{pay_link}\n\n"
+            "Once paid, we'll dispatch today. Reply here if you need any help! 🙏"
+        )
+        try:
+            wa_resp = await send_text_message(phone, pay_msg, preview_url=True)
+            save_message(db, session_id, "system", pay_msg, wa_message_id=_wa_message_id(wa_resp),
+                         meta={"order_id": order_id, "flow": "payment_link",
+                               "payment_url": pay_link, "razorpay_payment_link_id": payment_link_id})
+        except Exception as exc:
+            logger.error("delayed payment link send failed %s %s: %s", phone, order_id, exc)
+
+        qr_url = ""
+        razorpay_qr_id = None
+        try:
+            razorpay_qr = await create_payment_qr_details(
+                order_id=order_id, amount=parse_amount(amount), name=customer_name or "Customer")
+            qr_url = razorpay_qr.get("image_url") or ""
+            razorpay_qr_id = razorpay_qr.get("id")
+        except PaymentLinkError as exc:
+            logger.warning("delayed QR create fallback %s: %s", order_id, exc)
+            qr_url = build_payment_qr_url(pay_link)
+        except Exception as exc:
+            logger.warning("delayed QR create failed %s: %s", order_id, exc)
+            qr_url = build_payment_qr_url(pay_link)
+        if qr_url:
+            try:
+                wa_resp = await send_image_message(
+                    phone, qr_url,
+                    caption=f"Scan this QR to pay {amount or 'the pending amount'} for order {order_id}.")
+                save_message(db, session_id, "system", f"[payment_qr] {order_id}",
+                             wa_message_id=_wa_message_id(wa_resp),
+                             meta={"order_id": order_id, "flow": "payment_qr", "payment_url": pay_link,
+                                   "qr_url": qr_url, "razorpay_payment_link_id": payment_link_id,
+                                   "razorpay_qr_id": razorpay_qr_id})
+            except Exception as exc:
+                logger.error("delayed QR send failed %s %s: %s", phone, order_id, exc)
+    finally:
+        db.close()
 
 
 async def notify_order_shipped(db: Session, phone: str, order_id: str, awb: str) -> None:
