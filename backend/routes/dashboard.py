@@ -130,7 +130,7 @@ _APPROVED = (
     "AND o.invoice_number<>'' AND UPPER(o.invoice_number)<>'NA' AND INSTR(LOWER(o.invoice_number),'replace')=0"
 )
 _REJECTED = "LEFT(UPPER(COALESCE(o.order_status,'')),3)='REJ'"
-_PERIODS = {"15d": (15, "day"), "3m": (90, "month"), "6m": (180, "month"), "12m": (365, "month")}
+_PERIODS = {"today": (1, "day"), "15d": (15, "day"), "3m": (90, "month"), "6m": (180, "month"), "12m": (365, "month")}
 
 _fx_cache = {"rate": None, "ts": 0.0}
 
@@ -161,6 +161,8 @@ def _usd_inr() -> float:
 @router.get("/sales-overview")
 def sales_overview(period: str = "15d", _=Depends(require_user)):
     days, bucket = _PERIODS.get(period, _PERIODS["15d"])
+    # "today" filters from midnight; others from N days ago.
+    since = "CURDATE()" if period == "today" else f"NOW() - INTERVAL {days} DAY"
     db = SessionLocal()
     try:
         om_cte = (
@@ -171,7 +173,7 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
             f"LEFT JOIN offline_customer oc ON oc.customer_id=o.offline_customer_id), "
             f"life AS (SELECT mob, COUNT(*) cnt FROM om WHERE mob<>'' GROUP BY mob), "
             f"p AS (SELECT om.*, COALESCE(life.cnt,1) life FROM om LEFT JOIN life ON life.mob=om.mob "
-            f"WHERE om.created_at >= NOW() - INTERVAL {days} DAY)"
+            f"WHERE om.created_at >= {since})"
         )
         kpi = dict(db.execute(text(om_cte + """
             SELECT COUNT(*) total, SUM(approved) approved, SUM(rejected) rejected,
@@ -196,14 +198,14 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
         rev = "SUM(CASE WHEN LOWER(payment_status) IN ('paid','success','accepted') THEN total_amount ELSE 0 END)"
         chan = db.execute(text(
             f"SELECT {ch_case} ch, COUNT(*) orders, {rev} revenue "
-            f"FROM orders WHERE created_at >= NOW() - INTERVAL {days} DAY GROUP BY ch ORDER BY orders DESC"
+            f"FROM orders WHERE created_at >= {since} GROUP BY ch ORDER BY orders DESC"
         )).mappings().all()
 
         # Per-bucket per-channel series for the grouped bar chart (day or month).
         ch_bucket = "DATE(created_at)" if bucket == "day" else "DATE_FORMAT(created_at,'%Y-%m')"
         crows = db.execute(text(
             f"SELECT {ch_bucket} b, {ch_case} ch, COUNT(*) o, {rev} r "
-            f"FROM orders WHERE created_at >= NOW() - INTERVAL {days} DAY GROUP BY b, ch ORDER BY b"
+            f"FROM orders WHERE created_at >= {since} GROUP BY b, ch ORDER BY b"
         )).mappings().all()
         CH_ORDER = ["Wix", "mTm Store", "AI Assistant", "Offline"]
         smap: dict = {}
@@ -221,7 +223,7 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
             f"(SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=cs.id AND m.sender='user') uc, "
             f"(SELECT m2.sender FROM chat_messages m2 WHERE m2.session_id=cs.id ORDER BY m2.timestamp DESC LIMIT 1) last_s, "
             f"(SELECT MAX(INSTR(m3.meta,'service_escalation')>0) FROM chat_messages m3 WHERE m3.session_id=cs.id) esc "
-            f"FROM chat_sessions cs WHERE cs.created_at >= NOW() - INTERVAL {days} DAY), "
+            f"FROM chat_sessions cs WHERE cs.created_at >= {since}), "
             f"life AS (SELECT {_NM} mob, COUNT(*) cnt FROM orders o "
             f"LEFT JOIN customer c ON c.customer_id=o.customer_id "
             f"LEFT JOIN offline_customer oc ON oc.customer_id=o.offline_customer_id GROUP BY mob) "
@@ -235,7 +237,7 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
 
         spend = dict(db.execute(text(
             "SELECT COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.ai_cost') AS DECIMAL(14,6))),0) cost "
-            f"FROM chat_messages WHERE INSTR(meta,'ai_cost')>0 AND timestamp >= NOW() - INTERVAL {days} DAY"
+            f"FROM chat_messages WHERE INSTR(meta,'ai_cost')>0 AND timestamp >= {since}"
         )).mappings().first())
 
         fx = _usd_inr()

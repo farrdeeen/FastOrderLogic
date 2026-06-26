@@ -8,7 +8,7 @@ import { fetchSalesOverview } from "./dashboardApi";
 
 const CH_COLORS = { "Wix": "#10b981", "mTm Store": "#6366f1", "AI Assistant": "#8b5cf6", "Offline": "#f59e0b", "Other": "#94a3b8" };
 const CH = [{ k: "Wix", c: "#10b981" }, { k: "mTm Store", c: "#6366f1" }, { k: "AI Assistant", c: "#8b5cf6" }, { k: "Offline", c: "#f59e0b" }];
-const PERIODS = [{ id: "15d", label: "15 Days" }, { id: "3m", label: "3 Months" }, { id: "6m", label: "6 Months" }, { id: "12m", label: "12 Months" }];
+const PERIODS = [{ id: "today", label: "Today" }, { id: "15d", label: "15 Days" }, { id: "3m", label: "3 Months" }, { id: "6m", label: "6 Months" }, { id: "12m", label: "12 Months" }];
 const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const num = (n) => Number(n || 0).toLocaleString("en-IN");
 
@@ -302,8 +302,8 @@ export default function SalesOverviewSection() {
           rows={[{ k: "escalated to human", v: ld.total ? `${Math.round((ld.escalated / ld.total) * 100)}%` : "0%", c: "#f59e0b" }]} />
       </div>
 
-      {/* ── Bar charts ── */}
-      {loading ? (
+      {/* ── Bar charts (hidden for the single-day "Today" view) ── */}
+      {period === "today" ? null : loading ? (
         <div style={{ ...card, textAlign: "center", color: "#94a3b8", fontSize: 13, padding: 28 }}>Loading…</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,320px),1fr))", gap: 14 }}>
