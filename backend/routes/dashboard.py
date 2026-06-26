@@ -125,6 +125,10 @@ def analytics(days: int = 30, _=Depends(require_user)):
 # Reusable SQL fragments (no bind params / no LIKE — uses INSTR to dodge %-escaping;
 # COLLATE coerces the utf8mb4_bin mobile columns for REGEXP_REPLACE).
 _NM = "RIGHT(REGEXP_REPLACE(COALESCE(c.mobile,oc.mobile,'') COLLATE utf8mb4_0900_ai_ci,'[^0-9]',''),10)"
+# Customer key for orders: normalized mobile, but fall back to a per-order id when
+# the mobile is blank/unparseable so those orders count as distinct customers
+# (instead of all collapsing into one empty-mobile "customer").
+_OKEY = f"CASE WHEN {_NM}<>'' THEN {_NM} ELSE CONCAT('o:',o.order_id) END"
 _APPROVED = (
     "LOWER(o.payment_status) IN ('paid','success','accepted') AND o.invoice_number IS NOT NULL "
     "AND o.invoice_number<>'' AND UPPER(o.invoice_number)<>'NA' AND INSTR(LOWER(o.invoice_number),'replace')=0"
@@ -168,7 +172,7 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
         om_cte = (
             f"WITH om AS (SELECT o.order_id, o.created_at, o.total_amount, o.channel, "
             f"CASE WHEN {_APPROVED} THEN 1 ELSE 0 END approved, "
-            f"CASE WHEN {_REJECTED} THEN 1 ELSE 0 END rejected, {_NM} mob "
+            f"CASE WHEN {_REJECTED} THEN 1 ELSE 0 END rejected, {_OKEY} mob "
             f"FROM orders o LEFT JOIN customer c ON c.customer_id=o.customer_id "
             f"LEFT JOIN offline_customer oc ON oc.customer_id=o.offline_customer_id), "
             f"life AS (SELECT mob, COUNT(*) cnt FROM om WHERE mob<>'' GROUP BY mob), "

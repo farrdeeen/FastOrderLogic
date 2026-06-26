@@ -6,8 +6,8 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchSalesOverview } from "./dashboardApi";
 
-const CH_COLORS = { "Wix": "#10b981", "mTm Store": "#6366f1", "AI Assistant": "#8b5cf6", "Offline": "#f59e0b", "Other": "#94a3b8" };
-const CH = [{ k: "Wix", c: "#10b981" }, { k: "mTm Store", c: "#6366f1" }, { k: "AI Assistant", c: "#8b5cf6" }, { k: "Offline", c: "#f59e0b" }];
+const CH_COLORS = { "Wix": "#ef4444", "mTm Store": "#16a34a", "AI Assistant": "#111827", "Offline": "#2563eb", "Other": "#94a3b8" };
+const CH = [{ k: "Wix", c: "#ef4444" }, { k: "mTm Store", c: "#16a34a" }, { k: "AI Assistant", c: "#111827" }, { k: "Offline", c: "#2563eb" }];
 const PERIODS = [{ id: "today", label: "Today" }, { id: "15d", label: "15 Days" }, { id: "3m", label: "3 Months" }, { id: "6m", label: "6 Months" }, { id: "12m", label: "12 Months" }];
 const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const num = (n) => Number(n || 0).toLocaleString("en-IN");
