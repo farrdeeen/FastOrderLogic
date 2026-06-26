@@ -608,6 +608,7 @@ function StockReconSection({
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const isMobile = useIsMobile();
+  const isWide = !useIsMobile(1700); // large monitor (27") — use full screen width
   const [stats, setStats] = useState(null);
   const [failures, setFailures] = useState([]);
   const [recent, setRecent] = useState([]);
@@ -952,7 +953,11 @@ export default function DashboardPage() {
         minute: "2-digit",
       })
     : null;
-  const pageStyle = isMobile ? { ...styles.page, ...styles.pageMobile } : styles.page;
+  const pageStyle = isMobile
+    ? { ...styles.page, ...styles.pageMobile }
+    : isWide
+      ? { ...styles.page, maxWidth: "none" } // fill the full screen on 27"+ monitors
+      : styles.page;
   const headerStyle = isMobile
     ? { ...styles.header, ...styles.headerMobile }
     : styles.header;
@@ -1453,7 +1458,7 @@ export default function DashboardPage() {
 const styles = {
   page: {
     fontFamily: "'IBM Plex Sans', sans-serif",
-    maxWidth: 1200,
+    maxWidth: 1440,
     margin: "0 auto",
     width: "100%",
     minWidth: 0,
