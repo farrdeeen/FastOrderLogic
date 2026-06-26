@@ -39,20 +39,15 @@ export default function TodaysOrders() {
     try { setData(await fetchTodaysOrders()); } catch { /* keep last */ } finally { setLoading(false); }
   }, []);
 
+  // Event-driven (no polling): refreshes on order websocket events + tab focus.
   useEffect(() => {
     load();
-    const t = setInterval(load, 15000);
     const onFocus = () => document.visibilityState === "visible" && load();
     const onChange = () => load();
     document.addEventListener("visibilitychange", onFocus);
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("chat:changed", onChange);
     window.addEventListener("order:changed", onChange);
     return () => {
-      clearInterval(t);
       document.removeEventListener("visibilitychange", onFocus);
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("chat:changed", onChange);
       window.removeEventListener("order:changed", onChange);
     };
   }, [load]);
@@ -88,6 +83,7 @@ export default function TodaysOrders() {
                 <span>Qty: <b style={{ color: "#334155" }}>{qtyTotal(o)}</b></span>
                 <span>AWB: <b style={{ color: o.awb ? "#334155" : "#cbd5e1" }}>{o.awb || "—"}</b></span>
                 <span>Inv: <b style={{ color: o.invoice ? "#334155" : "#cbd5e1" }}>{o.invoice || "—"}</b></span>
+                {o.utr && <span>UTR: <b style={{ color: "#15803d" }}>{o.utr}</b></span>}
                 <span style={{ marginLeft: "auto" }}>{payChip(o)}</span>
               </div>
             </div>
@@ -119,7 +115,10 @@ export default function TodaysOrders() {
                   <td style={{ ...td, textAlign: "right", fontWeight: 800, color: "#0f172a" }}>{inr(o.amount)}</td>
                   <td style={{ ...td, fontFamily: "ui-monospace,monospace", color: o.awb ? "#334155" : "#cbd5e1" }}>{o.awb || "—"}</td>
                   <td style={{ ...td, color: o.invoice ? "#334155" : "#cbd5e1" }}>{o.invoice || "—"}</td>
-                  <td style={td}>{payChip(o)}</td>
+                  <td style={td}>
+                    {payChip(o)}
+                    {o.utr && <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#15803d", marginTop: 3 }}>UTR {o.utr}</div>}
+                  </td>
                 </tr>
               ))}
             </tbody>

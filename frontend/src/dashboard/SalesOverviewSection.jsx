@@ -117,21 +117,28 @@ export default function SalesOverviewSection() {
   const [period, setPeriod] = useState("15d");
   const [loading, setLoading] = useState(true);
 
+  // Event-driven (no polling): refreshes on order/chat events + tab focus.
   useEffect(() => {
-    let live = true; setLoading(true);
+    let live = true;
     const get = (showLoad) => {
       if (showLoad) setLoading(true);
       fetchSalesOverview(period).then((r) => live && setD(r)).catch(() => {}).finally(() => live && setLoading(false));
     };
     get(true);
-    const t = setInterval(() => get(false), 20000);     // live refresh, no reload
+    // Debounce event-driven refreshes so chat/order bursts coalesce into ONE
+    // (heavy) query instead of hammering the DB.
+    let timer = null;
+    const onChange = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => get(false), 3000); };
     const onFocus = () => document.visibilityState === "visible" && get(false);
     document.addEventListener("visibilitychange", onFocus);
-    window.addEventListener("chat:changed", onFocus);
+    window.addEventListener("order:changed", onChange);
+    window.addEventListener("chat:changed", onChange);
     return () => {
-      live = false; clearInterval(t);
+      live = false;
+      if (timer) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onFocus);
-      window.removeEventListener("chat:changed", onFocus);
+      window.removeEventListener("order:changed", onChange);
+      window.removeEventListener("chat:changed", onChange);
     };
   }, [period]);
 

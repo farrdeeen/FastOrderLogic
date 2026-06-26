@@ -16,6 +16,7 @@ import {
   fetchTrainingDocInfo,
   uploadTrainingDoc,
   deleteTrainingDoc,
+  getOrdersWsUrl,
 } from "./dashboardApi";
 
 const STOCK_RECON_STORAGE_KEY = "fol_stock_recon_in_progress";
@@ -679,16 +680,33 @@ export default function DashboardPage() {
     loadStockRecon(true);
   }, [loadStockRecon]);
 
+  // Live updates via the orders websocket (no polling). Reconnects on drop and
+  // re-fetches when the tab regains focus. Re-broadcasts an `order:changed` window
+  // event so the Sales Overview + Today's Orders refresh instantly too.
   useEffect(() => {
     load();
-    const t = setInterval(load, 20000); // live refresh every 20s — no reload
+    let ws = null, retry = null, stopped = false;
+    const connect = () => {
+      if (stopped || typeof WebSocket === "undefined") return;
+      try { ws = new WebSocket(getOrdersWsUrl()); } catch { return; }
+      ws.onmessage = (e) => {
+        let p; try { p = JSON.parse(e.data); } catch { return; }
+        if (p.type === "orders_changed") {
+          window.dispatchEvent(new CustomEvent("order:changed", { detail: p }));
+          load();
+        }
+      };
+      ws.onerror = () => { try { ws.close(); } catch { /* noop */ } };
+      ws.onclose = () => { if (!stopped) retry = setTimeout(connect, 4000); };
+    };
+    connect();
     const onVis = () => document.visibilityState === "visible" && load();
     document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("chat:changed", onVis);
     return () => {
-      clearInterval(t);
+      stopped = true;
+      if (retry) clearTimeout(retry);
+      if (ws) { try { ws.close(); } catch { /* noop */ } }
       document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("chat:changed", onVis);
     };
   }, [load]);
 

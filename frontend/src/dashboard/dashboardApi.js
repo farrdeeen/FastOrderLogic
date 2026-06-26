@@ -21,6 +21,17 @@ export async function fetchTodaysOrders() {
   return res.data;
 }
 
+// Orders websocket URL (same hub OrdersTable uses) — for live dashboard updates.
+export function getOrdersWsUrl() {
+  const base = api.defaults.baseURL || window.location.origin;
+  const url = new URL(base, window.location.origin);
+  const rootPath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${rootPath}/orders/ws`;
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.search = "";
+  return url.toString();
+}
+
 export async function fetchAiBalance() {
   const res = await api.get("/dashboard/ai-balance");
   return res.data;

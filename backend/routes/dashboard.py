@@ -257,7 +257,7 @@ def todays_orders(_=Depends(require_user)):
     try:
         orders = db.execute(text("""
             SELECT o.order_id, o.created_at, o.total_amount, o.total_items,
-                   o.awb_number, o.invoice_number, o.payment_status, o.order_status, o.channel,
+                   o.awb_number, o.invoice_number, o.utr_number, o.payment_status, o.order_status, o.channel,
                    COALESCE(c.name, oc.name) AS cust_name
             FROM orders o
             LEFT JOIN customer c          ON c.customer_id  = o.customer_id
@@ -288,6 +288,7 @@ def todays_orders(_=Depends(require_user)):
                 "amount": float(o["total_amount"] or 0),
                 "awb": o["awb_number"] or "",
                 "invoice": o["invoice_number"] or "",
+                "utr": o["utr_number"] or "",
                 "payment_status": o["payment_status"] or "",
                 "order_status": o["order_status"] or "",
                 "channel": o["channel"] or "",
