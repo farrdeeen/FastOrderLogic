@@ -11,6 +11,11 @@ export async function fetchAnalytics(days = 30) {
   return res.data;
 }
 
+export async function fetchSalesOverview(period = "15d") {
+  const res = await api.get("/dashboard/sales-overview", { params: { period } });
+  return res.data;
+}
+
 export async function fetchAiBalance() {
   const res = await api.get("/dashboard/ai-balance");
   return res.data;

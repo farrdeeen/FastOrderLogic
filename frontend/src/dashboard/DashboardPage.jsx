@@ -1,6 +1,6 @@
 // src/dashboard/DashboardPage.jsx
 import { useEffect, useState, useCallback, useRef } from "react";
-import AnalyticsSection from "./AnalyticsSection";
+import SalesOverviewSection from "./SalesOverviewSection";
 import {
   fetchDashboardStats,
   fetchAiFailures,
@@ -960,7 +960,7 @@ export default function DashboardPage() {
       {/* ── Tabs ── */}
       <div style={tabsStyle}>
         {[
-          { id: "overview", label: "Overview" },
+          { id: "overview", label: "Sales Overview" },
           {
             id: "failures",
             label: `AI Failures${failures.length ? ` (${failures.length})` : ""}`,
@@ -973,7 +973,6 @@ export default function DashboardPage() {
             id: "stock_recon",
             label: `Stock Recon${stockReconStatus?.in_progress ? " (Live)" : ""}`,
           },
-          { id: "analytics", label: "Analytics" },
           { id: "training", label: "Training Docs" },
         ].map((tab) => (
           <button
@@ -989,12 +988,11 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* ══════════ ANALYTICS TAB ══════════ */}
-      {activeTab === "analytics" && <AnalyticsSection />}
-
-      {/* ══════════ OVERVIEW TAB ══════════ */}
+      {/* ══════════ SALES OVERVIEW TAB ══════════ */}
       {activeTab === "overview" && (
         <div>
+          <SalesOverviewSection />
+          <div style={{ height: 22 }} />
           {/* KPI row */}
           <div style={statGridStyle}>
             <StatCard

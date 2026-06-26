@@ -120,6 +120,135 @@ def analytics(days: int = 30, _=Depends(require_user)):
         db.close()
 
 
+# ── Sales Overview (merged analytics) ────────────────────────────────────────
+
+# Reusable SQL fragments (no bind params / no LIKE — uses INSTR to dodge %-escaping;
+# COLLATE coerces the utf8mb4_bin mobile columns for REGEXP_REPLACE).
+_NM = "RIGHT(REGEXP_REPLACE(COALESCE(c.mobile,oc.mobile,'') COLLATE utf8mb4_0900_ai_ci,'[^0-9]',''),10)"
+_APPROVED = (
+    "LOWER(o.payment_status) IN ('paid','success','accepted') AND o.invoice_number IS NOT NULL "
+    "AND o.invoice_number<>'' AND UPPER(o.invoice_number)<>'NA' AND INSTR(LOWER(o.invoice_number),'replace')=0"
+)
+_REJECTED = "LEFT(UPPER(COALESCE(o.order_status,'')),3)='REJ'"
+_PERIODS = {"15d": (15, "day"), "3m": (90, "month"), "6m": (180, "month"), "12m": (365, "month")}
+
+_fx_cache = {"rate": None, "ts": 0.0}
+
+
+def _usd_inr() -> float:
+    """USD→INR, refreshed weekly from a free API; env USD_INR_RATE always wins."""
+    env = os.getenv("USD_INR_RATE")
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            pass
+    import time
+    if _fx_cache["rate"] and (time.time() - _fx_cache["ts"] < 7 * 86400):
+        return _fx_cache["rate"]
+    try:
+        import httpx
+        r = httpx.get("https://open.er-api.com/v6/latest/USD", timeout=10)
+        rate = float(((r.json() or {}).get("rates") or {}).get("INR") or 0)
+        if rate > 0:
+            _fx_cache.update(rate=rate, ts=time.time())
+            return rate
+    except Exception as exc:
+        logger.warning("usd_inr fetch failed: %s", exc)
+    return _fx_cache["rate"] or 84.0
+
+
+@router.get("/sales-overview")
+def sales_overview(period: str = "15d", _=Depends(require_user)):
+    days, bucket = _PERIODS.get(period, _PERIODS["15d"])
+    db = SessionLocal()
+    try:
+        om_cte = (
+            f"WITH om AS (SELECT o.order_id, o.created_at, o.total_amount, o.channel, "
+            f"CASE WHEN {_APPROVED} THEN 1 ELSE 0 END approved, "
+            f"CASE WHEN {_REJECTED} THEN 1 ELSE 0 END rejected, {_NM} mob "
+            f"FROM orders o LEFT JOIN customer c ON c.customer_id=o.customer_id "
+            f"LEFT JOIN offline_customer oc ON oc.customer_id=o.offline_customer_id), "
+            f"life AS (SELECT mob, COUNT(*) cnt FROM om WHERE mob<>'' GROUP BY mob), "
+            f"p AS (SELECT om.*, COALESCE(life.cnt,1) life FROM om LEFT JOIN life ON life.mob=om.mob "
+            f"WHERE om.created_at >= NOW() - INTERVAL {days} DAY)"
+        )
+        kpi = dict(db.execute(text(om_cte + """
+            SELECT COUNT(*) total, SUM(approved) approved, SUM(rejected) rejected,
+              COUNT(DISTINCT CASE WHEN life=1 THEN mob END) new_cust,
+              COUNT(DISTINCT CASE WHEN life>=2 THEN mob END) repeat_cust,
+              COUNT(DISTINCT CASE WHEN life=1 AND approved=1 THEN mob END) new_appr,
+              COUNT(DISTINCT CASE WHEN life>=2 AND approved=1 THEN mob END) repeat_appr
+            FROM p""")).mappings().first())
+
+        bucket_expr = "DATE(p.created_at)" if bucket == "day" else "DATE_FORMAT(p.created_at,'%Y-%m')"
+        ts = db.execute(text(om_cte + f"""
+            SELECT {bucket_expr} bucket, COUNT(*) total, SUM(approved) approved,
+              SUM(CASE WHEN life=1 THEN 1 ELSE 0 END) new_orders,
+              SUM(CASE WHEN life>=2 THEN 1 ELSE 0 END) repeat_orders
+            FROM p GROUP BY bucket ORDER BY bucket""")).mappings().all()
+
+        chan = db.execute(text(
+            "SELECT CASE WHEN LOWER(channel)='ai_assistant' THEN 'AI Assistant' "
+            "WHEN LOWER(channel)='offline' THEN 'Offline' WHEN LOWER(channel)='wix' THEN 'Wix' "
+            "WHEN LOWER(channel) IN ('mtm-store','online','website') THEN 'mTm Store' ELSE 'Other' END ch, "
+            "COUNT(*) orders, "
+            "SUM(CASE WHEN LOWER(payment_status) IN ('paid','success','accepted') THEN total_amount ELSE 0 END) revenue "
+            f"FROM orders WHERE created_at >= NOW() - INTERVAL {days} DAY GROUP BY ch ORDER BY orders DESC"
+        )).mappings().all()
+
+        leads = dict(db.execute(text(
+            f"WITH sess AS (SELECT cs.id, cs.is_human, cs.last_message_at, "
+            f"RIGHT(REGEXP_REPLACE(cs.phone_number COLLATE utf8mb4_0900_ai_ci,'[^0-9]',''),10) mob, "
+            f"(SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=cs.id AND m.sender='user') uc, "
+            f"(SELECT m2.sender FROM chat_messages m2 WHERE m2.session_id=cs.id ORDER BY m2.timestamp DESC LIMIT 1) last_s, "
+            f"(SELECT MAX(INSTR(m3.meta,'service_escalation')>0) FROM chat_messages m3 WHERE m3.session_id=cs.id) esc "
+            f"FROM chat_sessions cs WHERE cs.created_at >= NOW() - INTERVAL {days} DAY), "
+            f"life AS (SELECT {_NM} mob, COUNT(*) cnt FROM orders o "
+            f"LEFT JOIN customer c ON c.customer_id=o.customer_id "
+            f"LEFT JOIN offline_customer oc ON oc.customer_id=o.offline_customer_id GROUP BY mob) "
+            "SELECT COUNT(*) total, "
+            "SUM(CASE WHEN uc>=1 AND last_s IN ('ai','system') AND last_message_at < NOW()-INTERVAL 1 DAY THEN 1 ELSE 0 END) no_response, "
+            "SUM(CASE WHEN COALESCE(l.cnt,0)>=2 THEN 1 ELSE 0 END) repeat_sess, "
+            "SUM(CASE WHEN COALESCE(l.cnt,0)<2 THEN 1 ELSE 0 END) new_sess, "
+            "SUM(CASE WHEN sess.is_human=1 OR sess.esc=1 THEN 1 ELSE 0 END) escalated "
+            "FROM sess LEFT JOIN life l ON l.mob=sess.mob"
+        )).mappings().first())
+
+        spend = dict(db.execute(text(
+            "SELECT COALESCE(SUM(CAST(JSON_EXTRACT(meta,'$.ai_cost') AS DECIMAL(14,6))),0) cost "
+            f"FROM chat_messages WHERE INSTR(meta,'ai_cost')>0 AND timestamp >= NOW() - INTERVAL {days} DAY"
+        )).mappings().first())
+
+        fx = _usd_inr()
+        bal = ai_balance(_=None)  # current OpenRouter balance
+        spent_usd = float(spend.get("cost") or 0)
+
+        def g(d, k):
+            return int(d.get(k) or 0)
+        return {
+            "period": period, "days": days, "bucket": bucket, "fx_usd_inr": round(fx, 2),
+            "ai": {
+                "balance_usd": bal.get("balance_usd"), "balance_inr": round((bal.get("balance_usd") or 0) * fx, 0) if bal.get("available") else None,
+                "spent_usd": round(spent_usd, 4), "spent_inr": round(spent_usd * fx, 0), "available": bal.get("available", False),
+            },
+            "orders": {"total": g(kpi, "total"), "approved": g(kpi, "approved"), "rejected": g(kpi, "rejected")},
+            "new_customers": {"placed": g(kpi, "new_cust"), "approved": g(kpi, "new_appr")},
+            "repeat_customers": {"placed": g(kpi, "repeat_cust"), "approved": g(kpi, "repeat_appr")},
+            "leads": {"total": g(leads, "total"), "no_response": g(leads, "no_response"),
+                      "new": g(leads, "new_sess"), "repeat": g(leads, "repeat_sess"), "escalated": g(leads, "escalated")},
+            "channels": [{"channel": r["ch"], "orders": int(r["orders"] or 0), "revenue": float(r["revenue"] or 0)} for r in chan],
+            "timeseries": [{"bucket": str(r["bucket"]), "total": int(r["total"] or 0), "approved": int(r["approved"] or 0),
+                            "new_orders": int(r["new_orders"] or 0), "repeat_orders": int(r["repeat_orders"] or 0)} for r in ts],
+        }
+    except Exception as exc:
+        logger.warning("sales_overview failed: %s", exc)
+        return {"period": period, "error": str(exc), "orders": {}, "new_customers": {}, "repeat_customers": {},
+                "leads": {}, "channels": [], "timeseries": [], "ai": {}}
+    finally:
+        db.close()
+
+
 @router.get("/ai-balance")
 def ai_balance(_=Depends(require_user)):
     """Remaining OpenRouter credit balance (USD)."""
