@@ -188,14 +188,32 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
               SUM(CASE WHEN life>=2 THEN 1 ELSE 0 END) repeat_orders
             FROM p GROUP BY bucket ORDER BY bucket""")).mappings().all()
 
-        chan = db.execute(text(
-            "SELECT CASE WHEN LOWER(channel)='ai_assistant' THEN 'AI Assistant' "
+        ch_case = (
+            "CASE WHEN LOWER(channel)='ai_assistant' THEN 'AI Assistant' "
             "WHEN LOWER(channel)='offline' THEN 'Offline' WHEN LOWER(channel)='wix' THEN 'Wix' "
-            "WHEN LOWER(channel) IN ('mtm-store','online','website') THEN 'mTm Store' ELSE 'Other' END ch, "
-            "COUNT(*) orders, "
-            "SUM(CASE WHEN LOWER(payment_status) IN ('paid','success','accepted') THEN total_amount ELSE 0 END) revenue "
+            "WHEN LOWER(channel) IN ('mtm-store','online','website') THEN 'mTm Store' ELSE 'Other' END"
+        )
+        rev = "SUM(CASE WHEN LOWER(payment_status) IN ('paid','success','accepted') THEN total_amount ELSE 0 END)"
+        chan = db.execute(text(
+            f"SELECT {ch_case} ch, COUNT(*) orders, {rev} revenue "
             f"FROM orders WHERE created_at >= NOW() - INTERVAL {days} DAY GROUP BY ch ORDER BY orders DESC"
         )).mappings().all()
+
+        # Per-bucket per-channel series for the grouped bar chart (day or month).
+        ch_bucket = "DATE(created_at)" if bucket == "day" else "DATE_FORMAT(created_at,'%Y-%m')"
+        crows = db.execute(text(
+            f"SELECT {ch_bucket} b, {ch_case} ch, COUNT(*) o, {rev} r "
+            f"FROM orders WHERE created_at >= NOW() - INTERVAL {days} DAY GROUP BY b, ch ORDER BY b"
+        )).mappings().all()
+        CH_ORDER = ["Wix", "mTm Store", "AI Assistant", "Offline"]
+        smap: dict = {}
+        for r in crows:
+            b = str(r["b"])
+            smap.setdefault(b, {})[r["ch"]] = {"orders": int(r["o"] or 0), "revenue": float(r["r"] or 0)}
+        channel_series = [
+            {"bucket": b, "ch": {c: smap[b].get(c, {"orders": 0, "revenue": 0}) for c in CH_ORDER}}
+            for b in sorted(smap)
+        ]
 
         leads = dict(db.execute(text(
             f"WITH sess AS (SELECT cs.id, cs.is_human, cs.last_message_at, "
@@ -238,6 +256,7 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
             "leads": {"total": g(leads, "total"), "no_response": g(leads, "no_response"),
                       "new": g(leads, "new_sess"), "repeat": g(leads, "repeat_sess"), "escalated": g(leads, "escalated")},
             "channels": [{"channel": r["ch"], "orders": int(r["orders"] or 0), "revenue": float(r["revenue"] or 0)} for r in chan],
+            "channel_series": channel_series,
             "timeseries": [{"bucket": str(r["bucket"]), "total": int(r["total"] or 0), "approved": int(r["approved"] or 0),
                             "new_orders": int(r["new_orders"] or 0), "repeat_orders": int(r["repeat_orders"] or 0)} for r in ts],
         }

@@ -3,10 +3,11 @@
 // stacked bar chart (approved vs pending, with new/repeat trend lines), filtered
 // by 15 days / 3 / 6 / 12 months. Pure inline-SVG, mobile-safe (no chart dep).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchSalesOverview } from "./dashboardApi";
 
 const CH_COLORS = { "Wix": "#10b981", "mTm Store": "#6366f1", "AI Assistant": "#8b5cf6", "Offline": "#f59e0b", "Other": "#94a3b8" };
+const CH = [{ k: "Wix", c: "#10b981" }, { k: "mTm Store", c: "#6366f1" }, { k: "AI Assistant", c: "#8b5cf6" }, { k: "Offline", c: "#f59e0b" }];
 const PERIODS = [{ id: "15d", label: "15 Days" }, { id: "3m", label: "3 Months" }, { id: "6m", label: "6 Months" }, { id: "12m", label: "12 Months" }];
 const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const num = (n) => Number(n || 0).toLocaleString("en-IN");
@@ -30,26 +31,80 @@ function KpiCard({ title, value, accent = "#6366f1", rows = [], children }) {
   );
 }
 
-/* Sales by channel — horizontal bars (orders) + revenue label */
-function ChannelBars({ channels }) {
-  const max = Math.max(1, ...channels.map((c) => c.orders));
-  if (!channels.length) return <Empty />;
+/* Sales by channel — grouped bars per day/month (4 colored bars), hover/touch tooltip */
+function GroupedChannelChart({ series, bucket, totals }) {
+  const [hover, setHover] = useState(null);
+  const wrapRef = useRef(null);
+  if (!series.length) return <Empty />;
+  const W = 720, H = 230, PL = 8, PR = 8, PT = 10, PB = 24;
+  const n = series.length;
+  const max = Math.max(1, ...series.flatMap((s) => CH.map((ch) => s.ch?.[ch.k]?.orders || 0)));
+  const innerW = W - PL - PR, innerH = H - PT - PB;
+  const colW = innerW / n;
+  const groupW = Math.min(colW * 0.82, 48);
+  const bw = Math.max(2, groupW / CH.length - 1);
+  const x0 = (i) => PL + colW * i + (colW - groupW) / 2;
+  const y = (v) => PT + innerH - (v / max) * innerH;
+  const fmt = (b) => (bucket === "day" ? b.slice(5) : b.slice(2));
+  const showEvery = Math.ceil(n / 9);
+  const tmap = Object.fromEntries((totals || []).map((t) => [t.channel, t]));
+
+  const onMove = (e) => {
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const cx = e.clientX ?? e.touches?.[0]?.clientX, cy = e.clientY ?? e.touches?.[0]?.clientY;
+    if (cx == null) return;
+    const px = cx - rect.left;
+    const i = Math.max(0, Math.min(n - 1, Math.floor(((px / rect.width) * W - PL) / colW)));
+    setHover({ i, x: px, y: (cy - rect.top) });
+  };
+
+  const hb = hover != null ? series[hover.i] : null;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {channels.map((c) => (
-        <div key={c.channel}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, fontWeight: 700, color: "#334155", marginBottom: 4 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 3, background: CH_COLORS[c.channel] || "#94a3b8" }} />
-              {c.channel}
-            </span>
-            <span>{num(c.orders)} orders · <span style={{ color: "#10b981" }}>{inr(c.revenue)}</span></span>
-          </div>
-          <div style={{ height: 14, background: "#eef1f6", borderRadius: 7, overflow: "hidden" }}>
-            <div style={{ width: `${(c.orders / max) * 100}%`, height: "100%", background: CH_COLORS[c.channel] || "#94a3b8", borderRadius: 7, transition: "width .5s" }} />
-          </div>
+    <div ref={wrapRef} style={{ position: "relative" }}
+      onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
+      <div style={{ display: "flex", gap: 14, marginBottom: 8, fontSize: 11.5, fontWeight: 700, flexWrap: "wrap" }}>
+        {CH.map((ch) => (
+          <span key={ch.k} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "#475569" }}>
+            <span style={{ width: 11, height: 11, borderRadius: 3, background: ch.c }} />
+            {ch.k}<span style={{ color: "#94a3b8" }}>({num(tmap[ch.k]?.orders || 0)})</span>
+          </span>
+        ))}
+      </div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", touchAction: "pan-y" }}>
+        {[0.25, 0.5, 0.75, 1].map((f) => (
+          <line key={f} x1={PL} x2={W - PR} y1={y(max * f)} y2={y(max * f)} stroke="#f1f5f9" strokeWidth="1" />
+        ))}
+        {hover != null && <rect x={PL + colW * hover.i} y={PT} width={colW} height={innerH} fill="#6366f1" opacity="0.06" />}
+        {series.map((s, i) => (
+          <g key={i}>
+            {CH.map((ch, j) => {
+              const v = s.ch?.[ch.k]?.orders || 0;
+              const h = (v / max) * innerH;
+              return <rect key={ch.k} x={x0(i) + j * (bw + 1)} y={PT + innerH - h} width={bw} height={h} rx="1.5" fill={ch.c} />;
+            })}
+            {i % showEvery === 0 && <text x={PL + colW * (i + 0.5)} y={H - 7} textAnchor="middle" style={{ fontSize: 9, fill: "#94a3b8" }}>{fmt(s.bucket)}</text>}
+          </g>
+        ))}
+      </svg>
+      {hb && (
+        <div style={{
+          position: "absolute", left: Math.min(Math.max(hover.x - 70, 0), (wrapRef.current?.clientWidth || 300) - 150),
+          top: Math.max(hover.y - 96, 0), width: 150, pointerEvents: "none", zIndex: 5,
+          background: "#0f172a", color: "#fff", borderRadius: 10, padding: "8px 10px", fontSize: 11.5,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+        }}>
+          <div style={{ fontWeight: 800, marginBottom: 5 }}>{hb.bucket}</div>
+          {CH.map((ch) => (
+            <div key={ch.k} style={{ display: "flex", justifyContent: "space-between", gap: 8, opacity: (hb.ch?.[ch.k]?.orders || 0) ? 1 : 0.5 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: ch.c }} />{ch.k}
+              </span>
+              <span style={{ fontWeight: 700 }}>{num(hb.ch?.[ch.k]?.orders || 0)} · {inr(hb.ch?.[ch.k]?.revenue || 0)}</span>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -183,9 +238,9 @@ export default function SalesOverviewSection() {
         <div style={{ ...card, textAlign: "center", color: "#94a3b8", fontSize: 13, padding: 28 }}>Loading…</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,320px),1fr))", gap: 14 }}>
-          <div style={card}>
-            <div style={{ ...lab, marginBottom: 12 }}>Sales by Channel</div>
-            <ChannelBars channels={d?.channels || []} />
+          <div style={{ ...card, gridColumn: "1 / -1" }}>
+            <div style={{ ...lab, marginBottom: 12 }}>Sales by Channel — {d?.bucket === "day" ? "per day" : "per month"} (hover/tap for details)</div>
+            <GroupedChannelChart series={d?.channel_series || []} bucket={d?.bucket} totals={d?.channels || []} />
           </div>
           <div style={{ ...card, gridColumn: "1 / -1" }}>
             <div style={{ ...lab, marginBottom: 8 }}>
