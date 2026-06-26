@@ -1,6 +1,7 @@
 // src/dashboard/DashboardPage.jsx
 import { useEffect, useState, useCallback, useRef } from "react";
 import SalesOverviewSection from "./SalesOverviewSection";
+import TodaysOrders from "./TodaysOrders";
 import {
   fetchDashboardStats,
   fetchAiFailures,
@@ -680,8 +681,15 @@ export default function DashboardPage() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 60000); // refresh every 60s
-    return () => clearInterval(t);
+    const t = setInterval(load, 20000); // live refresh every 20s — no reload
+    const onVis = () => document.visibilityState === "visible" && load();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("chat:changed", onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("chat:changed", onVis);
+    };
   }, [load]);
 
   const handleStartStockRecon = async () => {
@@ -993,6 +1001,14 @@ export default function DashboardPage() {
         <div>
           <SalesOverviewSection />
           <div style={{ height: 22 }} />
+          <TodaysOrders />
+        </div>
+      )}
+
+      {/* Old overview body retired — Sales Overview only shows the merged KPIs,
+          charts and today's orders. */}
+      {false && (
+        <div>
           {/* KPI row */}
           <div style={statGridStyle}>
             <StatCard

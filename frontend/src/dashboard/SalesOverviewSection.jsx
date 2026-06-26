@@ -119,8 +119,20 @@ export default function SalesOverviewSection() {
 
   useEffect(() => {
     let live = true; setLoading(true);
-    fetchSalesOverview(period).then((r) => live && setD(r)).catch(() => live && setD(null)).finally(() => live && setLoading(false));
-    return () => { live = false; };
+    const get = (showLoad) => {
+      if (showLoad) setLoading(true);
+      fetchSalesOverview(period).then((r) => live && setD(r)).catch(() => {}).finally(() => live && setLoading(false));
+    };
+    get(true);
+    const t = setInterval(() => get(false), 20000);     // live refresh, no reload
+    const onFocus = () => document.visibilityState === "visible" && get(false);
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("chat:changed", onFocus);
+    return () => {
+      live = false; clearInterval(t);
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("chat:changed", onFocus);
+    };
   }, [period]);
 
   const o = d?.orders || {}, nc = d?.new_customers || {}, rc = d?.repeat_customers || {}, ld = d?.leads || {}, ai = d?.ai || {};

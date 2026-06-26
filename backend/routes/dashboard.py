@@ -249,6 +249,58 @@ def sales_overview(period: str = "15d", _=Depends(require_user)):
         db.close()
 
 
+@router.get("/todays-orders")
+def todays_orders(_=Depends(require_user)):
+    """All orders created today — item(s), qty, amount, AWB, invoice. For the live
+    dashboard table (polled, no reload)."""
+    db = SessionLocal()
+    try:
+        orders = db.execute(text("""
+            SELECT o.order_id, o.created_at, o.total_amount, o.total_items,
+                   o.awb_number, o.invoice_number, o.payment_status, o.order_status, o.channel,
+                   COALESCE(c.name, oc.name) AS cust_name
+            FROM orders o
+            LEFT JOIN customer c          ON c.customer_id  = o.customer_id
+            LEFT JOIN offline_customer oc ON oc.customer_id = o.offline_customer_id
+            WHERE o.created_at >= CURDATE()
+            ORDER BY o.created_at DESC
+        """)).mappings().all()
+        ids = [o["order_id"] for o in orders]
+        items_by_order: dict = {}
+        if ids:
+            from sqlalchemy import bindparam
+            rows = db.execute(
+                text("""SELECT oi.order_id, p.name AS name, oi.quantity AS qty
+                        FROM order_items oi LEFT JOIN products p ON p.product_id = oi.product_id
+                        WHERE oi.order_id IN :ids""").bindparams(bindparam("ids", expanding=True)),
+                {"ids": ids},
+            ).mappings().all()
+            for r in rows:
+                items_by_order.setdefault(r["order_id"], []).append(
+                    {"name": (r["name"] or "Item"), "qty": int(r["qty"] or 1)}
+                )
+        out = []
+        for o in orders:
+            out.append({
+                "order_id": o["order_id"],
+                "customer": o["cust_name"] or "—",
+                "created_at": o["created_at"].isoformat() if o["created_at"] else None,
+                "amount": float(o["total_amount"] or 0),
+                "awb": o["awb_number"] or "",
+                "invoice": o["invoice_number"] or "",
+                "payment_status": o["payment_status"] or "",
+                "order_status": o["order_status"] or "",
+                "channel": o["channel"] or "",
+                "items": items_by_order.get(o["order_id"], []),
+            })
+        return {"date": str(date.today()), "count": len(out), "orders": out}
+    except Exception as exc:
+        logger.warning("todays_orders failed: %s", exc)
+        return {"count": 0, "orders": [], "error": str(exc)}
+    finally:
+        db.close()
+
+
 @router.get("/ai-balance")
 def ai_balance(_=Depends(require_user)):
     """Remaining OpenRouter credit balance (USD)."""
